@@ -8,7 +8,7 @@ from app.utils.file_utils import human_file_size
 from app.utils.filename import tracking_number_from_video_name
 
 
-VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov"}
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ def scan_video_files(video_dir: Path) -> list[VideoEntry]:
     video_dir.mkdir(parents=True, exist_ok=True)
 
     entries: list[VideoEntry] = []
-    for path in video_dir.iterdir():
+    for path in video_dir.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in VIDEO_EXTENSIONS:
             continue
         if ".recording." in path.name:

@@ -17,6 +17,12 @@ videos/
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
 pm_system.db
 video_index.json
 config.json

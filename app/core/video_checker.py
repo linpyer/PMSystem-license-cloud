@@ -105,7 +105,7 @@ class VideoChecker:
         ]
         found: list[Path] = []
         for pattern in patterns:
-            found.extend(directory.glob(pattern))
+            found.extend(directory.rglob(pattern))
 
         unique = sorted(set(found), key=self._mtime, reverse=True)
         if unique and self.logger:

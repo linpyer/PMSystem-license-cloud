@@ -567,17 +567,17 @@ class RecorderThread(QThread):
             return
 
         video_dir = self._video_dir()
+        extension = str(self.config.get("video_format", "mp4") or "mp4").lower()
+        recording_started_at = datetime.now()
         try:
-            video_dir.mkdir(parents=True, exist_ok=True)
+            temp_path = unique_temp_recording_path(video_dir, order_id, extension, recording_started_at)
         except OSError as exc:
-            self.logger.exception("创建视频保存目录失败：%s", video_dir)
+            self.logger.exception("创建视频日期保存目录失败：base_dir=%s, order_id=%s", video_dir, order_id)
             self.message.emit(f"无法创建视频保存目录：{exc}")
             return
 
         self._check_disk_space_notice()
 
-        extension = str(self.config.get("video_format", "mp4") or "mp4").lower()
-        temp_path = unique_temp_recording_path(video_dir, order_id, extension)
         width, height = self._recording_frame_size(*self._current_frame_size())
         target_fps = int(self.config.get("fps", 25) or 25)
         fps = self._effective_fps(target_fps)
@@ -597,7 +597,7 @@ class RecorderThread(QThread):
         self._recording = True
         self._order_id = order_id
         self._record_type_for_current_recording = str(self.config.get("current_record_type") or "发货")
-        self._start_time = datetime.now()
+        self._start_time = recording_started_at
         self._frames_written = 0
         self._frames_enqueued = 0
         self._target_recording_fps = target_fps
@@ -638,7 +638,6 @@ class RecorderThread(QThread):
         writer_worker = self._writer_worker
         started_at = self._start_time
         extension = str(self.config.get("video_format", "mp4") or "mp4").lower()
-        final_path = unique_video_path(self._video_dir(), order_id, extension, started_at)
         recording_ended_at = datetime.now()
 
         self.logger.info("停止录制：物流单号=%s", order_id)
@@ -689,6 +688,13 @@ class RecorderThread(QThread):
                 temp_size,
                 temp_path,
             )
+
+        try:
+            final_path = unique_video_path(self._video_dir(), order_id, extension, started_at)
+        except OSError as exc:
+            self.logger.exception("创建视频日期保存目录失败：order_id=%s", order_id)
+            self.message.emit(f"无法创建视频保存目录：{exc}")
+            return
 
         try:
             temp_path.rename(final_path)

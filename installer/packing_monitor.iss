@@ -1,5 +1,5 @@
 #define MyAppName "电商打包发货监控溯源系统"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "PM System"
 #define MyAppExeName "电商打包发货监控溯源系统.exe"
 
@@ -16,7 +16,7 @@ AllowNoIcons=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=output
-OutputBaseFilename=电商打包发货监控溯源系统_Setup_v1.0.0
+OutputBaseFilename=电商打包发货监控溯源系统_Setup_v1.0.1
 SetupIconFile=..\app\assets\logo.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma

@@ -933,10 +933,35 @@ class QueryTab(QWidget):
     def _delete_video(self, path: Path) -> None:
         path = Path(path)
         if not path.exists():
-            message = "删除失败：文件不存在"
-            self.logger.warning("当前查询目录下删除视频失败：文件不存在，dir=%s, path=%s", self.video_dir, path)
-            self._show_notice(message, "error")
-            self.refresh(rebuild=True)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("删除记录")
+            box.setText("当前视频文件已不存在，是否从列表中移除此记录？")
+            box.setInformativeText(f"记录路径：{path}")
+            confirm_button = box.addButton("确认", QMessageBox.AcceptRole)
+            cancel_button = box.addButton("取消", QMessageBox.RejectRole)
+            box.setDefaultButton(cancel_button)
+            box.exec()
+
+            if box.clickedButton() is not confirm_button:
+                return
+
+            try:
+                deleted = self.database.delete_video_record(path)
+                if deleted:
+                    self.logger.info(
+                        "file missing, remove db record only: dir=%s, path=%s",
+                        self.video_dir,
+                        path,
+                    )
+                    self._show_notice("记录已移除", "success")
+                else:
+                    self.logger.warning("文件不存在记录移除失败：SQLite 记录不存在，dir=%s, path=%s", self.video_dir, path)
+                    self._show_notice("记录不存在，列表已刷新", "warning")
+                self.refresh(rebuild=False, show_notice=False)
+            except Exception as exc:
+                self.logger.exception("文件不存在记录移除失败：dir=%s, path=%s", self.video_dir, path)
+                self._show_notice(f"记录移除失败：{exc}", "error")
             return
 
         box = QMessageBox(self)
@@ -955,14 +980,30 @@ class QueryTab(QWidget):
         try:
             path.unlink()
             self.logger.info("当前查询目录下删除视频：dir=%s, path=%s", self.video_dir, path)
-            self.database.delete_video_record(path)
-            self.logger.info("删除后 SQLite 记录同步更新：%s", path)
-            self._show_notice("删除成功", "success")
+            deleted = self.database.delete_video_record(path)
+            if deleted:
+                self.logger.info("删除后 SQLite 记录同步更新：%s", path)
+            else:
+                self.logger.warning("删除视频文件后未找到 SQLite 记录：%s", path)
+            self._show_notice("视频已删除", "success")
             self.refresh(rebuild=False, show_notice=False)
         except FileNotFoundError:
-            self.logger.warning("当前查询目录下删除视频失败：文件不存在，dir=%s, path=%s", self.video_dir, path)
-            self._show_notice("删除失败：文件不存在", "error")
-            self.refresh(rebuild=True)
+            try:
+                deleted = self.database.delete_video_record(path)
+                if deleted:
+                    self.logger.info(
+                        "file missing during unlink, remove db record only: dir=%s, path=%s",
+                        self.video_dir,
+                        path,
+                    )
+                    self._show_notice("记录已移除", "success")
+                else:
+                    self.logger.warning("删除时文件已不存在且 SQLite 记录不存在：dir=%s, path=%s", self.video_dir, path)
+                    self._show_notice("记录不存在，列表已刷新", "warning")
+                self.refresh(rebuild=False, show_notice=False)
+            except Exception as exc:
+                self.logger.exception("删除时文件已不存在，移除 SQLite 记录失败：dir=%s, path=%s", self.video_dir, path)
+                self._show_notice(f"记录移除失败：{exc}", "error")
         except PermissionError as exc:
             self.logger.exception("当前查询目录下删除视频失败：权限不足，dir=%s, path=%s", self.video_dir, path)
             self._show_notice(f"删除失败：权限不足或文件正在被占用（{exc}）", "error")

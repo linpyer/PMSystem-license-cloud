@@ -1,19 +1,28 @@
 from __future__ import annotations
 
 import logging
+import shutil
+from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFormLayout,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -22,7 +31,12 @@ from PySide6.QtWidgets import (
 
 from app.core.camera import list_camera_devices
 from app.core.config_manager import ConfigManager
-from app.core.voice_prompt import DEFAULT_VOICE_PROMPT_CONFIG, VoicePrompt
+from app.core.voice_prompt import (
+    DEFAULT_SYSTEM_TEXT,
+    DEFAULT_VOICE_PROMPT_CONFIG,
+    SUPPORTED_AUDIO_EXTENSIONS,
+    VoicePrompt,
+)
 from app.ui.monitor_tab import (
     CAMERA_HELP_TEXT,
     DEFAULT_FPS,
@@ -36,6 +50,16 @@ from app.ui.monitor_tab import (
     WATERMARK_MARGIN_HELP_TEXT,
 )
 from app.ui.toast import show_toast
+from app.utils.runtime_paths import resource_path
+
+
+VOICE_SETTINGS_EVENTS: tuple[tuple[str, str, str, str], ...] = (
+    ("start", "开始录制提示语", "开始录制提示音", "start"),
+    ("stop", "结束录制提示语", "结束录制提示音", "stop"),
+    ("switch", "切换录制提示语", "切换录制提示音", "switch"),
+    ("duplicate", "重复录制提示语", "重复录制提示音", "duplicate"),
+    ("no_order", "未输入单号提示语", "未输入单号提示音", "no_order"),
+)
 
 
 class SettingsDialog(QDialog):
@@ -56,10 +80,13 @@ class SettingsDialog(QDialog):
         self.logger = logger
         self.voice_prompt = voice_prompt
         self.is_recording_callback = is_recording_callback or (lambda: False)
+        self.voice_file_labels: dict[str, QLabel] = {}
+        self.voice_row_buttons: dict[str, tuple[QPushButton, QPushButton, QPushButton]] = {}
+        self.system_text_edits: dict[str, QLineEdit] = {}
 
         self.setObjectName("settingsDialog")
         self.setWindowTitle("设置")
-        self.resize(620, 430)
+        self.resize(780, 620)
         self._build_ui()
         self._load_basic_config_to_ui()
         self._load_voice_config_to_ui()
@@ -79,13 +106,6 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_basic_tab(), "基础配置")
         self.tabs.addTab(self._build_voice_tab(), "语音提示")
         root_layout.addWidget(self.tabs, 1)
-
-        bottom_layout = QHBoxLayout()
-        bottom_layout.addStretch(1)
-        self.close_button = QPushButton("关闭")
-        self.close_button.clicked.connect(self.close)
-        bottom_layout.addWidget(self.close_button)
-        root_layout.addLayout(bottom_layout)
 
     def _build_basic_tab(self) -> QWidget:
         widget = QWidget()
@@ -163,35 +183,256 @@ class SettingsDialog(QDialog):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setSpacing(12)
 
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        form.setFormAlignment(Qt.AlignTop)
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(10)
+        self.voice_enabled_check = QCheckBox("开启语音提示")
+        checkmark_path = resource_path("app/assets/checkmark.svg").as_posix()
+        self.voice_enabled_check.setStyleSheet(
+            """
+            QCheckBox {
+                color: #1f2937;
+                font-size: 14px;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid #cbd5e1;
+                background: #ffffff;
+            }
+            QCheckBox::indicator:checked {
+                border-color: #0f766e;
+                background: #0f766e;
+                image: url("%s");
+            }
+            QCheckBox::indicator:unchecked:hover {
+                border-color: #0f766e;
+            }
+            """
+            % checkmark_path
+        )
+        self.voice_enabled_check.toggled.connect(self._sync_voice_mode_ui)
+        voice_enabled_row = QHBoxLayout()
+        voice_enabled_row.setContentsMargins(0, 0, 0, 0)
+        voice_enabled_row.addStretch(1)
+        voice_enabled_row.addWidget(self.voice_enabled_check, 0, Qt.AlignCenter)
+        voice_enabled_row.addStretch(1)
+        layout.addLayout(voice_enabled_row)
 
-        self.voice_enabled_check = QCheckBox("开启系统语音提示")
-        self.voice_start_edit = QLineEdit()
-        self.voice_stop_edit = QLineEdit()
-        self.voice_switch_edit = QLineEdit()
-        self.voice_duplicate_edit = QLineEdit()
+        self.voice_mode_stack = QStackedWidget()
+        self.voice_mode_stack.setFixedHeight(30)
+        self.voice_mode_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.voice_mode_blank = QWidget()
+        self.voice_mode_stack.addWidget(self.voice_mode_blank)
+        self.voice_mode_panel = QWidget()
+        self.voice_mode_panel.setObjectName("voiceModePanel")
+        self.voice_mode_panel.setStyleSheet(
+            """
+            QRadioButton {
+                color: #1f2937;
+                font-size: 14px;
+                spacing: 8px;
+                padding: 2px 0;
+            }
+            QRadioButton::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                border: 2px solid #cbd5e1;
+                background: #ffffff;
+            }
+            QRadioButton::indicator:checked {
+                border: 2px solid #0f766e;
+                background: qradialgradient(
+                    cx: 0.5, cy: 0.5, radius: 0.5,
+                    fx: 0.5, fy: 0.5,
+                    stop: 0 #0f766e,
+                    stop: 0.42 #0f766e,
+                    stop: 0.46 #ffffff,
+                    stop: 1 #ffffff
+                );
+            }
+            QRadioButton::indicator:unchecked:hover {
+                border-color: #0f766e;
+            }
+            QRadioButton:disabled {
+                color: #94a3b8;
+            }
+            QRadioButton::indicator:disabled {
+                border-color: #cbd5e1;
+                background: #f8fafc;
+            }
+            """
+        )
+        mode_row = QHBoxLayout(self.voice_mode_panel)
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(18)
+        mode_row.addWidget(QLabel("语音模式："))
+        self.voice_mode_group = QButtonGroup(self)
+        self.voice_mode_group.setExclusive(True)
+        self.system_voice_radio = QRadioButton("系统默认语音")
+        self.custom_voice_radio = QRadioButton("自定义语音包")
+        for radio, mode in (
+            (self.system_voice_radio, "system"),
+            (self.custom_voice_radio, "custom"),
+        ):
+            radio.setProperty("voice_mode", mode)
+            radio.toggled.connect(self._sync_voice_mode_ui)
+            self.voice_mode_group.addButton(radio)
+            mode_row.addWidget(radio)
+        mode_row.addStretch(1)
+        self.voice_mode_stack.addWidget(self.voice_mode_panel)
+        layout.addWidget(self.voice_mode_stack)
 
-        form.addRow("语音提示：", self.voice_enabled_check)
-        form.addRow("开始录制提示语：", self.voice_start_edit)
-        form.addRow("结束录制提示语：", self.voice_stop_edit)
-        form.addRow("切换录制提示语：", self.voice_switch_edit)
-        form.addRow("重复录制提示语：", self.voice_duplicate_edit)
-        layout.addLayout(form)
+        self.voice_config_stack = QStackedWidget()
+        self.voice_config_stack.setFixedHeight(360)
+        self.voice_config_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.voice_config_blank = QWidget()
+        self.voice_config_stack.addWidget(self.voice_config_blank)
+
+        self.system_voice_panel = QWidget()
+        system_layout = QVBoxLayout(self.system_voice_panel)
+        system_layout.setContentsMargins(0, 0, 0, 0)
+        system_layout.setSpacing(8)
+
+        system_header = QLabel("系统默认语音文字配置")
+        system_header.setObjectName("sectionTitle")
+        system_layout.addWidget(system_header)
+
+        system_form = QFormLayout()
+        system_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        system_form.setHorizontalSpacing(12)
+        system_form.setVerticalSpacing(8)
+        for event_key, text_label, _audio_label, _file_stem in VOICE_SETTINGS_EVENTS:
+            edit = QLineEdit()
+            edit.setPlaceholderText(DEFAULT_SYSTEM_TEXT.get(event_key, ""))
+            self.system_text_edits[event_key] = edit
+            system_form.addRow(f"{text_label}：", edit)
+        system_layout.addLayout(system_form)
+        system_layout.addStretch(1)
+        self.voice_config_stack.addWidget(self.system_voice_panel)
+
+        self.custom_voice_panel = QWidget()
+        self.custom_voice_panel.setObjectName("customVoicePanel")
+        self.custom_voice_panel.setStyleSheet(
+            """
+            QLabel#sectionTitle {
+                color: #0f766e;
+                font-weight: 700;
+            }
+            QLabel#tableHeaderLabel {
+                color: #475569;
+                font-weight: 700;
+            }
+            QPushButton {
+                min-height: 28px;
+                padding: 3px 10px;
+            }
+            QPushButton#voiceUploadButton {
+                color: #0f766e;
+                border: 1px solid #0f766e;
+                background: #ffffff;
+                border-radius: 5px;
+                font-weight: 600;
+            }
+            QPushButton#voiceUploadButton:hover {
+                background: #ecfdf5;
+            }
+            QPushButton#voicePreviewButton {
+                color: #2563eb;
+                border: 1px solid #93c5fd;
+                background: #ffffff;
+                border-radius: 5px;
+                font-weight: 600;
+            }
+            QPushButton#voicePreviewButton:hover {
+                background: #eff6ff;
+            }
+            QPushButton#voiceResetButton {
+                color: #64748b;
+                border: 1px solid #cbd5e1;
+                background: #ffffff;
+                border-radius: 5px;
+                font-weight: 600;
+            }
+            QPushButton#voiceResetButton:hover {
+                background: #f8fafc;
+            }
+            """
+        )
+        custom_layout = QVBoxLayout(self.custom_voice_panel)
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_layout.setSpacing(8)
+
+        header = QLabel("自定义语音包")
+        header.setObjectName("sectionTitle")
+        custom_layout.addWidget(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+
+        table_widget = QWidget()
+        grid = QGridLayout(table_widget)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        grid.addWidget(self._header_label("提示场景"), 0, 0)
+        grid.addWidget(self._header_label("当前音频文件"), 0, 1)
+        grid.addWidget(self._header_label("操作"), 0, 2)
+
+        for row, (event_key, _text_label, audio_label, _file_stem) in enumerate(VOICE_SETTINGS_EVENTS, start=1):
+            scene_label = QLabel(audio_label)
+            file_label = QLabel("未设置")
+            file_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            file_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            self.voice_file_labels[event_key] = file_label
+
+            upload_button = QPushButton("上传")
+            preview_button = QPushButton("试听")
+            reset_button = QPushButton("恢复默认")
+            upload_button.setObjectName("voiceUploadButton")
+            preview_button.setObjectName("voicePreviewButton")
+            reset_button.setObjectName("voiceResetButton")
+            upload_button.setFixedWidth(64)
+            preview_button.setFixedWidth(64)
+            reset_button.setFixedWidth(82)
+            upload_button.clicked.connect(lambda _checked=False, key=event_key: self._upload_voice_file(key))
+            preview_button.clicked.connect(lambda _checked=False, key=event_key: self._preview_voice_event(key))
+            reset_button.clicked.connect(lambda _checked=False, key=event_key: self._reset_voice_event(key))
+            self.voice_row_buttons[event_key] = (upload_button, preview_button, reset_button)
+
+            button_row = QHBoxLayout()
+            button_row.setContentsMargins(0, 0, 0, 0)
+            button_row.setSpacing(6)
+            button_row.addWidget(upload_button)
+            button_row.addWidget(preview_button)
+            button_row.addWidget(reset_button)
+            button_row.addStretch(1)
+            button_widget = QWidget()
+            button_widget.setLayout(button_row)
+
+            grid.addWidget(scene_label, row, 0)
+            grid.addWidget(file_label, row, 1)
+            grid.addWidget(button_widget, row, 2)
+
+        grid.setColumnStretch(1, 1)
+        scroll.setWidget(table_widget)
+        custom_layout.addWidget(scroll, 1)
+        self.voice_config_stack.addWidget(self.custom_voice_panel)
+        layout.addWidget(self.voice_config_stack)
 
         action_layout = QHBoxLayout()
         action_layout.addStretch(1)
-        self.test_voice_button = QPushButton("保存并测试语音")
-        self.test_voice_button.setObjectName("primaryButton")
-        self.test_voice_button.clicked.connect(self._save_and_test_voice)
-        action_layout.addWidget(self.test_voice_button)
+        self.voice_action_button = QPushButton("保存设置")
+        self.voice_action_button.setObjectName("primaryButton")
+        self.voice_action_button.setMinimumWidth(150)
+        self.voice_action_button.clicked.connect(self._on_voice_action_clicked)
+        action_layout.addWidget(self.voice_action_button)
+        action_layout.addStretch(1)
         layout.addLayout(action_layout)
-        layout.addStretch(1)
         return widget
 
     def refresh_state(self, is_recording: bool | None = None) -> None:
@@ -251,27 +492,205 @@ class SettingsDialog(QDialog):
 
     def _load_voice_config_to_ui(self) -> None:
         voice_config = self._current_voice_config()
-        self.voice_enabled_check.setChecked(bool(voice_config.get("enabled", True)))
-        self.voice_start_edit.setText(str(voice_config.get("start_text", "")))
-        self.voice_stop_edit.setText(str(voice_config.get("stop_text", "")))
-        self.voice_switch_edit.setText(str(voice_config.get("switch_text", "")))
-        self.voice_duplicate_edit.setText(str(voice_config.get("duplicate_text", "")))
+        self.voice_enabled_check.blockSignals(True)
+        self.system_voice_radio.blockSignals(True)
+        self.custom_voice_radio.blockSignals(True)
 
-    def _current_voice_config(self) -> dict[str, str | bool]:
-        voice_config = dict(DEFAULT_VOICE_PROMPT_CONFIG)
-        raw = self.config_manager.config.get("voice_prompt", {})
-        if isinstance(raw, dict):
-            voice_config.update(raw)
-        return voice_config
+        enabled = bool(voice_config.get("enabled", True))
+        mode = str(voice_config.get("mode", "system") or "system")
+        if mode == "off":
+            enabled = False
+            mode = "system"
+        self.voice_enabled_check.setChecked(enabled)
+        if mode == "custom":
+            self.custom_voice_radio.setChecked(True)
+        else:
+            self.system_voice_radio.setChecked(True)
 
-    def _voice_config_from_ui(self) -> dict[str, str | bool]:
+        system_text = voice_config.get("system_text", {})
+        system_text = system_text if isinstance(system_text, dict) else {}
+        for event_key, edit in self.system_text_edits.items():
+            edit.setText(str(system_text.get(event_key, DEFAULT_SYSTEM_TEXT.get(event_key, "")) or ""))
+
+        self.voice_enabled_check.blockSignals(False)
+        self.system_voice_radio.blockSignals(False)
+        self.custom_voice_radio.blockSignals(False)
+
+        self._refresh_voice_file_labels(voice_config)
+        self._sync_voice_mode_ui()
+
+    def _current_voice_config(self) -> dict[str, object]:
+        return VoicePrompt.normalize_config({"voice_prompt": self.config_manager.config.get("voice_prompt", {})})
+
+    def _voice_config_from_ui(self) -> dict[str, object]:
+        current = self._current_voice_config()
+        mode = self._selected_voice_mode()
+        enabled = self.voice_enabled_check.isChecked()
+        system_text = dict(current.get("system_text", DEFAULT_SYSTEM_TEXT))
+        for event_key, edit in self.system_text_edits.items():
+            value = edit.text().strip()
+            system_text[event_key] = value if value else DEFAULT_SYSTEM_TEXT.get(event_key, "")
         return {
-            "enabled": self.voice_enabled_check.isChecked(),
-            "start_text": self.voice_start_edit.text().strip(),
-            "stop_text": self.voice_stop_edit.text().strip(),
-            "switch_text": self.voice_switch_edit.text().strip(),
-            "duplicate_text": self.voice_duplicate_edit.text().strip(),
+            "enabled": enabled,
+            "mode": mode,
+            "custom_voice_dir": str(current.get("custom_voice_dir") or DEFAULT_VOICE_PROMPT_CONFIG["custom_voice_dir"]),
+            "custom_files": dict(current.get("custom_files", {})),
+            "system_text": system_text,
         }
+
+    def _selected_voice_mode(self) -> str:
+        for radio in (self.system_voice_radio, self.custom_voice_radio):
+            if radio.isChecked():
+                return str(radio.property("voice_mode") or "system")
+        return "system"
+
+    def _sync_voice_mode_ui(self, *_args) -> None:
+        enabled = self.voice_enabled_check.isChecked()
+        for radio in (self.system_voice_radio, self.custom_voice_radio):
+            radio.setEnabled(enabled)
+        self.voice_mode_stack.setCurrentWidget(self.voice_mode_panel if enabled else self.voice_mode_blank)
+        if not enabled:
+            self.voice_config_stack.setCurrentWidget(self.voice_config_blank)
+        elif self.custom_voice_radio.isChecked():
+            self.voice_config_stack.setCurrentWidget(self.custom_voice_panel)
+        else:
+            self.voice_config_stack.setCurrentWidget(self.system_voice_panel)
+        self.voice_action_button.setText("保存并测试语音" if enabled and self.system_voice_radio.isChecked() else "保存设置")
+
+    def _refresh_voice_file_labels(self, voice_config: dict[str, object] | None = None) -> None:
+        voice_config = voice_config or self._current_voice_config()
+        custom_files = voice_config.get("custom_files", {})
+        custom_files = custom_files if isinstance(custom_files, dict) else {}
+        for event_key, label in self.voice_file_labels.items():
+            path_text = str(custom_files.get(event_key, "") or "")
+            if path_text:
+                path = Path(path_text)
+                label.setText(path.name)
+                label.setToolTip(str(path))
+            else:
+                label.setText("未设置")
+                label.setToolTip("")
+
+    def _upload_voice_file(self, event_key: str) -> None:
+        file_filter = "音频文件 (*.wav *.mp3 *.m4a *.aac)"
+        selected, _ = QFileDialog.getOpenFileName(self, "选择自定义语音文件", "", file_filter)
+        if not selected:
+            return
+        source = Path(selected)
+        if not source.exists():
+            self._set_status("音频文件不存在", "warning")
+            return
+        if source.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS:
+            self._set_status("音频格式不支持，请选择 wav、mp3、m4a 或 aac。", "warning")
+            return
+
+        try:
+            voice_config = self._current_voice_config()
+            voice_dir = Path(str(voice_config.get("custom_voice_dir") or DEFAULT_VOICE_PROMPT_CONFIG["custom_voice_dir"]))
+            voice_dir.mkdir(parents=True, exist_ok=True)
+            target = voice_dir / f"{event_key}{source.suffix.lower()}"
+            shutil.copy2(source, target)
+            custom_files = dict(voice_config.get("custom_files", {}))
+            custom_files[event_key] = str(target)
+            voice_config["custom_files"] = custom_files
+            updated_config = self._save_voice_config(voice_config)
+            self._refresh_voice_file_labels(VoicePrompt.normalize_config({"voice_prompt": updated_config["voice_prompt"]}))
+            self.logger.info("自定义语音已更新：event=%s, file=%s", event_key, target)
+            self._set_status("自定义语音已更新", "success")
+        except Exception as exc:
+            self.logger.exception("自定义语音上传失败：event=%s", event_key)
+            self._set_status(f"上传失败：{exc}", "error")
+
+    def _preview_voice_event(self, event_key: str) -> None:
+        voice_config = self._voice_config_from_ui()
+        mode = str(voice_config.get("mode", "system") or "system")
+        if not bool(voice_config.get("enabled", True)):
+            self._set_status("当前语音提示已关闭", "warning")
+            return
+
+        custom_files = voice_config.get("custom_files", {})
+        custom_files = custom_files if isinstance(custom_files, dict) else {}
+        path_text = str(custom_files.get(event_key, "") or "")
+        if path_text and Path(path_text).exists():
+            if self.voice_prompt.play_audio_file(path_text, event_key=event_key):
+                self._set_status("正在试听自定义语音", "success")
+            else:
+                self._set_status("试听失败，请查看日志。", "error")
+            return
+
+        system_text = voice_config.get("system_text", {})
+        system_text = system_text if isinstance(system_text, dict) else {}
+        text = str(system_text.get(event_key, DEFAULT_SYSTEM_TEXT.get(event_key, "")) or "")
+        if self.voice_prompt.speak(text, event_key=event_key, respect_mode=False):
+            message = "正在播放系统默认语音" if mode == "system" else "未设置自定义音频，正在播放系统语音"
+            self._set_status(message, "success")
+        else:
+            self._set_status("试听失败，请查看日志。", "error")
+
+    def _reset_voice_event(self, event_key: str) -> None:
+        try:
+            voice_config = self._current_voice_config()
+            custom_files = dict(voice_config.get("custom_files", {}))
+            custom_files[event_key] = ""
+            voice_config["custom_files"] = custom_files
+            updated_config = self._save_voice_config(voice_config)
+            self._refresh_voice_file_labels(VoicePrompt.normalize_config({"voice_prompt": updated_config["voice_prompt"]}))
+            self.logger.info("自定义语音恢复默认：event=%s", event_key)
+            self._set_status("已恢复默认语音", "success")
+        except Exception as exc:
+            self.logger.exception("恢复默认语音失败：event=%s", event_key)
+            self._set_status(f"恢复默认失败：{exc}", "error")
+
+    def _save_voice_config(self, voice_config: dict[str, object]) -> dict:
+        normalized = VoicePrompt.normalize_config({"voice_prompt": voice_config})
+        updated_config = self.config_manager.update({"voice_prompt": normalized})
+        self.voice_prompt.update_config(updated_config)
+        self.config_saved.emit(updated_config)
+        self.logger.info("语音配置保存成功：enabled=%s, mode=%s", normalized.get("enabled"), normalized.get("mode"))
+        return updated_config
+
+    def _on_voice_action_clicked(self) -> None:
+        if self.voice_enabled_check.isChecked() and self.system_voice_radio.isChecked():
+            self._save_and_test_voice()
+        else:
+            self._save_voice_settings()
+
+    def _save_voice_settings(self) -> None:
+        try:
+            self._save_voice_config(self._voice_config_from_ui())
+            self._set_status("语音设置已保存", "success")
+        except Exception as exc:
+            self.logger.exception("语音配置保存失败")
+            self._set_status(f"语音配置保存失败：{exc}", "error")
+
+    def _save_and_test_voice(self) -> None:
+        try:
+            voice_config = self._voice_config_from_ui()
+            updated_config = self._save_voice_config(voice_config)
+            normalized = VoicePrompt.normalize_config({"voice_prompt": updated_config["voice_prompt"]})
+            mode = str(normalized.get("mode", "system"))
+
+            if not bool(normalized.get("enabled", True)):
+                self._set_status("当前语音提示已关闭", "warning")
+                self.logger.info("语音提示已关闭，测试语音未播放")
+                return
+
+            if mode == "custom":
+                if self.voice_prompt.play("start"):
+                    self._set_status("正在播放测试语音", "success")
+                else:
+                    self._set_status("测试语音播放失败，请查看日志。", "error")
+                return
+
+            if self.voice_prompt.speak("这是一条测试语音", event_key="test", respect_mode=False):
+                self._set_status("正在播放测试语音", "success")
+            elif self.voice_prompt.backend_name() == "none":
+                self._set_status("语音引擎不可用，请检查系统语音服务或依赖安装。", "error")
+            else:
+                self._set_status("测试语音播放失败，请查看日志。", "error")
+        except Exception as exc:
+            self.logger.exception("语音配置保存失败")
+            self._set_status(f"语音配置保存失败：{exc}", "error")
 
     def _refresh_camera_options(self, selected_index: int | None = None) -> None:
         selected_index = int(selected_index if selected_index is not None else self.config_manager.config.get("camera_index", 0) or 0)
@@ -295,8 +714,8 @@ class SettingsDialog(QDialog):
 
     def _selected_camera_name(self) -> str:
         text = self.camera_combo.currentText()
-        if "（索引 " in text:
-            return text.split("（索引 ", 1)[0]
+        if "（索引" in text:
+            return text.split("（索引", 1)[0]
         return text
 
     def _help_label(self, text: str, title: str, body: str, tooltip: str) -> QWidget:
@@ -322,6 +741,12 @@ class SettingsDialog(QDialog):
         box.setText(body)
         box.addButton("知道了", QMessageBox.AcceptRole)
         box.exec()
+
+    @staticmethod
+    def _header_label(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("tableHeaderLabel")
+        return label
 
     @staticmethod
     def _select_combo_data(combo: QComboBox, value, fallback) -> None:
@@ -355,35 +780,6 @@ class SettingsDialog(QDialog):
             self.logger.warning("检测到非法 max_long_edge 值并回退默认值：%s -> %s", value, DEFAULT_LONG_EDGE)
             return DEFAULT_LONG_EDGE, False
         return max_long_edge, True
-
-    def _save_and_test_voice(self) -> None:
-        try:
-            voice_config = self._voice_config_from_ui()
-            updated_config = self.config_manager.update({"voice_prompt": voice_config})
-            self.voice_prompt.update_config(updated_config)
-            self.config_saved.emit(updated_config)
-            self.logger.info("语音配置保存成功：enabled=%s", voice_config.get("enabled", True))
-
-            if not bool(voice_config.get("enabled", True)):
-                self._set_status("语音提示已关闭，请开启后再测试。", "warning")
-                self.logger.info("语音提示已关闭，测试语音未播放")
-                return
-
-            text = str(voice_config.get("start_text", "") or "").strip()
-            if not text:
-                text = str(DEFAULT_VOICE_PROMPT_CONFIG["start_text"])
-                self._set_status("测试语音文本为空，已使用默认提示语。", "warning")
-
-            self.logger.info("保存并测试语音使用的文本：%s", text)
-            if self.voice_prompt.speak(text):
-                self._set_status("正在播放测试语音。", "success")
-            elif self.voice_prompt.backend_name() == "none":
-                self._set_status("语音引擎不可用，请检查系统语音服务或依赖安装。", "error")
-            else:
-                self._set_status("测试语音播放失败，请查看日志。", "error")
-        except Exception as exc:
-            self.logger.exception("语音配置保存失败")
-            self._set_status(f"语音配置保存失败：{exc}", "error")
 
     def _set_status(self, message: str, level: str = "info") -> None:
         show_toast(self, message, level, 2600, self.logger)

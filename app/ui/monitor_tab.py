@@ -620,6 +620,11 @@ class MonitorTab(QWidget):
         if result.should_warn:
             self.warning_message.emit(result.warning_message)
             self.status_message.emit(result.warning_message)
+        if not self.is_recording and not result.cleaned_code:
+            self._notify_no_order()
+            self.scan_input.clear()
+            self.focus_scan_input(80)
+            return
         if not result.should_ignore:
             is_duplicate = self._warn_if_duplicate_recording(result.cleaned_code)
             self._pending_voice_action = self._voice_action_for_scan(result.cleaned_code, is_duplicate)
@@ -633,7 +638,10 @@ class MonitorTab(QWidget):
             self.warning_message.emit(result.warning_message)
             self.status_message.emit(result.warning_message)
         if not result.cleaned_code:
-            self.warning_message.emit("请先输入或扫描物流单号。")
+            if not self.is_recording:
+                self._notify_no_order()
+            else:
+                self.warning_message.emit("请先输入或扫描物流单号。")
             self.focus_scan_input(80)
             return
         is_duplicate = self._warn_if_duplicate_recording(result.cleaned_code)
@@ -641,6 +649,13 @@ class MonitorTab(QWidget):
         self.recorder.manual_start(result.cleaned_code)
         self.scan_input.clear()
         self.focus_scan_input(80)
+
+    def _notify_no_order(self) -> None:
+        message = "请先输入或扫描物流单号。"
+        self.warning_message.emit(message)
+        self.status_message.emit(message)
+        if self.voice_prompt.play("no_order"):
+            self.logger.info("未输入单号语音已提交播放")
 
     def _manual_stop(self) -> None:
         if self.is_recording:

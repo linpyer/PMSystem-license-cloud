@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 
-VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov"}
+VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 
 
 @dataclass
@@ -25,7 +25,7 @@ def delete_expired_videos(video_dir: Path, days: int, logger: logging.Logger) ->
         return result
 
     cutoff = datetime.now() - timedelta(days=days)
-    for path in video_dir.iterdir():
+    for path in video_dir.rglob("*"):
         if not path.is_file():
             continue
         if path.suffix.lower() not in VIDEO_EXTENSIONS:

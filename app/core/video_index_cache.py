@@ -66,7 +66,7 @@ class VideoIndexCache:
         directory = Path(video_dir)
         directory.mkdir(parents=True, exist_ok=True)
         items: list[dict[str, Any]] = []
-        for path in directory.iterdir():
+        for path in directory.rglob("*"):
             if not self._is_video_file(path):
                 continue
             items.append(self._build_item(path))

@@ -333,7 +333,7 @@ class DatabaseManager:
         directory.mkdir(parents=True, exist_ok=True)
 
         scanned_paths: set[str] = set()
-        for path in directory.iterdir():
+        for path in directory.rglob("*"):
             if not self._is_video_file(path):
                 continue
             resolved = str(path.resolve())

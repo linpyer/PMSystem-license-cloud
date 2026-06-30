@@ -34,7 +34,7 @@ def find_unfinished_recordings(video_dir: Path) -> list[Path]:
     ]
     found: list[Path] = []
     for pattern in patterns:
-        found.extend(video_dir.glob(pattern))
+        found.extend(video_dir.rglob(pattern))
 
     def modified_time(path: Path) -> float:
         try:

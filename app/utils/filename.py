@@ -22,40 +22,53 @@ def normalize_extension(extension: str) -> str:
     return extension or "mp4"
 
 
+def dated_video_dir(video_dir: Path, timestamp: datetime | None = None) -> Path:
+    recorded_at = timestamp or datetime.now()
+    return video_dir / recorded_at.strftime("%Y") / recorded_at.strftime("%m") / recorded_at.strftime("%d")
+
+
 def unique_video_path(
     video_dir: Path,
     order_id: str,
     extension: str = "mp4",
     timestamp: datetime | None = None,
 ) -> Path:
-    video_dir.mkdir(parents=True, exist_ok=True)
+    recorded_at = timestamp or datetime.now()
+    save_dir = dated_video_dir(video_dir, recorded_at)
+    save_dir.mkdir(parents=True, exist_ok=True)
     safe_name = sanitize_filename(order_id)
     ext = normalize_extension(extension)
-    timestamp_text = (timestamp or datetime.now()).strftime("%Y%m%d_%H%M%S")
-    candidate = video_dir / f"{safe_name}_{timestamp_text}.{ext}"
+    timestamp_text = recorded_at.strftime("%Y%m%d_%H%M%S")
+    candidate = save_dir / f"{safe_name}_{timestamp_text}.{ext}"
     if not candidate.exists():
         return candidate
 
     counter = 1
     while candidate.exists():
-        candidate = video_dir / f"{safe_name}_{timestamp_text}_{counter}.{ext}"
+        candidate = save_dir / f"{safe_name}_{timestamp_text}_{counter}.{ext}"
         counter += 1
     return candidate
 
 
-def unique_temp_recording_path(video_dir: Path, order_id: str, extension: str = "mp4") -> Path:
-    video_dir.mkdir(parents=True, exist_ok=True)
+def unique_temp_recording_path(
+    video_dir: Path,
+    order_id: str,
+    extension: str = "mp4",
+    timestamp: datetime | None = None,
+) -> Path:
+    save_dir = dated_video_dir(video_dir, timestamp)
+    save_dir.mkdir(parents=True, exist_ok=True)
     safe_name = sanitize_filename(order_id)
     ext = normalize_extension(extension)
-    candidate = video_dir / f"{safe_name}.recording.{ext}"
+    candidate = save_dir / f"{safe_name}.recording.{ext}"
     if not candidate.exists():
         return candidate
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    candidate = video_dir / f"{safe_name}_{timestamp}.recording.{ext}"
+    timestamp_text = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = save_dir / f"{safe_name}_{timestamp_text}.recording.{ext}"
     counter = 1
     while candidate.exists():
-        candidate = video_dir / f"{safe_name}_{timestamp}_{counter}.recording.{ext}"
+        candidate = save_dir / f"{safe_name}_{timestamp_text}_{counter}.recording.{ext}"
         counter += 1
     return candidate
 
