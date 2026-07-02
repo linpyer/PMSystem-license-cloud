@@ -37,13 +37,15 @@ DEFAULT_SYSTEM_TEXT: dict[str, str] = {
     "stop": "录制已结束",
     "switch": "已切换录制",
     "duplicate": "单号已录过",
-    "no_order": "请先输入或扫描物流单号",
+    "no_order": "请先输入或扫描单号",
     "camera_refresh": "摄像头已刷新",
     "video_missing": "视频文件不存在",
     "save_failed": "保存失败",
     "save_success": "配置已保存",
     "list_refresh": "列表已刷新",
 }
+LEGACY_NO_ORDER_PROMPT = "请先输入或扫描" + "物流" + "单号"
+CURRENT_NO_ORDER_PROMPT = "请先输入或扫描单号"
 
 LEGACY_TEXT_KEYS = {
     "start_text": "start",
@@ -424,6 +426,8 @@ class VoicePrompt:
         for legacy_key, event_key in LEGACY_TEXT_KEYS.items():
             if legacy_key in raw:
                 system_text[event_key] = str(raw.get(legacy_key, "") or "")
+        if system_text.get("no_order") == LEGACY_NO_ORDER_PROMPT:
+            system_text["no_order"] = CURRENT_NO_ORDER_PROMPT
 
         custom_files = {key: "" for key in VOICE_EVENT_KEYS}
         if isinstance(raw.get("custom_files"), dict):

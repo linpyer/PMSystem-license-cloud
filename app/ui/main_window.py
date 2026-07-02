@@ -197,6 +197,18 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
+        if self.query_tab.is_netdisk_syncing():
+            result = QMessageBox.question(
+                self,
+                "确认退出",
+                "当前正在同步网盘，关闭软件会中断上传，是否继续关闭？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if result != QMessageBox.Yes:
+                event.ignore()
+                return
+
         self.monitor_tab.shutdown()
         self.query_tab.shutdown()
         self._save_window_geometry()
@@ -342,6 +354,7 @@ class MainWindow(QMainWindow):
                 parent=self,
             )
             self.settings_dialog.config_saved.connect(self.monitor_tab.apply_external_config)
+            self.settings_dialog.config_saved.connect(self.query_tab.reload_config)
             self.settings_dialog.basic_config_saved.connect(self.monitor_tab.apply_basic_config)
             self.settings_dialog.closed.connect(self._restore_monitor_focus)
 

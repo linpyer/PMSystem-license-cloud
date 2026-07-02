@@ -128,26 +128,6 @@ QLabel#recBadge {
     font-weight: 700;
 }
 
-QLabel#statusBadge {
-    border-radius: 11px;
-    padding: 4px 10px;
-    font-weight: 700;
-    min-width: 72px;
-    max-width: 96px;
-}
-
-QLabel#statusBadge[state="idle"] {
-    background: #f1f5f9;
-    border: 1px solid #cbd5e1;
-    color: #475569;
-}
-
-QLabel#statusBadge[state="recording"] {
-    background: #fef2f2;
-    border: 1px solid #fecaca;
-    color: #b91c1c;
-}
-
 QLabel#durationValue {
     color: #0f766e;
     font-weight: 700;
@@ -157,6 +137,88 @@ QLabel#durationValue {
 QLabel#cameraStatusValue {
     color: #64748b;
     font-size: 9pt;
+}
+
+QFrame#recordingStatusBlock {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 16px;
+}
+
+QLabel#recordingStatusTitle {
+    color: #475569;
+    font-weight: 700;
+    font-size: 26px;
+}
+
+QLabel#recordingStatusDetail {
+    color: #64748b;
+    font-weight: 600;
+    font-size: 10pt;
+    font-family: "Microsoft YaHei", "Consolas", sans-serif;
+}
+
+QFrame#recordingStatusBlock[state="idle"] {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+}
+
+QFrame#recordingStatusBlock[state="idle"] QLabel {
+    color: #475569;
+}
+
+QFrame#recordingStatusBlock[state="recording"] {
+    background: #ecfdf5;
+    border-color: #5eead4;
+}
+
+QFrame#recordingStatusBlock[state="recording"] QLabel {
+    color: #047857;
+}
+
+QFrame#recordingStatusBlock[state="start"] {
+    background: #ecfdf5;
+    border-color: #2dd4bf;
+}
+
+QFrame#recordingStatusBlock[state="start"] QLabel {
+    color: #047857;
+}
+
+QFrame#recordingStatusBlock[state="stop"] {
+    background: #eff6ff;
+    border-color: #93c5fd;
+}
+
+QFrame#recordingStatusBlock[state="stop"] QLabel {
+    color: #2563eb;
+}
+
+QFrame#recordingStatusBlock[state="switch"] {
+    background: #f0fdfa;
+    border-color: #5eead4;
+}
+
+QFrame#recordingStatusBlock[state="switch"] QLabel {
+    color: #0f766e;
+}
+
+QFrame#recordingStatusBlock[state="warning"] {
+    background: #fffbeb;
+    border-color: #fcd34d;
+}
+
+QFrame#recordingStatusBlock[state="warning"] QLabel {
+    color: #d97706;
+}
+
+QFrame#recordingStatusBlock[state="error"] {
+    background: #fef2f2;
+    border-color: #fca5a5;
+}
+
+QFrame#recordingStatusBlock[state="error"] QLabel {
+    color: #dc2626;
 }
 
 QLabel#hintLabel {
@@ -317,11 +379,25 @@ QPushButton#secondaryButton:hover {
     color: #0f766e;
 }
 
+QPushButton#retryUploadButton {
+    background: #fffbeb;
+    border-color: #f59e0b;
+    color: #b45309;
+    font-weight: 700;
+}
+
+QPushButton#retryUploadButton:hover {
+    background: #fef3c7;
+    border-color: #d97706;
+    color: #92400e;
+}
+
 QPushButton:disabled,
 QPushButton#primaryButton:disabled,
 QPushButton#stopButton:disabled,
 QPushButton#dangerButton:disabled,
-QPushButton#secondaryButton:disabled {
+QPushButton#secondaryButton:disabled,
+QPushButton#retryUploadButton:disabled {
     background: #f1f5f9;
     border-color: #dbe2ea;
     color: #94a3b8;
@@ -389,20 +465,26 @@ QWidget#statusCell {
     background: transparent;
 }
 
+QWidget#statusBadgeHost {
+    background: transparent;
+}
+
+QWidget#statusLine {
+    background: transparent;
+}
+
 QLabel#statusText {
     background: transparent;
-    color: #64748b;
-    font-size: 12px;
-    font-weight: 500;
+    color: #1f2937;
 }
 
 QLabel#statusText[statusState="normal"] {
-    color: #64748b;
+    color: #1f2937;
 }
 
 QLabel#statusText[statusState="error"] {
     color: #b91c1c;
-    font-weight: 700;
+    font-weight: 600;
 }
 
 QLabel#tablePrimaryText {
@@ -416,16 +498,82 @@ QLabel#tableSubText {
     font-size: 9pt;
 }
 
+QLabel#tableSubText[state="warning"] {
+    color: #dc2626;
+    font-weight: 700;
+}
+
 QLabel#duplicateBadge {
     background: #fee2e2;
     color: #dc2626;
     border: 1px solid #fca5a5;
-    border-radius: 10px;
+    border-radius: 8px;
+    min-width: 18px;
     min-height: 18px;
-    max-height: 20px;
-    font-size: 12px;
-    font-weight: 700;
-    padding: 1px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 6px;
+    qproperty-wordWrap: false;
+}
+
+QLabel#validationWarningBadge {
+    background: #fef3c7;
+    color: #d97706;
+    border: 1px solid #fbbf24;
+    border-radius: 8px;
+    min-height: 18px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 7px;
+    qproperty-wordWrap: false;
+}
+
+QLabel#uploadStatusText {
+    background: transparent;
+    color: #64748b;
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+QLabel#uploadStatusText[uploadState="done"] {
+    color: #047857;
+}
+
+QLabel#uploadStatusText[uploadState="uploading"] {
+    color: #2563eb;
+}
+
+QLabel#uploadStatusText[uploadState="failed"] {
+    color: #dc2626;
+}
+
+QLabel#uploadStatusText[uploadState="pending"] {
+    color: #d97706;
+}
+
+QPushButton#tableUploadButton {
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: #0f766e;
+    font-weight: 600;
+    padding: 0;
+    min-height: 26px;
+    min-width: 48px;
+    max-height: 26px;
+    max-width: 48px;
+}
+
+QPushButton#tableUploadButton:hover {
+    background: transparent;
+    border: none;
+    color: #0b5f59;
+    text-decoration: underline;
+}
+
+QPushButton#tableUploadButton:disabled {
+    color: #94a3b8;
+    text-decoration: none;
 }
 
 QPushButton#tableDangerButton {
@@ -539,6 +687,40 @@ QPushButton#filterButton:checked {
 QPushButton#filterButton:checked:hover {
     background: #115e59;
     border-color: #115e59;
+}
+
+QWidget#netdiskProgressPanel {
+    background: #ffffff;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+}
+
+QLabel#netdiskProgressTitle {
+    color: #1f2937;
+    font-weight: 700;
+}
+
+QLabel#netdiskProgressStats {
+    color: #64748b;
+    font-size: 12px;
+}
+
+QLabel#netdiskProgressCurrent {
+    color: #64748b;
+    font-size: 12px;
+}
+
+QProgressBar#netdiskProgressBar {
+    background: #e5e7eb;
+    border: none;
+    border-radius: 4px;
+    min-height: 7px;
+    max-height: 7px;
+}
+
+QProgressBar#netdiskProgressBar::chunk {
+    background: #0f766e;
+    border-radius: 4px;
 }
 
 QWidget#paginationBar {

@@ -67,13 +67,25 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "stop": "录制已结束",
             "switch": "已切换录制",
             "duplicate": "单号已录过",
-            "no_order": "请先输入或扫描物流单号",
+            "no_order": "请先输入或扫描单号",
             "camera_refresh": "摄像头已刷新",
             "video_missing": "视频文件不存在",
             "save_failed": "保存失败",
             "save_success": "配置已保存",
             "list_refresh": "列表已刷新",
         },
+    },
+    "netdisk_sync": {
+        "enabled": False,
+        "provider": "baidu",
+        "remote_root": "/电商溯源/videos/",
+        "client_id": "",
+        "client_secret": "",
+        "access_token": "",
+        "refresh_token": "",
+        "token_expires_at": "",
+        "last_auth_time": "",
+        "debug": False,
     },
     "recent": {
         "last_video_dir": "videos",
@@ -90,6 +102,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "geometry_saved": False,
     },
 }
+
+LEGACY_NO_ORDER_PROMPT = "请先输入或扫描" + "物流" + "单号"
+CURRENT_NO_ORDER_PROMPT = "请先输入或扫描单号"
 
 
 class ConfigManager:
@@ -111,12 +126,16 @@ class ConfigManager:
         except (OSError, json.JSONDecodeError):
             self.config = deepcopy(DEFAULT_CONFIG)
             self.save()
+        else:
+            if self._normalize_legacy_display_text():
+                self.save()
 
         return self.config
 
     def save(self, config: dict[str, Any] | None = None) -> None:
         if config is not None:
             self.config = self._merge_defaults(config, DEFAULT_CONFIG)
+        self._normalize_legacy_display_text()
 
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         with self.config_path.open("w", encoding="utf-8") as file:
@@ -144,6 +163,18 @@ class ConfigManager:
         if path.is_absolute():
             return path
         return (self.base_dir / path).resolve()
+
+    def _normalize_legacy_display_text(self) -> bool:
+        voice_config = self.config.get("voice_prompt")
+        if not isinstance(voice_config, dict):
+            return False
+        system_text = voice_config.get("system_text")
+        if not isinstance(system_text, dict):
+            return False
+        if system_text.get("no_order") != LEGACY_NO_ORDER_PROMPT:
+            return False
+        system_text["no_order"] = CURRENT_NO_ORDER_PROMPT
+        return True
 
     @staticmethod
     def _merge_defaults(value: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:

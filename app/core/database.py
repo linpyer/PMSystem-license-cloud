@@ -22,6 +22,11 @@ VALID_RECORD_TYPES = {"发货", "退货"}
 MISSING_STATUS = "文件不存在"
 NORMAL_STATUS = "正常"
 ERROR_STATUS = "异常"
+UPLOAD_PENDING = "未上传"
+UPLOAD_UPLOADING = "上传中"
+UPLOAD_DONE = "已上传"
+UPLOAD_FAILED = "上传失败"
+VALID_UPLOAD_STATUSES = {UPLOAD_PENDING, UPLOAD_UPLOADING, UPLOAD_DONE, UPLOAD_FAILED}
 
 
 class DatabaseManager:
@@ -41,6 +46,7 @@ class DatabaseManager:
             connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute("PRAGMA foreign_keys=ON")
             self.create_tables()
+            self.reset_interrupted_uploads()
             if self.logger:
                 self.logger.info("SQLite 数据库初始化成功：%s", self.db_path)
         except Exception:
@@ -85,7 +91,16 @@ class DatabaseManager:
                         updated_at TEXT,
                         is_duplicate INTEGER DEFAULT 0,
                         duplicate_count INTEGER DEFAULT 1,
-                        duplicate_sequence INTEGER DEFAULT 1
+                        duplicate_sequence INTEGER DEFAULT 1,
+                        upload_status TEXT DEFAULT '未上传',
+                        upload_time TEXT,
+                        upload_remote_path TEXT,
+                        upload_error TEXT,
+                        upload_retry_count INTEGER DEFAULT 0,
+                        validation_status TEXT DEFAULT '未校验',
+                        validation_error TEXT DEFAULT '',
+                        validation_warning TEXT DEFAULT '',
+                        validated_at TEXT
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_videos_order_no ON videos(order_no);
@@ -96,6 +111,8 @@ class DatabaseManager:
                     CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
                     """
                 )
+                self._ensure_upload_columns(connection)
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_videos_upload_status ON videos(upload_status)")
                 connection.commit()
                 if self.logger:
                     self.logger.info("创建 videos 表和索引成功")
@@ -104,6 +121,29 @@ class DatabaseManager:
                 if self.logger:
                     self.logger.exception("创建 videos 表或索引失败")
                 raise
+
+    def _ensure_upload_columns(self, connection: sqlite3.Connection) -> None:
+        existing_columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(videos)").fetchall()
+        }
+        required_columns = {
+            "upload_status": "TEXT DEFAULT '未上传'",
+            "upload_time": "TEXT",
+            "upload_remote_path": "TEXT",
+            "upload_error": "TEXT",
+            "upload_retry_count": "INTEGER DEFAULT 0",
+            "validation_status": "TEXT DEFAULT '未校验'",
+            "validation_error": "TEXT DEFAULT ''",
+            "validation_warning": "TEXT DEFAULT ''",
+            "validated_at": "TEXT",
+        }
+        for column, definition in required_columns.items():
+            if column in existing_columns:
+                continue
+            connection.execute(f"ALTER TABLE videos ADD COLUMN {column} {definition}")
+            if self.logger:
+                self.logger.info("SQLite 自动迁移 videos.%s 字段成功", column)
 
     def insert_video_record(self, record: dict[str, Any]) -> None:
         self.upsert_video_record(record)
@@ -132,6 +172,10 @@ class DatabaseManager:
             "is_duplicate",
             "duplicate_count",
             "duplicate_sequence",
+            "validation_status",
+            "validation_error",
+            "validation_warning",
+            "validated_at",
         ]
         normalized = {field: record.get(field) for field in fields}
         normalized["record_type"] = self.normalize_record_type(normalized.get("record_type"))
@@ -139,7 +183,19 @@ class DatabaseManager:
 
         placeholders = ", ".join("?" for _ in fields)
         field_list = ", ".join(fields)
-        update_list = ", ".join(f"{field}=excluded.{field}" for field in fields if field != "file_path")
+        update_parts: list[str] = []
+        for field in fields:
+            if field == "file_path":
+                continue
+            if field == "remark":
+                update_parts.append(
+                    "remark = CASE "
+                    "WHEN excluded.remark IS NULL OR excluded.remark = '' THEN videos.remark "
+                    "ELSE excluded.remark END"
+                )
+            else:
+                update_parts.append(f"{field}=excluded.{field}")
+        update_list = ", ".join(update_parts)
         values = [normalized.get(field) for field in fields]
 
         with self._lock:
@@ -203,6 +259,10 @@ class DatabaseManager:
             "codec",
             "fps",
             "status",
+            "validation_status",
+            "validation_error",
+            "validation_warning",
+            "validated_at",
             "updated_at",
         }
         updates = {key: value for key, value in metadata.items() if key in allowed}
@@ -222,15 +282,70 @@ class DatabaseManager:
         return ok
 
     def update_remark(self, file_path: str | Path, remark: str) -> bool:
+        return self.update_video_remark_by_path(file_path, remark) == 1
+
+    def update_video_remark_by_path(self, file_path: str | Path, remark: str) -> int:
         remark = str(remark or "")[:500]
-        ok = self._update_fields(
-            file_path,
-            {"remark": remark, "updated_at": format_datetime()},
-            "修改备注",
-        )
-        if ok and self.logger:
-            self.logger.info("修改备注成功：%s", file_path)
-        return ok
+        path_text = str(Path(file_path).resolve())
+        now_text = format_datetime()
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE videos
+                    SET remark = ?,
+                        updated_at = ?
+                    WHERE file_path = ?
+                    """,
+                    (remark, now_text, path_text),
+                )
+                connection.commit()
+                if self.logger:
+                    self.logger.info(
+                        "修改备注提交：db=%s, path=%s, affected=%s, remark_len=%s",
+                        self.db_path,
+                        path_text,
+                        cursor.rowcount,
+                        len(remark),
+                    )
+                return int(cursor.rowcount)
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception("修改备注失败并 rollback：db=%s, path=%s, remark_len=%s", self.db_path, path_text, len(remark))
+                raise
+
+    def update_video_remark(self, record_id: int, remark: str) -> int:
+        remark = str(remark or "")[:500]
+        now_text = format_datetime()
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE videos
+                    SET remark = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (remark, now_text, int(record_id)),
+                )
+                connection.commit()
+                if self.logger:
+                    self.logger.info(
+                        "修改备注提交：db=%s, id=%s, affected=%s, remark_len=%s",
+                        self.db_path,
+                        record_id,
+                        cursor.rowcount,
+                        len(remark),
+                    )
+                return int(cursor.rowcount)
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception("修改备注失败并 rollback：db=%s, id=%s, remark_len=%s", self.db_path, record_id, len(remark))
+                raise
 
     def delete_video_record(self, file_path: str | Path) -> bool:
         path_text = str(Path(file_path).resolve())
@@ -262,6 +377,143 @@ class DatabaseManager:
             self.logger.warning("标记文件不存在：%s", file_path)
         return ok
 
+    def update_upload_status(
+        self,
+        file_path: str | Path,
+        upload_status: str,
+        remote_path: str | None = None,
+        error: str | None = None,
+        increment_retry: bool = False,
+    ) -> bool:
+        status = str(upload_status or UPLOAD_PENDING).strip()
+        if status not in VALID_UPLOAD_STATUSES:
+            status = UPLOAD_PENDING
+        path_text = str(Path(file_path).resolve())
+        now_text = format_datetime()
+        error_text = str(error or "")[:500]
+
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                if increment_retry:
+                    cursor = connection.execute(
+                        """
+                        UPDATE videos
+                        SET upload_status = ?,
+                            upload_time = CASE WHEN ? = ? THEN ? ELSE upload_time END,
+                            upload_remote_path = COALESCE(?, upload_remote_path),
+                            upload_error = ?,
+                            upload_retry_count = COALESCE(upload_retry_count, 0) + 1,
+                            updated_at = ?
+                        WHERE file_path = ?
+                        """,
+                        (status, status, UPLOAD_DONE, now_text, remote_path, error_text, now_text, path_text),
+                    )
+                else:
+                    cursor = connection.execute(
+                        """
+                        UPDATE videos
+                        SET upload_status = ?,
+                            upload_time = CASE WHEN ? = ? THEN ? ELSE upload_time END,
+                            upload_remote_path = COALESCE(?, upload_remote_path),
+                            upload_error = ?,
+                            updated_at = ?
+                        WHERE file_path = ?
+                        """,
+                        (status, status, UPLOAD_DONE, now_text, remote_path, error_text, now_text, path_text),
+                    )
+                connection.commit()
+                if cursor.rowcount <= 0 and self.logger:
+                    self.logger.warning(
+                        "更新网盘上传状态失败：记录不存在，path=%s, status=%s, remote_path=%s, error=%s",
+                        path_text,
+                        status,
+                        remote_path or "",
+                        error_text,
+                    )
+                elif self.logger:
+                    self.logger.info(
+                        "更新网盘上传状态成功：path=%s, status=%s, remote_path=%s, error=%s",
+                        path_text,
+                        status,
+                        remote_path or "",
+                        error_text,
+                    )
+                return cursor.rowcount > 0
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception("更新网盘上传状态失败并 rollback：path=%s, status=%s", path_text, status)
+                raise
+
+    def reset_interrupted_uploads(self) -> int:
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE videos
+                    SET upload_status = ?,
+                        upload_error = ?,
+                        updated_at = ?
+                    WHERE upload_status = ?
+                    """,
+                    (UPLOAD_FAILED, "上次上传中断", format_datetime(), UPLOAD_UPLOADING),
+                )
+                connection.commit()
+                if cursor.rowcount and self.logger:
+                    self.logger.warning("已恢复上次中断的网盘上传记录：%s 条", cursor.rowcount)
+                return int(cursor.rowcount or 0)
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception("恢复上次中断上传状态失败并 rollback")
+                raise
+
+    def query_upload_candidates(
+        self,
+        query_dir: str | Path | None = None,
+        include_failed: bool = False,
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        filters: dict[str, Any] = {"limit": limit, "offset": 0}
+        if query_dir:
+            filters["query_dir"] = query_dir
+        conditions, params = self._video_filter_conditions(filters)
+        statuses = [UPLOAD_PENDING]
+        if include_failed:
+            statuses.append(UPLOAD_FAILED)
+        placeholders = ", ".join("?" for _ in statuses)
+        conditions.append(f"COALESCE(upload_status, ?) IN ({placeholders})")
+        params.append(UPLOAD_PENDING)
+        params.extend(statuses)
+        conditions.append("status = ?")
+        params.append(NORMAL_STATUS)
+        params.append(max(1, min(int(limit or 5000), 5000)))
+        sql = f"""
+            SELECT *
+            FROM videos
+            WHERE {' AND '.join(conditions)}
+            ORDER BY
+                COALESCE(NULLIF(recorded_at, ''), NULLIF(created_time, ''), printf('%012d', id)) ASC,
+                id ASC
+            LIMIT ?
+        """
+        try:
+            rows = [self._row_to_item(row) for row in self.get_connection().execute(sql, params).fetchall()]
+            if self.logger:
+                self.logger.info(
+                    "查询网盘上传候选视频成功：dir=%s, include_failed=%s, count=%s",
+                    query_dir or "<全部>",
+                    include_failed,
+                    len(rows),
+                )
+            return rows
+        except Exception:
+            if self.logger:
+                self.logger.exception("查询网盘上传候选视频失败：dir=%s", query_dir or "<全部>")
+            return []
+
     def query_videos(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}
         started = time.perf_counter()
@@ -288,7 +540,8 @@ class DatabaseManager:
             elapsed_ms = (time.perf_counter() - started) * 1000
             if self.logger:
                 self.logger.info(
-                    "查询视频列表成功：数量=%s, limit=%s, offset=%s, 耗时=%.2fms, filters=%s",
+                    "查询视频列表成功：db=%s, 数量=%s, limit=%s, offset=%s, 耗时=%.2fms, filters=%s",
+                    self.db_path,
                     len(rows),
                     limit,
                     offset,
@@ -480,6 +733,13 @@ class DatabaseManager:
         ).fetchone()
         return self._row_to_item(row) if row else None
 
+    def get_video_by_id(self, record_id: int) -> dict[str, Any] | None:
+        row = self.get_connection().execute(
+            "SELECT * FROM videos WHERE id = ?",
+            (int(record_id),),
+        ).fetchone()
+        return self._row_to_item(row) if row else None
+
     def close(self) -> None:
         if self._connection is not None:
             self._connection.close()
@@ -515,6 +775,16 @@ class DatabaseManager:
         if record_type:
             conditions.append("record_type = ?")
             params.append(self.normalize_record_type(record_type))
+
+        upload_status = str(filters.get("upload_status") or "").strip()
+        if upload_status and upload_status in VALID_UPLOAD_STATUSES:
+            conditions.append("COALESCE(upload_status, ?) = ?")
+            params.extend([UPLOAD_PENDING, upload_status])
+
+        local_status = str(filters.get("status") or "").strip()
+        if local_status:
+            conditions.append("status = ?")
+            params.append(local_status)
 
         return conditions, params
 
@@ -558,6 +828,10 @@ class DatabaseManager:
         resolution = "-"
         codec = "-"
         fps = 0.0
+        validation_status = "未校验"
+        validation_error = ""
+        validation_warning = ""
+        validated_at = ""
 
         if exists:
             try:
@@ -567,12 +841,27 @@ class DatabaseManager:
             except OSError:
                 exists = False
 
+        if not exists:
+            validation_status = MISSING_STATUS
+            validation_error = "视频文件不存在"
+            validated_at = now_text
+
         if exists:
             check = VideoChecker(self.logger).check_video(path)
             duration_seconds = float(check.duration_seconds or 0.0)
             duration_text = format_duration(int(round(duration_seconds))) if duration_seconds > 0 else "-"
             status = NORMAL_STATUS if check.is_valid else ERROR_STATUS
-            width, height, resolution, codec, fps = self._read_video_metadata(path)
+            validation_status = getattr(check, "status", "") or status
+            validation_error = getattr(check, "error", "") or ""
+            validation_warning = getattr(check, "warning", "") or ""
+            validated_at = getattr(check, "validated_at", "") or now_text
+            width = int(getattr(check, "width", 0) or 0)
+            height = int(getattr(check, "height", 0) or 0)
+            fps = float(getattr(check, "fps", 0.0) or 0.0)
+            codec = str(getattr(check, "codec", "") or "-")
+            resolution = f"{width} x {height}" if width > 0 and height > 0 else "-"
+            if width <= 0 or height <= 0 or fps <= 0:
+                width, height, resolution, codec, fps = self._read_video_metadata(path)
 
         recorded_text = self._datetime_text(recorded_at) or created_time or now_text
         return {
@@ -598,6 +887,10 @@ class DatabaseManager:
             "is_duplicate": 0,
             "duplicate_count": 1,
             "duplicate_sequence": 1,
+            "validation_status": validation_status,
+            "validation_error": validation_error,
+            "validation_warning": validation_warning,
+            "validated_at": validated_at,
         }
 
     def _read_video_metadata(self, path: Path) -> tuple[int, int, str, str, float]:
@@ -633,6 +926,15 @@ class DatabaseManager:
         item["recording_time"] = item.get("recorded_at") or item.get("created_time") or ""
         item["duration_text"] = item.get("duration_text") or self._duration_text(item)
         item["file_size_text"] = item.get("file_size_text") or human_file_size(int(item.get("file_size_bytes") or 0))
+        item["upload_status"] = item.get("upload_status") or UPLOAD_PENDING
+        item["upload_time"] = item.get("upload_time") or ""
+        item["upload_remote_path"] = item.get("upload_remote_path") or ""
+        item["upload_error"] = item.get("upload_error") or ""
+        item["upload_retry_count"] = int(item.get("upload_retry_count") or 0)
+        item["validation_status"] = item.get("validation_status") or "未校验"
+        item["validation_error"] = item.get("validation_error") or ""
+        item["validation_warning"] = item.get("validation_warning") or ""
+        item["validated_at"] = item.get("validated_at") or ""
         return item
 
     @staticmethod

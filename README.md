@@ -45,19 +45,20 @@ packing-monitor/
 
 - 摄像头实时预览和本地 mp4 录制。
 - 扫码枪按 USB 键盘输入处理，扫码后回车触发。
-- 未录制时扫码开始录制；录制中再次扫描当前相同物流单号会结束当前录制且不开始新录制；录制中扫描不同物流单号会结束上一个视频并开始下一个。
+- 未录制时扫码开始录制；录制中再次扫描当前相同单号会结束当前录制且不开始新录制；录制中扫描不同单号会结束上一个视频并开始下一个。
 - 录制中空扫码或空回车会停止当前录制。
 - 如果单号已有历史录制记录，系统会提示重复录制，但不会阻止录制，也不会覆盖旧视频。
 - 开始录制、结束录制、切换录制和重复录制时支持语音提示；可选择系统默认语音、自定义语音包或关闭语音。
 - 自定义语音包支持上传本地 `wav`、`mp3`、`m4a`、`aac` 音频文件，文件会复制到用户数据目录，不会录入视频文件。
-- 录制中预览画面会实时显示物流单号和时间水印，方便确认最终视频效果；预览水印不影响最终视频水印保存。
-- 视频水印写入画面本身：左上角 `物流单号：XXXXXXX`，左下角秒级日期时间，带半透明黑底。
+- 录制中预览画面会实时显示单号和时间水印，方便确认最终视频效果；预览水印不影响最终视频水印保存。
+- 视频水印写入画面本身：左上角 `单号：XXXXXXX`，左下角秒级日期时间，带半透明黑底。
 - 正式视频命名为 `单号_YYYYMMDD_HHMMSS.mp4`，旧格式视频仍可查询和播放。
 - 录制完成后自动做视频完整性校验，异常视频只提示和写日志，不自动删除。
 - 扫码内容只做清洗、防抖和软提示，不做快递规则校验，不联网，不阻止录制。
 - 查询页使用本地 SQLite 文件 `pm_system.db` 保存视频索引、备注、发货/退货类型和重复录制序号；刷新列表时会重新扫描当前查询目录并同步数据库。
 - 查询页支持关键词搜索、今天、昨天、最近 7 天、全部日期筛选，并支持分页显示。
 - 查询页分页支持每页 10 / 20 / 50 / 100 条、上一页 / 下一页、页码按钮和指定页跳转；搜索、日期筛选、类型筛选会自动刷新分页。
+- 设置中可开启百度网盘手动同步；开启并完成授权后，查询页可批量同步未上传视频，也可对未上传或上传失败的视频单条重试，本地视频不会因上传成功或失败被删除。
 - 查询页会标记重复录制记录；同一单号存在多条视频时，“文件状态”列会显示“正常”和“重复第 N 次”标签。
 - “重复第 N 次”表示该视频是该单号的第几次录制，只有一条记录的单号不会显示重复标签。
 - 查询页支持点击视频名称播放、双击行播放、点击路径定位磁盘文件、确认后删除物理视频文件。
@@ -96,6 +97,8 @@ pip install -r requirements.txt
 python main.py
 ```
 
+如果使用百度网盘同步功能，开发环境必须安装 `requests`。`requests` 已包含在 `requirements.txt` 中，运行 `pip install -r requirements.txt` 后即可使用授权、测试连接和同步上传功能。
+
 如果当前项目路径较长，安装 PySide6 时遇到 Windows 长路径限制，可以把虚拟环境建到更短路径：
 
 ```powershell
@@ -119,12 +122,13 @@ python main.py
 - `fps`：帧率使用固定下拉选项：`15 FPS`、`20 FPS`、`25 FPS`、`30 FPS`、`60 FPS`，推荐并默认使用 `25 FPS`。`60 FPS` 画面更顺滑，但文件更大，对摄像头和电脑性能要求更高。
 - `recording_max_long_edge`：录制长边上限使用固定下拉选项：`不限制`、`960`、`1280`、`1920`，推荐并默认使用 `1280`；设置为 `0` 表示不限制，使用摄像头原始分辨率。
 - `video_format`：默认 `mp4`。
-- `auto_continue_recording`：录制中扫描不同物流单号时是否自动开始下一段。
+- `auto_continue_recording`：录制中扫描不同单号时是否自动开始下一段。
 - `watermark_font_size` / `watermark_margin`：水印字号和边距。
 - `scanner_guard`：扫码清洗、防抖和软提示配置，`block_invalid` 默认且必须为 `false`。
 - `recording_quality`：短视频提醒阈值，默认小于 3 秒提示。
 - `disk_space`：磁盘空间提醒阈值，默认 20GB 警告、10GB 严重警告。
 - `voice_prompt`：录制语音提示配置，支持系统默认语音、自定义语音包和关闭语音；自定义音频保存在用户数据目录的 `voice` 子目录中。
+- `netdisk_sync`：百度网盘手动同步配置，包含开关、App Key、远程根目录和本机 token 信息；token 不显示在界面中，上传记录状态保存在 SQLite 视频索引中。
 
 基础配置已移动到右上角“设置”入口中。设置窗口包含“基础配置”和“语音提示”页签；“摄像头设备”“分辨率”“帧率”“录制长边上限”“水印字号”“水印边距”旁边都有问号帮助图标，点击后可以查看中文配置说明。正在录制时不建议修改基础配置，请结束录制后再调整。
 
@@ -163,7 +167,7 @@ python main.py
 - 可以点击“恢复默认”恢复到当前配置的视频保存目录。
 - 切换查询目录只影响视频查询页面，不会修改打包监控页面的录制保存目录。
 - 切换查询目录只影响当前查询页筛选范围；刷新列表会扫描当前目录，并把该目录中的视频记录同步到 SQLite。
-- 第一版只扫描当前查询目录，不递归扫描子目录。
+- 刷新列表会递归扫描当前查询目录，兼容根目录旧视频和 `年/月/日` 子目录中新录制的视频。
 
 ## 性能建议和语音提示
 
@@ -192,7 +196,7 @@ cd "E:\PM System"
 
 ## 打包和制作安装包
 
-当前版本：`v1.0.1`。软件可以使用 PyInstaller 打包为 onedir 程序目录，再使用 Inno Setup 制作 Windows 安装包。目标电脑不需要安装 Python，不需要安装 SQLite，也不需要部署任何数据库服务。
+当前版本：`v1.0.2`。软件可以使用 PyInstaller 打包为 onedir 程序目录，再使用 Inno Setup 制作 Windows 安装包。目标电脑不需要安装 Python，不需要安装 SQLite，也不需要部署任何数据库服务。
 
 安装依赖：
 
@@ -217,7 +221,7 @@ python -m compileall main.py app
 `build.bat` 内部使用的 PyInstaller 关键参数包括：
 
 ```powershell
-python -m PyInstaller --noconfirm --clean --windowed --onedir --name "电商打包发货监控溯源系统" --icon "app\assets\logo.ico" --add-data "app\assets;app\assets" --hidden-import sqlite3 --hidden-import pyttsx3 --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5 main.py
+python -m PyInstaller --noconfirm --clean --windowed --onedir --name "电商打包发货监控溯源系统" --icon "app\assets\logo.ico" --add-data "app\assets;app\assets" --hidden-import sqlite3 --hidden-import requests --hidden-import pyttsx3 --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5 main.py
 ```
 
 打包完成后，程序位于：
@@ -259,7 +263,7 @@ installer\PMSystem.iss
 也可以手动打开这个 `.iss` 文件并点击 Compile。最终安装包位置：
 
 ```text
-installer\output\PMSystem_Setup_v1.0.1.exe
+installer\output\PMSystem_Setup_v1.0.2.exe
 ```
 
 安装包界面使用简体中文，支持选择安装位置、创建桌面快捷方式、开始菜单快捷方式、卸载，以及安装完成后立即运行。

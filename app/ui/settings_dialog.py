@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import webbrowser
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -31,6 +33,13 @@ from PySide6.QtWidgets import (
 
 from app.core.camera import list_camera_devices
 from app.core.config_manager import ConfigManager
+from app.core.netdisk_sync import (
+    BaiduNetdiskClient,
+    NetdiskError,
+    build_authorize_url,
+    normalize_netdisk_config,
+    normalize_remote_root,
+)
 from app.core.voice_prompt import (
     DEFAULT_SYSTEM_TEXT,
     DEFAULT_VOICE_PROMPT_CONFIG,
@@ -90,8 +99,10 @@ class SettingsDialog(QDialog):
         self._build_ui()
         self._load_basic_config_to_ui()
         self._load_voice_config_to_ui()
+        self._load_netdisk_config_to_ui()
         self.logger.info("基础配置页签初始化")
         self.logger.info("语音提示页签初始化")
+        self.logger.info("网盘同步页签初始化")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.closed.emit()
@@ -105,6 +116,7 @@ class SettingsDialog(QDialog):
         self.tabs = QTabWidget(self)
         self.tabs.addTab(self._build_basic_tab(), "基础配置")
         self.tabs.addTab(self._build_voice_tab(), "语音提示")
+        self.tabs.addTab(self._build_netdisk_tab(), "网盘同步")
         root_layout.addWidget(self.tabs, 1)
 
     def _build_basic_tab(self) -> QWidget:
@@ -435,9 +447,140 @@ class SettingsDialog(QDialog):
         layout.addLayout(action_layout)
         return widget
 
+    def _build_netdisk_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        self.netdisk_enabled_check = QCheckBox("开启网盘同步")
+        self.netdisk_enabled_check.setStyleSheet(self.voice_enabled_check.styleSheet())
+        self.netdisk_enabled_check.toggled.connect(self._sync_netdisk_ui)
+        enabled_row = QHBoxLayout()
+        enabled_row.setContentsMargins(0, 0, 0, 0)
+        enabled_row.addStretch(1)
+        enabled_row.addWidget(self.netdisk_enabled_check, 0, Qt.AlignCenter)
+        enabled_row.addStretch(1)
+        layout.addLayout(enabled_row)
+
+        self.netdisk_config_stack = QStackedWidget()
+        self.netdisk_config_stack.setFixedHeight(360)
+        self.netdisk_config_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.netdisk_blank_panel = QWidget()
+        self.netdisk_config_stack.addWidget(self.netdisk_blank_panel)
+
+        self.netdisk_panel = QWidget()
+        self.netdisk_panel.setObjectName("netdiskPanel")
+        self.netdisk_panel.setStyleSheet(
+            """
+            QLabel#sectionTitle {
+                color: #0f766e;
+                font-weight: 700;
+            }
+            QLabel#authStatusLabel {
+                color: #475569;
+                font-weight: 600;
+            }
+            QPushButton#netdiskAuthButton {
+                color: #0f766e;
+                border: 1px solid #0f766e;
+                background: #ffffff;
+                border-radius: 5px;
+                font-weight: 600;
+                min-height: 30px;
+                padding: 4px 12px;
+            }
+            QPushButton#netdiskAuthButton:hover {
+                background: #ecfdf5;
+            }
+            QPushButton#netdiskTestButton {
+                color: #2563eb;
+                border: 1px solid #93c5fd;
+                background: #ffffff;
+                border-radius: 5px;
+                font-weight: 600;
+                min-height: 30px;
+                padding: 4px 12px;
+            }
+            QPushButton#netdiskTestButton:hover {
+                background: #eff6ff;
+            }
+            """
+        )
+        panel_layout = QVBoxLayout(self.netdisk_panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(10)
+
+        header = QLabel("百度网盘同步配置")
+        header.setObjectName("sectionTitle")
+        panel_layout.addWidget(header)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(10)
+
+        self.netdisk_client_id_input = QLineEdit()
+        self.netdisk_client_id_input.setPlaceholderText("请输入百度网盘 App Key / Client ID")
+        form.addRow("App Key：", self.netdisk_client_id_input)
+
+        self.netdisk_client_secret_input = QLineEdit()
+        self.netdisk_client_secret_input.setPlaceholderText("请输入百度网盘 Secret Key / Client Secret")
+        self.netdisk_client_secret_input.setEchoMode(QLineEdit.Password)
+        form.addRow("Secret Key：", self.netdisk_client_secret_input)
+
+        self.netdisk_remote_root_input = QLineEdit()
+        self.netdisk_remote_root_input.setPlaceholderText("/电商溯源/videos/")
+        form.addRow("远程上传根目录：", self.netdisk_remote_root_input)
+
+        self.netdisk_debug_check = QCheckBox("启用调试日志")
+        self.netdisk_debug_check.setToolTip("仅排查上传问题时开启；不会记录 token、refresh_token 或 Secret Key。")
+        form.addRow("调试日志：", self.netdisk_debug_check)
+
+        auth_row = QHBoxLayout()
+        auth_row.setContentsMargins(0, 0, 0, 0)
+        auth_row.setSpacing(8)
+        self.netdisk_auth_status_label = QLabel("未授权")
+        self.netdisk_auth_status_label.setObjectName("authStatusLabel")
+        self.netdisk_auth_button = QPushButton("登录授权")
+        self.netdisk_auth_button.setObjectName("netdiskAuthButton")
+        self.netdisk_auth_button.clicked.connect(self._authorize_netdisk)
+        self.netdisk_test_button = QPushButton("测试连接")
+        self.netdisk_test_button.setObjectName("netdiskTestButton")
+        self.netdisk_test_button.clicked.connect(self._test_netdisk_connection)
+        auth_row.addWidget(self.netdisk_auth_status_label)
+        auth_row.addSpacing(8)
+        auth_row.addWidget(self.netdisk_auth_button)
+        auth_row.addWidget(self.netdisk_test_button)
+        auth_row.addStretch(1)
+        auth_widget = QWidget()
+        auth_widget.setLayout(auth_row)
+        form.addRow("授权状态：", auth_widget)
+
+        panel_layout.addLayout(form)
+        hint = QLabel("提示：access_token 和 refresh_token 仅保存在本机配置文件中，不会显示在界面和日志里。")
+        hint.setObjectName("hintLabel")
+        hint.setWordWrap(True)
+        panel_layout.addWidget(hint)
+        panel_layout.addStretch(1)
+        self.netdisk_config_stack.addWidget(self.netdisk_panel)
+        layout.addWidget(self.netdisk_config_stack)
+
+        action_layout = QHBoxLayout()
+        action_layout.addStretch(1)
+        self.netdisk_save_button = QPushButton("保存设置")
+        self.netdisk_save_button.setObjectName("primaryButton")
+        self.netdisk_save_button.setMinimumWidth(150)
+        self.netdisk_save_button.clicked.connect(self._save_netdisk_settings)
+        action_layout.addWidget(self.netdisk_save_button)
+        action_layout.addStretch(1)
+        layout.addLayout(action_layout)
+        return widget
+
     def refresh_state(self, is_recording: bool | None = None) -> None:
         self._load_basic_config_to_ui()
         self._load_voice_config_to_ui()
+        self._load_netdisk_config_to_ui()
         self._set_basic_config_enabled(not bool(is_recording if is_recording is not None else self.is_recording_callback()))
 
     def _load_basic_config_to_ui(self) -> None:
@@ -691,6 +834,144 @@ class SettingsDialog(QDialog):
         except Exception as exc:
             self.logger.exception("语音配置保存失败")
             self._set_status(f"语音配置保存失败：{exc}", "error")
+
+    def _load_netdisk_config_to_ui(self) -> None:
+        netdisk_config = self._current_netdisk_config()
+        self.netdisk_enabled_check.blockSignals(True)
+        self.netdisk_enabled_check.setChecked(bool(netdisk_config.get("enabled", False)))
+        self.netdisk_enabled_check.blockSignals(False)
+
+        self.netdisk_client_id_input.setText(str(netdisk_config.get("client_id") or ""))
+        self.netdisk_client_secret_input.setText(str(netdisk_config.get("client_secret") or ""))
+        self.netdisk_remote_root_input.setText(str(netdisk_config.get("remote_root") or "/电商溯源/videos/"))
+        self.netdisk_debug_check.setChecked(bool(netdisk_config.get("debug", False)))
+        self._refresh_netdisk_auth_status(netdisk_config)
+        self._sync_netdisk_ui()
+
+    def _current_netdisk_config(self) -> dict[str, object]:
+        return normalize_netdisk_config(self.config_manager.config.get("netdisk_sync", {}))
+
+    def _netdisk_config_from_ui(self) -> dict[str, object]:
+        current = self._current_netdisk_config()
+        return {
+            "enabled": self.netdisk_enabled_check.isChecked(),
+            "provider": "baidu",
+            "remote_root": normalize_remote_root(self.netdisk_remote_root_input.text().strip()),
+            "client_id": self.netdisk_client_id_input.text().strip(),
+            "client_secret": self.netdisk_client_secret_input.text().strip(),
+            "access_token": str(current.get("access_token") or ""),
+            "refresh_token": str(current.get("refresh_token") or ""),
+            "token_expires_at": str(current.get("token_expires_at") or ""),
+            "last_auth_time": str(current.get("last_auth_time") or ""),
+            "debug": self.netdisk_debug_check.isChecked(),
+        }
+
+    def _sync_netdisk_ui(self, *_args) -> None:
+        enabled = self.netdisk_enabled_check.isChecked()
+        self.netdisk_config_stack.setCurrentWidget(self.netdisk_panel if enabled else self.netdisk_blank_panel)
+        for widget in (
+            self.netdisk_client_id_input,
+            self.netdisk_client_secret_input,
+            self.netdisk_remote_root_input,
+            self.netdisk_debug_check,
+            self.netdisk_auth_button,
+            self.netdisk_test_button,
+        ):
+            widget.setEnabled(enabled)
+
+    def _refresh_netdisk_auth_status(self, netdisk_config: dict[str, object] | None = None) -> None:
+        netdisk_config = netdisk_config or self._current_netdisk_config()
+        if netdisk_config.get("access_token") or netdisk_config.get("refresh_token"):
+            self.netdisk_auth_status_label.setText("已授权")
+            self.netdisk_auth_status_label.setStyleSheet("color: #047857; font-weight: 700;")
+            self.netdisk_auth_button.setText("重新授权")
+        else:
+            self.netdisk_auth_status_label.setText("未授权")
+            self.netdisk_auth_status_label.setStyleSheet("color: #d97706; font-weight: 700;")
+            self.netdisk_auth_button.setText("登录授权")
+
+    def _save_netdisk_config(self, netdisk_config: dict[str, object]) -> dict:
+        normalized = normalize_netdisk_config(netdisk_config)
+        updated_config = self.config_manager.update({"netdisk_sync": normalized})
+        self.config_saved.emit(updated_config)
+        self.logger.info(
+            "网盘同步配置保存成功：enabled=%s, provider=%s, remote_root=%s, has_client_id=%s, has_token=%s",
+            normalized.get("enabled"),
+            normalized.get("provider"),
+            normalized.get("remote_root"),
+            bool(normalized.get("client_id")),
+            bool(normalized.get("access_token") or normalized.get("refresh_token")),
+        )
+        return updated_config
+
+    def _save_netdisk_settings(self) -> None:
+        try:
+            netdisk_config = self._netdisk_config_from_ui()
+            self._save_netdisk_config(netdisk_config)
+            self.netdisk_remote_root_input.setText(str(netdisk_config.get("remote_root") or "/电商溯源/videos/"))
+            self._refresh_netdisk_auth_status(netdisk_config)
+            self._sync_netdisk_ui()
+            self._set_status("网盘同步设置已保存", "success")
+        except Exception as exc:
+            self.logger.exception("网盘同步配置保存失败")
+            self._set_status(f"网盘同步配置保存失败：{exc}", "error")
+
+    def _authorize_netdisk(self) -> None:
+        try:
+            netdisk_config = self._netdisk_config_from_ui()
+            if not netdisk_config.get("client_id") or not netdisk_config.get("client_secret"):
+                self._set_status("请先填写百度网盘 App Key 和 Secret Key", "warning")
+                return
+            self._save_netdisk_config(netdisk_config)
+            auth_url = build_authorize_url(str(netdisk_config.get("client_id") or ""))
+            webbrowser.open(auth_url)
+            code, ok = QInputDialog.getText(
+                self,
+                "百度网盘授权",
+                "浏览器授权完成后，请复制授权码并粘贴到这里：",
+            )
+            if not ok or not code.strip():
+                self.logger.info("用户取消百度网盘授权码输入")
+                return
+            client = BaiduNetdiskClient(netdisk_config, self.logger)
+            tokens = client.exchange_code(code.strip())
+            netdisk_config.update(tokens)
+            netdisk_config["enabled"] = True
+            updated_config = self._save_netdisk_config(netdisk_config)
+            self._refresh_netdisk_auth_status(updated_config.get("netdisk_sync", {}))
+            self._set_status("百度网盘授权成功", "success")
+        except NetdiskError as exc:
+            self.logger.exception("百度网盘授权失败")
+            self._set_status(f"百度网盘授权失败：{exc}", "error")
+        except Exception as exc:
+            self.logger.exception("百度网盘授权异常")
+            self._set_status(f"百度网盘授权失败：{exc}", "error")
+
+    def _test_netdisk_connection(self) -> None:
+        try:
+            netdisk_config = self._netdisk_config_from_ui()
+            if not netdisk_config.get("client_id") or not netdisk_config.get("client_secret"):
+                self._set_status("请先填写百度网盘 App Key 和 Secret Key", "warning")
+                return
+            if not (netdisk_config.get("access_token") or netdisk_config.get("refresh_token")):
+                self._set_status("请先完成百度网盘授权", "warning")
+                return
+            client = BaiduNetdiskClient(netdisk_config, self.logger, token_refreshed_callback=self._save_netdisk_tokens)
+            client.test_connection()
+            self._set_status("百度网盘连接正常", "success")
+            self.logger.info("百度网盘测试连接成功")
+        except NetdiskError as exc:
+            self.logger.exception("百度网盘测试连接失败")
+            self._set_status(f"百度网盘连接失败：{exc}", "error")
+        except Exception as exc:
+            self.logger.exception("百度网盘测试连接异常")
+            self._set_status(f"百度网盘连接失败：{exc}", "error")
+
+    def _save_netdisk_tokens(self, tokens: dict[str, object]) -> None:
+        netdisk_config = self._current_netdisk_config()
+        netdisk_config.update(tokens)
+        self._save_netdisk_config(netdisk_config)
+        self._refresh_netdisk_auth_status(netdisk_config)
 
     def _refresh_camera_options(self, selected_index: int | None = None) -> None:
         selected_index = int(selected_index if selected_index is not None else self.config_manager.config.get("camera_index", 0) or 0)

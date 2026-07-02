@@ -36,7 +36,7 @@ class WatermarkRenderer:
         self.margin = margin
 
     def draw(self, frame: np.ndarray, order_id: str, current_time: datetime) -> np.ndarray:
-        order_text = f"物流单号：{order_id}"
+        order_text = f"单号：{order_id}"
         time_text = format_datetime(current_time)
 
         order_label = self._label_image(order_text)
@@ -419,7 +419,7 @@ class RecorderThread(QThread):
 
         current_order_id = self._order_id.strip()
         if not order_id:
-            self.logger.info("扫码为空，停止当前录制：物流单号=%s", current_order_id)
+            self.logger.info("扫码为空，停止当前录制：单号=%s", current_order_id)
             self._stop_recording()
             return
 
@@ -428,7 +428,7 @@ class RecorderThread(QThread):
             self._stop_recording()
             return
 
-        self.logger.info("扫描到新物流单号，切换录制：%s -> %s", current_order_id, order_id)
+        self.logger.info("扫描到新单号，切换录制：%s -> %s", current_order_id, order_id)
         self._stop_recording()
         if bool(self.config.get("auto_continue_recording", True)):
             self._pending_start_order_id = order_id
@@ -440,13 +440,13 @@ class RecorderThread(QThread):
             self.message.emit("当前正在录制，请先停止当前录制")
             return
         if not order_id:
-            self.message.emit("请先输入或扫描物流单号")
+            self.message.emit("请先输入或扫描单号")
             return
         self._start_recording(order_id)
 
     def _handle_manual_stop(self) -> None:
         if self._pending_start_order_id and not self._recording:
-            self.logger.info("取消待启动录制：物流单号=%s", self._pending_start_order_id)
+            self.logger.info("取消待启动录制：单号=%s", self._pending_start_order_id)
             self._pending_start_order_id = None
             self.message.emit("已取消待启动录制")
             return
@@ -608,7 +608,7 @@ class RecorderThread(QThread):
         self._reset_performance_window()
 
         self.logger.info(
-            "开始录制：物流单号=%s, 临时文件=%s, 编码=%s, 配置FPS=%s, 写入FPS=%s, 摄像头实际FPS=%s, 队列容量=%s",
+            "开始录制：单号=%s, 临时文件=%s, 编码=%s, 配置FPS=%s, 写入FPS=%s, 摄像头实际FPS=%s, 队列容量=%s",
             order_id,
             temp_path,
             codec,
@@ -640,7 +640,7 @@ class RecorderThread(QThread):
         extension = str(self.config.get("video_format", "mp4") or "mp4").lower()
         recording_ended_at = datetime.now()
 
-        self.logger.info("停止录制：物流单号=%s", order_id)
+        self.logger.info("停止录制：单号=%s", order_id)
 
         writer_snapshot: dict[str, float | int | str] = {}
         if writer_worker is not None:
@@ -682,7 +682,7 @@ class RecorderThread(QThread):
 
         if frames_written <= 0 or temp_size <= 0:
             self.logger.warning(
-                "录制文件大小或帧数异常，仍保留文件等待完整性校验：物流单号=%s，帧数=%s，大小=%s，临时文件=%s",
+                "录制文件大小或帧数异常，仍保留文件等待完整性校验：单号=%s，帧数=%s，大小=%s，临时文件=%s",
                 order_id,
                 frames_written,
                 temp_size,
@@ -706,10 +706,10 @@ class RecorderThread(QThread):
         duration_seconds = 0
         if started_at is not None:
             duration_seconds = max(0, int((recording_ended_at - started_at).total_seconds()))
-        self.logger.info("录制时长：物流单号=%s，时长=%s 秒", order_id, duration_seconds)
+        self.logger.info("录制时长：单号=%s，时长=%s 秒", order_id, duration_seconds)
         avg_record_fps = frames_written / max(0.001, (recording_ended_at - started_at).total_seconds()) if started_at else 0.0
         self.logger.info(
-            "录制性能摘要：物流单号=%s, 开始时间=%s, 结束时间=%s, 实际时长=%.2f秒, 配置FPS=%s, 写入FPS=%s, 总帧数=%s, 平均录制FPS=%.2f, 丢帧=%s, 平均写入耗时=%.2fms, 最大写入耗时=%.2fms",
+            "录制性能摘要：单号=%s, 开始时间=%s, 结束时间=%s, 实际时长=%.2f秒, 配置FPS=%s, 写入FPS=%s, 总帧数=%s, 平均录制FPS=%.2f, 丢帧=%s, 平均写入耗时=%.2fms, 最大写入耗时=%.2fms",
             order_id,
             format_datetime(started_at) if started_at else "",
             format_datetime(recording_ended_at),
@@ -732,17 +732,30 @@ class RecorderThread(QThread):
             check_result.frame_count,
             check_result.file_size,
         )
-        if check_result.is_valid:
-            self._update_video_index(final_path, started_at)
-            self.logger.info("视频保存成功：%s", final_path)
-            self.message.emit(f"视频保存成功：{final_path}")
+        self._update_video_index(final_path, started_at)
+        validation_warning = str(getattr(check_result, "warning", "") or "")
+        validation_error = str(getattr(check_result, "error", "") or check_result.message or "")
+        if not check_result.exists:
+            warning = "视频文件不存在，校验失败"
+            self.logger.warning("%s：%s", warning, final_path)
+            self.warning_message.emit(warning)
+            self.message.emit(warning)
+        elif check_result.is_valid and validation_warning:
+            warning = "视频已保存，但时长过短，请确认是否误操作"
+            self.logger.warning("%s：%s，时长=%.2f 秒", warning, final_path, check_result.duration_seconds)
+            self.warning_message.emit(warning)
+            self.message.emit(warning)
+        elif check_result.is_valid:
+            self.logger.info("视频保存并校验通过：%s", final_path)
+            self.message.emit("视频已保存并校验通过")
         else:
-            warning = f"视频可能保存异常，请检查文件。{final_path}"
-            self.logger.warning("%s，校验信息：%s", warning, check_result.message)
+            warning = f"视频保存异常：{validation_error or '视频文件校验失败'}"
+            self.logger.warning("%s，文件=%s", warning, final_path)
             self.warning_message.emit(warning)
             self.message.emit(warning)
 
-        self._warn_short_video(check_result.duration_seconds)
+        if not validation_warning:
+            self._warn_short_video(check_result.duration_seconds)
         self._check_disk_space_notice()
 
     def _open_camera(self) -> None:

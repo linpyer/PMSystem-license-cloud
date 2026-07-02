@@ -155,7 +155,11 @@ class MonitorTab(QWidget):
         self.is_recording = False
         self.current_order_id = ""
         self._pending_voice_action: str | None = None
+        self._pending_scan_feedback: dict[str, str] | None = None
         self._event_filter_installed = False
+        self.scan_feedback_timer = QTimer(self)
+        self.scan_feedback_timer.setSingleShot(True)
+        self.scan_feedback_timer.timeout.connect(self._reset_scan_feedback)
         self._normalize_video_config_on_startup()
         self.scanner_guard = ScannerGuard(self.config, logger)
         self.voice_prompt = VoicePrompt(self.config, logger)
@@ -198,6 +202,10 @@ class MonitorTab(QWidget):
         ):
             self.logger.info("检测到空回车，停止当前录制")
             self._pending_voice_action = "stop"
+            self._pending_scan_feedback = {
+                "event": "stop",
+                "order_no": self.current_order_id,
+            }
             self.recorder.manual_stop()
             self.scan_input.clear()
             self.focus_scan_input()
@@ -358,15 +366,36 @@ class MonitorTab(QWidget):
 
         status_group = QGroupBox("")
         status_group.setObjectName("plainRightCard")
-        status_layout = QFormLayout(status_group)
-        status_layout.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        status_layout.setFormAlignment(Qt.AlignTop)
-        status_layout.setHorizontalSpacing(10)
-        status_layout.setVerticalSpacing(6)
-        self.status_label = QLabel("未录制")
-        self.status_label.setObjectName("statusBadge")
-        self.status_label.setProperty("state", "idle")
+        status_layout = QVBoxLayout(status_group)
+        status_layout.setContentsMargins(12, 10, 12, 10)
+        status_layout.setSpacing(8)
+
+        self.status_block = QFrame()
+        self.status_block.setObjectName("recordingStatusBlock")
+        self.status_block.setProperty("state", "idle")
+        self.status_block.setMinimumHeight(78)
+        self.status_block.setMaximumHeight(96)
+        status_block_layout = QVBoxLayout(self.status_block)
+        status_block_layout.setContentsMargins(12, 8, 12, 8)
+        status_block_layout.setSpacing(2)
+        self.status_label = QLabel("等待扫码")
+        self.status_label.setObjectName("recordingStatusTitle")
         self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_detail_label = QLabel("请扫描单号")
+        self.status_detail_label.setObjectName("recordingStatusDetail")
+        self.status_detail_label.setAlignment(Qt.AlignCenter)
+        self.status_detail_label.setWordWrap(True)
+        status_block_layout.addStretch(1)
+        status_block_layout.addWidget(self.status_label)
+        status_block_layout.addWidget(self.status_detail_label)
+        status_block_layout.addStretch(1)
+        status_layout.addWidget(self.status_block)
+
+        status_info_layout = QFormLayout()
+        status_info_layout.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        status_info_layout.setFormAlignment(Qt.AlignTop)
+        status_info_layout.setHorizontalSpacing(10)
+        status_info_layout.setVerticalSpacing(5)
         self.rec_label = QLabel("REC")
         self.rec_label.setObjectName("recBadge")
         self.rec_label.setAlignment(Qt.AlignCenter)
@@ -379,11 +408,10 @@ class MonitorTab(QWidget):
         self.camera_status_label = QLabel("摄像头初始化中")
         self.camera_status_label.setObjectName("cameraStatusValue")
         self.camera_status_label.setWordWrap(True)
-        status_layout.addRow("状态：", self.status_label)
-        status_layout.addRow("当前物流单号：", self.order_label)
-        status_layout.addRow(self.start_time_title_label, self.start_time_label)
-        status_layout.addRow("录制时长：", self.duration_label)
-        status_layout.addRow("摄像头：", self.camera_status_label)
+        status_info_layout.addRow(self.start_time_title_label, self.start_time_label)
+        status_info_layout.addRow("录制时长：", self.duration_label)
+        status_info_layout.addRow("摄像头：", self.camera_status_label)
+        status_layout.addLayout(status_info_layout)
         self._set_start_time_visible(False)
         side_panel.addWidget(status_group)
 
@@ -392,10 +420,9 @@ class MonitorTab(QWidget):
         scan_layout = QVBoxLayout(scan_group)
         scan_layout.setSpacing(6)
         self.scan_input = QLineEdit()
-        self.scan_input.setPlaceholderText("请扫描物流单号，扫码后自动回车。")
         self.scan_input.setClearButtonEnabled(True)
         self.scan_input.setObjectName("scanInput")
-        self.scan_input.setPlaceholderText("请扫描或输入物流单号")
+        self.scan_input.setPlaceholderText("请输入或扫描单号")
 
         record_type_title = QLabel("录制类型")
         record_type_title.setObjectName("recordTypeTitle")
@@ -420,7 +447,7 @@ class MonitorTab(QWidget):
         record_type_layout.addWidget(self.return_record_type_radio)
         record_type_layout.addStretch(1)
 
-        scan_title = QLabel("扫描物流单号")
+        scan_title = QLabel("扫描单号")
         scan_title.setObjectName("sectionTitle")
         scan_layout.addWidget(record_type_title)
         scan_layout.addLayout(record_type_layout)
@@ -615,19 +642,103 @@ class MonitorTab(QWidget):
         box.addButton("知道了", QMessageBox.AcceptRole)
         box.exec()
 
+    def _reset_scan_feedback(self) -> None:
+        self.refresh_status_card()
+
+    def refresh_status_card(self) -> None:
+        if self.is_recording:
+            detail = f"单号：{self.current_order_id}" if self.current_order_id else ""
+            self._set_scan_feedback("recording", "录制中", detail, auto_reset=False)
+            return
+        self._set_scan_feedback("idle", "等待扫码", "请扫描单号", auto_reset=False)
+
+    def _set_scan_feedback(
+        self,
+        feedback_type: str,
+        title: str,
+        message: str,
+        detail: str = "",
+        *,
+        auto_reset: bool = True,
+        duration_ms: int = 2600,
+    ) -> None:
+        self.scan_feedback_timer.stop()
+        feedback_type = (
+            feedback_type
+            if feedback_type in {"idle", "recording", "start", "stop", "switch", "warning", "error"}
+            else "idle"
+        )
+        subtitle_parts = [part for part in (message, detail) if part]
+        self.status_block.setProperty("state", feedback_type)
+        self.status_label.setText(title)
+        self.status_detail_label.setText("  ".join(subtitle_parts))
+        self.status_detail_label.setVisible(bool(subtitle_parts))
+        for widget in (
+            self.status_block,
+            self.status_label,
+            self.status_detail_label,
+        ):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+        if auto_reset:
+            self.scan_feedback_timer.start(max(1200, int(duration_ms)))
+
+    def show_scan_feedback(self, event_key: str, data: dict[str, str] | None = None) -> None:
+        data = dict(data or {})
+        if event_key == "start":
+            order_no = str(data.get("order_no") or "").strip()
+            self._set_scan_feedback("start", "已开始录制", f"单号：{order_no}" if order_no else "")
+            return
+        if event_key == "stop":
+            order_no = str(data.get("order_no") or "").strip()
+            self._set_scan_feedback("stop", "已结束录制", f"单号：{order_no}" if order_no else "")
+            return
+        if event_key == "switch":
+            current_order_no = str(data.get("current_order_no") or "").strip()
+            detail = f"当前单号：{current_order_no}" if current_order_no else ""
+            self._set_scan_feedback("switch", "已切换录制", detail)
+            return
+        if event_key == "no_order":
+            self._set_scan_feedback("warning", "未输入单号", "请先输入或扫描单号")
+            return
+        if event_key == "invalid":
+            self._set_scan_feedback("warning", "扫码无效", "请重新扫描单号")
+            return
+        self._set_scan_feedback("error", "异常", str(data.get("message") or "请重新扫描"), auto_reset=False)
+
+    def _scan_feedback_for_scan(self, order_id: str, previous_order_id: str) -> dict[str, str] | None:
+        order_id = order_id.strip()
+        previous_order_id = previous_order_id.strip()
+        if self.is_recording:
+            if not order_id or order_id == previous_order_id:
+                return {"event": "stop", "order_no": previous_order_id}
+            return {
+                "event": "switch",
+                "previous_order_no": previous_order_id,
+                "current_order_no": order_id,
+            }
+        if order_id:
+            return {"event": "start", "order_no": order_id}
+        return None
+
     def _handle_scan_return(self) -> None:
-        result = self.scanner_guard.process(self.scan_input.text())
+        raw_text = self.scan_input.text()
+        result = self.scanner_guard.process(raw_text)
         if result.should_warn:
             self.warning_message.emit(result.warning_message)
             self.status_message.emit(result.warning_message)
         if not self.is_recording and not result.cleaned_code:
-            self._notify_no_order()
+            if str(result.raw_code or "").strip():
+                self.show_scan_feedback("invalid")
+            else:
+                self._notify_no_order()
             self.scan_input.clear()
             self.focus_scan_input(80)
             return
         if not result.should_ignore:
             is_duplicate = self._warn_if_duplicate_recording(result.cleaned_code)
             self._pending_voice_action = self._voice_action_for_scan(result.cleaned_code, is_duplicate)
+            self._pending_scan_feedback = self._scan_feedback_for_scan(result.cleaned_code, self.current_order_id)
             self.recorder.scan(result.cleaned_code)
         self.scan_input.clear()
         self.focus_scan_input(80)
@@ -641,7 +752,7 @@ class MonitorTab(QWidget):
             if not self.is_recording:
                 self._notify_no_order()
             else:
-                self.warning_message.emit("请先输入或扫描物流单号。")
+                self.warning_message.emit("请先输入或扫描单号。")
             self.focus_scan_input(80)
             return
         is_duplicate = self._warn_if_duplicate_recording(result.cleaned_code)
@@ -651,9 +762,10 @@ class MonitorTab(QWidget):
         self.focus_scan_input(80)
 
     def _notify_no_order(self) -> None:
-        message = "请先输入或扫描物流单号。"
+        message = "请先输入或扫描单号。"
         self.warning_message.emit(message)
         self.status_message.emit(message)
+        self.show_scan_feedback("no_order")
         if self.voice_prompt.play("no_order"):
             self.logger.info("未输入单号语音已提交播放")
 
@@ -726,19 +838,19 @@ class MonitorTab(QWidget):
             duplicate_count = database.count_order_no(order_id, video_dir)
             database.close()
         except Exception:
-            self.logger.exception("重复录制检查失败：物流单号=%s", order_id)
+            self.logger.exception("重复录制检查失败：单号=%s", order_id)
             return False
 
         if duplicate_count <= 0:
             return False
 
         message = "检测到该单号已录制过，本次录制不会被阻止，系统会保留多条记录。"
-        self.logger.warning("检测到历史重复录制单号：物流单号=%s，历史记录数=%s", order_id, duplicate_count)
-        self.logger.info("重复录制继续录制：物流单号=%s", order_id)
+        self.logger.warning("检测到历史重复录制单号：单号=%s，历史记录数=%s", order_id, duplicate_count)
+        self.logger.info("重复录制继续录制：单号=%s", order_id)
         self.warning_message.emit(message)
         self.status_message.emit(message)
         if self.voice_prompt.speak_duplicate():
-            self.logger.info("重复录制语音已提交播放：物流单号=%s", order_id)
+            self.logger.info("重复录制语音已提交播放：单号=%s", order_id)
         return True
 
     def _open_video_folder(self) -> None:
@@ -865,10 +977,11 @@ class MonitorTab(QWidget):
         self.status_message.emit(message)
 
     def _set_status_badge(self, recording: bool) -> None:
-        self.status_label.setText("正在录制" if recording else "未录制")
-        self.status_label.setProperty("state", "recording" if recording else "idle")
-        self.status_label.style().unpolish(self.status_label)
-        self.status_label.style().polish(self.status_label)
+        if recording:
+            detail = f"单号：{self.current_order_id}" if self.current_order_id else ""
+            self._set_scan_feedback("recording", "录制中", detail, auto_reset=False)
+            return
+        self._set_scan_feedback("idle", "等待扫码", "请扫描单号", auto_reset=False)
 
     def _set_start_time_visible(self, visible: bool) -> None:
         self.start_time_title_label.setVisible(visible)
@@ -886,14 +999,26 @@ class MonitorTab(QWidget):
             self.start_time_label.setText(start_time)
             if self._pending_voice_action == "switch":
                 if self.voice_prompt.speak_switch():
-                    self.logger.info("切换录制语音已提交播放：物流单号=%s", order_id)
+                    self.logger.info("切换录制语音已提交播放：单号=%s", order_id)
                 self._pending_voice_action = None
             elif self._pending_voice_action == "start":
                 if self.voice_prompt.speak_start():
-                    self.logger.info("开始录制语音已提交播放：物流单号=%s", order_id)
+                    self.logger.info("开始录制语音已提交播放：单号=%s", order_id)
                 self._pending_voice_action = None
             elif self._pending_voice_action not in (None, "stop"):
                 self._pending_voice_action = None
+            if self._pending_scan_feedback:
+                feedback_event = self._pending_scan_feedback.get("event")
+                if feedback_event == "switch":
+                    feedback_data = dict(self._pending_scan_feedback)
+                    feedback_data["current_order_no"] = order_id
+                    self.show_scan_feedback("switch", feedback_data)
+                    self._pending_scan_feedback = None
+                elif feedback_event == "start":
+                    self.show_scan_feedback("start", {"order_no": order_id})
+                    self._pending_scan_feedback = None
+                elif feedback_event != "stop":
+                    self._pending_scan_feedback = None
         else:
             self.current_order_id = ""
             self._set_status_badge(False)
@@ -903,23 +1028,47 @@ class MonitorTab(QWidget):
             self.start_time_label.setText("-")
             if self._pending_voice_action not in (None, "stop", "switch"):
                 self._pending_voice_action = None
+            if self._pending_scan_feedback and self._pending_scan_feedback.get("event") not in {"stop", "switch"}:
+                self._pending_scan_feedback = None
         self.focus_scan_input()
 
     def _on_duration_changed(self, seconds: int) -> None:
         self.duration_label.setText(format_duration(seconds))
 
+    @staticmethod
+    def _is_recording_save_complete_message(message: str) -> bool:
+        return (
+            message.startswith("视频保存成功")
+            or message.startswith("视频已保存并校验通过")
+            or message.startswith("视频已保存，但时长过短")
+            or message.startswith("视频保存异常")
+            or message.startswith("视频文件不存在，校验失败")
+            or message.startswith("视频可能保存异常")
+        )
+
+    @staticmethod
+    def _is_recording_save_failed_message(message: str) -> bool:
+        return message.startswith("视频保存失败") or "保存失败" in message
+
     def _on_recorder_message(self, message: str) -> None:
         self.status_message.emit(message)
-        if message.startswith("视频保存成功"):
+        if self._is_recording_save_complete_message(message):
             self.logger.info("新视频保存后刷新最近录制模块")
             QTimer.singleShot(200, self.refresh_recent_recordings)
         if self._pending_voice_action == "stop":
-            if message.startswith("视频保存成功"):
+            if self._is_recording_save_complete_message(message):
                 if self.voice_prompt.speak_stop():
                     self.logger.info("结束录制语音已提交播放")
                 self._pending_voice_action = None
-            elif message.startswith("视频保存失败") or "保存失败" in message or message.startswith("视频可能保存异常"):
+            elif self._is_recording_save_failed_message(message):
                 self._pending_voice_action = None
+        if self._pending_scan_feedback and self._pending_scan_feedback.get("event") == "stop":
+            if self._is_recording_save_complete_message(message):
+                self.show_scan_feedback("stop", self._pending_scan_feedback)
+                self._pending_scan_feedback = None
+            elif self._is_recording_save_failed_message(message):
+                self.show_scan_feedback("error", {"message": "录制停止失败，请查看日志"})
+                self._pending_scan_feedback = None
         self.focus_scan_input()
 
     def _on_warning_message(self, message: str) -> None:
@@ -996,22 +1145,20 @@ class MonitorTab(QWidget):
             meta_layout.setContentsMargins(0, 0, 0, 0)
             meta_layout.setSpacing(8)
 
-            open_button = QPushButton("打开")
-            open_button.setObjectName("sceneLinkButton")
-            open_button.setCursor(Qt.PointingHandCursor)
-            open_button.clicked.connect(lambda _checked=False, video_path=path: self._open_recent_video(video_path))
-
-            reveal_button = QPushButton("定位")
-            reveal_button.setObjectName("sceneLinkButton")
-            reveal_button.setCursor(Qt.PointingHandCursor)
-            reveal_button.clicked.connect(lambda _checked=False, video_path=path: self._reveal_recent_video(video_path))
+            delete_button = QPushButton("删除")
+            delete_button.setObjectName("tableDangerButton")
+            delete_button.setCursor(Qt.PointingHandCursor)
+            delete_button.setFixedSize(48, 24)
+            delete_button.setToolTip("删除这条最近录制视频")
+            delete_button.clicked.connect(
+                lambda _checked=False, row_entry=dict(item): self._delete_recent_recording(row_entry)
+            )
 
             row_layout.addWidget(order_label)
             meta_layout.addWidget(record_type_label)
             meta_layout.addWidget(duration_label)
             meta_layout.addStretch(1)
-            meta_layout.addWidget(open_button)
-            meta_layout.addWidget(reveal_button)
+            meta_layout.addWidget(delete_button)
             row_layout.addLayout(meta_layout)
             self.recent_recordings_layout.addWidget(row_widget)
 
@@ -1025,6 +1172,164 @@ class MonitorTab(QWidget):
                 widget.deleteLater()
             elif child_layout is not None:
                 MonitorTab._clear_layout(child_layout)  # type: ignore[arg-type]
+
+    def _delete_recent_recording(self, entry: dict) -> None:
+        record_id = self._entry_record_id(entry)
+        fallback_path = Path(str(entry.get("file_path") or ""))
+        fallback_order_no = str(entry.get("order_no") or "-")
+        database: DatabaseManager | None = None
+        try:
+            database = DatabaseManager(self.config_manager.base_dir / "pm_system.db", self.logger)
+            record = database.get_video_by_id(record_id) if record_id else None
+            if record is None and str(fallback_path).strip() and str(fallback_path) != ".":
+                record = database.get_video_by_path(fallback_path)
+            if record is None:
+                self.logger.warning(
+                    "打包监控页最近录制删除失败：未找到视频记录，record_id=%s, path=%s",
+                    record_id or "-",
+                    fallback_path,
+                )
+                self.warning_message.emit("删除失败：未找到视频记录")
+                return
+
+            path = Path(str(record.get("file_path") or fallback_path))
+            order_no = str(record.get("order_no") or fallback_order_no or "-")
+            record_id = self._entry_record_id(record) or record_id
+            if self._is_current_recording_path(path):
+                self.logger.warning(
+                    "打包监控页最近录制拒绝删除正在录制的视频：record_id=%s, order_no=%s, path=%s",
+                    record_id or "-",
+                    order_no,
+                    path,
+                )
+                self.warning_message.emit("当前视频正在录制中，不能删除")
+                return
+
+            file_exists = path.exists()
+            confirm = self._confirm_recent_delete(order_no, path, file_exists)
+            if not confirm:
+                self.logger.info(
+                    "打包监控页最近录制取消删除：record_id=%s, order_no=%s, path=%s",
+                    record_id or "-",
+                    order_no,
+                    path,
+                )
+                return
+
+            if self._is_current_recording_path(path):
+                self.warning_message.emit("当前视频正在录制中，不能删除")
+                return
+
+            file_deleted = False
+            if file_exists:
+                try:
+                    path.unlink()
+                    file_deleted = True
+                except PermissionError as exc:
+                    self.logger.exception(
+                        "打包监控页最近录制删除文件失败：权限不足或文件被占用，record_id=%s, order_no=%s, path=%s",
+                        record_id or "-",
+                        order_no,
+                        path,
+                    )
+                    self.critical_message.emit(f"删除失败：文件被占用或权限不足（{exc}）")
+                    return
+                except OSError as exc:
+                    self.logger.exception(
+                        "打包监控页最近录制删除文件失败：record_id=%s, order_no=%s, path=%s",
+                        record_id or "-",
+                        order_no,
+                        path,
+                    )
+                    self.critical_message.emit(f"删除失败：{exc}")
+                    return
+
+            deleted_record = database.delete_video_record(path)
+            if not deleted_record:
+                self.logger.warning(
+                    "打包监控页最近录制删除 SQLite 记录失败：record_id=%s, order_no=%s, path=%s, file_exists=%s, file_deleted=%s",
+                    record_id or "-",
+                    order_no,
+                    path,
+                    file_exists,
+                    file_deleted,
+                )
+                self.warning_message.emit("删除失败：未找到视频记录")
+                return
+
+            self.logger.info(
+                "打包监控页最近录制删除成功：record_id=%s, order_no=%s, path=%s, file_exists=%s, file_deleted=%s",
+                record_id or "-",
+                order_no,
+                path,
+                file_exists,
+                file_deleted,
+            )
+            self.refresh_recent_recordings()
+            self._refresh_query_tab_after_recent_delete()
+            self.status_message.emit("视频已删除" if file_exists else "记录已移除")
+        except Exception as exc:
+            self.logger.exception(
+                "打包监控页最近录制删除未知异常：record_id=%s, order_no=%s, path=%s",
+                record_id or "-",
+                fallback_order_no,
+                fallback_path,
+            )
+            self.critical_message.emit(f"删除失败：{exc}")
+        finally:
+            if database is not None:
+                database.close()
+            self.focus_scan_input(80)
+
+    @staticmethod
+    def _entry_record_id(entry: dict) -> int:
+        try:
+            return max(0, int(entry.get("id") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _is_current_recording_path(self, path: Path) -> bool:
+        if not self.is_recording:
+            return False
+        temp_path = getattr(self.recorder, "_temp_path", None)
+        if temp_path is None:
+            return False
+        try:
+            return Path(temp_path).resolve() == path.resolve()
+        except OSError:
+            return str(temp_path) == str(path)
+
+    def _confirm_recent_delete(self, order_no: str, path: Path, file_exists: bool) -> bool:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("删除最近录制" if file_exists else "删除最近录制记录")
+        if file_exists:
+            box.setText("确定要删除这条录制视频吗？")
+            box.setInformativeText(
+                f"单号：{order_no}\n"
+                "删除后将从列表中移除，并删除本地视频文件。\n"
+                "如该视频已上传网盘，本次仅删除本地记录和本地文件，不会删除网盘文件。"
+            )
+            confirm_text = "确认删除"
+        else:
+            box.setText("当前视频文件已不存在，是否从列表中移除此记录？")
+            box.setInformativeText(f"单号：{order_no}\n记录路径：{path}")
+            confirm_text = "移除记录"
+        cancel_button = box.addButton("取消", QMessageBox.RejectRole)
+        confirm_button = box.addButton(confirm_text, QMessageBox.AcceptRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+        return box.clickedButton() is confirm_button
+
+    def _refresh_query_tab_after_recent_delete(self) -> None:
+        parent = self.parent()
+        query_tab = getattr(parent, "query_tab", None)
+        if query_tab is None or not hasattr(query_tab, "refresh"):
+            return
+        try:
+            QTimer.singleShot(0, query_tab.refresh)
+        except Exception:
+            self.logger.exception("最近录制删除后刷新视频查询页失败")
 
     def _open_recent_video(self, path: Path) -> None:
         try:
