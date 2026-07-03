@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QDate, QEvent, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QDate, QEvent, QPoint, QRect, QSize, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIntValidator, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -153,6 +153,64 @@ class FlowLayout(QLayout):
         return y + line_height - rect.y()
 
 
+class VideoQueryLoadWorker(QThread):
+    loaded = Signal(int, object)
+    failed = Signal(int, str)
+
+    def __init__(
+        self,
+        request_id: int,
+        database: DatabaseManager,
+        video_dir: Path,
+        filters: dict[str, Any],
+        page_size: int,
+        current_page: int,
+        rebuild: bool,
+        logger: logging.Logger,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.request_id = request_id
+        self.database = database
+        self.video_dir = Path(video_dir)
+        self.filters = dict(filters)
+        self.page_size = max(1, int(page_size or 20))
+        self.current_page = max(1, int(current_page or 1))
+        self.rebuild = bool(rebuild)
+        self.logger = logger
+
+    def run(self) -> None:  # type: ignore[override]
+        try:
+            with self.database._lock:
+                if self.rebuild:
+                    self.database.refresh_video_directory(self.video_dir)
+                total_count = self.database.count_videos(self.filters)
+                total_pages = max(1, (total_count + self.page_size - 1) // self.page_size)
+                current_page = max(1, min(self.current_page, total_pages))
+                offset = (current_page - 1) * self.page_size
+                rows = self.database.query_videos(
+                    {
+                        **self.filters,
+                        "limit": self.page_size,
+                        "offset": offset,
+                    }
+                )
+            self.loaded.emit(
+                self.request_id,
+                {
+                    "rows": rows,
+                    "total_count": total_count,
+                    "total_pages": total_pages,
+                    "current_page": current_page,
+                    "offset": offset,
+                    "rebuild": self.rebuild,
+                },
+            )
+        except Exception as exc:
+            self.logger.exception("视频查询后台加载失败：dir=%s, rebuild=%s", self.video_dir, self.rebuild)
+            self.failed.emit(self.request_id, str(exc))
+
+
 class QueryTab(QWidget):
     PAGE_SIZE_OPTIONS = (10, 20, 50, 100)
     UPLOAD_STATUS_FILTER_OPTIONS = ("全部", UPLOAD_PENDING, UPLOAD_DONE, UPLOAD_FAILED, UPLOAD_UPLOADING)
@@ -181,6 +239,13 @@ class QueryTab(QWidget):
         self.total_count = 0
         self.total_pages = 1
         self.upload_worker: NetdiskUploadWorker | None = None
+        self.video_query_dirty = True
+        self._has_loaded_once = False
+        self._load_worker: VideoQueryLoadWorker | None = None
+        self._load_request_id = 0
+        self._pending_load = False
+        self._pending_load_rebuild = False
+        self._pending_load_show_notice = False
         self.netdisk_task_mode = "sync"
         self.netdisk_progress_hide_timer = QTimer(self)
         self.netdisk_progress_hide_timer.setSingleShot(True)
@@ -189,12 +254,14 @@ class QueryTab(QWidget):
         self._sync_query_dir_input()
         self._update_netdisk_controls()
         self.logger.info("查询页初始化当前查询目录：%s", self.video_dir)
-        self.refresh(rebuild=True, show_notice=False)
 
     def set_video_dir(self, path: str) -> None:
         self.logger.info("录制保存目录已更新，查询目录保持不变：save_dir=%s, query_dir=%s", path, self.video_dir)
+        self.mark_dirty()
 
     def shutdown(self) -> None:
+        if self._load_worker is not None and self._load_worker.isRunning():
+            self._load_worker.wait(3000)
         if self.upload_worker is not None and self.upload_worker.isRunning():
             self.upload_worker.stop()
             self.upload_worker.wait(3000)
@@ -207,27 +274,31 @@ class QueryTab(QWidget):
         self._update_netdisk_controls()
         self.refresh(rebuild=False, show_notice=False)
 
+    def mark_dirty(self) -> None:
+        self.video_query_dirty = True
+
+    def activate(self) -> None:
+        QTimer.singleShot(50, self._load_after_activated)
+
+    def _load_after_activated(self) -> None:
+        if not self.isVisible():
+            return
+        if self._load_worker is not None:
+            return
+        if not self._has_loaded_once:
+            self.refresh(rebuild=True, show_notice=False)
+            return
+        if self.video_query_dirty:
+            self.refresh(rebuild=False, show_notice=False)
+
     def refresh(self, rebuild: bool = False, show_notice: bool = True) -> None:
         self._update_netdisk_controls()
-        try:
-            if rebuild:
-                self.database.refresh_video_directory(self.video_dir)
-            self.logger.info("当前查询目录刷新列表：dir=%s, rebuild=%s", self.video_dir, rebuild)
-        except Exception as exc:
-            self.logger.exception("刷新视频列表失败：dir=%s", self.video_dir)
-            self._show_notice(f"刷新失败：{exc}", "error")
-
-        self.logger.info("查询页重复录制次数重新计算：dir=%s", self.video_dir)
-        self._apply_filter()
-        if show_notice:
-            if rebuild:
-                self._show_notice("列表已刷新。", "success")
-            if self.table.rowCount() == 0:
-                self._show_notice("当前目录未找到视频文件。", "warning")
+        self.video_query_dirty = True
+        self._request_video_load(rebuild=rebuild, show_notice=show_notice)
 
     def showEvent(self, event) -> None:  # type: ignore[override]
         super().showEvent(event)
-        self.refresh(rebuild=False, show_notice=False)
+        self.activate()
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
         if event.matches(QKeySequence.Copy):
@@ -592,10 +663,7 @@ class QueryTab(QWidget):
             self.current_page = 1
             self.refresh(rebuild=True, show_notice=False)
             self.logger.info("查询目录切换成功：%s", self.video_dir)
-            if self.table.rowCount() > 0:
-                self._show_notice(success_message, "success")
-            else:
-                self._show_notice(f"{success_message} 当前目录未找到视频文件。", "warning")
+            self._show_notice(f"{success_message} 正在加载视频列表。", "info")
         except Exception as exc:
             self.logger.exception("查询目录切换失败：%s", path)
             self._sync_query_dir_input()
@@ -611,6 +679,100 @@ class QueryTab(QWidget):
         if not path.is_dir():
             return False, None, "查询目录不是文件夹，请重新输入。"
         return True, path, ""
+
+    def _request_video_load(self, rebuild: bool = False, show_notice: bool = True) -> None:
+        if self._load_worker is not None:
+            self._pending_load = True
+            self._pending_load_rebuild = self._pending_load_rebuild or bool(rebuild)
+            self._pending_load_show_notice = self._pending_load_show_notice or bool(show_notice)
+            self.logger.info("视频查询加载进行中，已合并后续刷新请求：rebuild=%s", rebuild)
+            return
+
+        filters = self._current_query_filters(self._current_upload_status_filter())
+        self._load_request_id += 1
+        request_id = self._load_request_id
+        self._show_loading_state("正在加载视频列表...")
+        self.logger.info(
+            "视频查询后台加载开始：request=%s, dir=%s, rebuild=%s, page=%s, page_size=%s",
+            request_id,
+            self.video_dir,
+            rebuild,
+            self.current_page,
+            self.page_size,
+        )
+        worker = VideoQueryLoadWorker(
+            request_id=request_id,
+            database=self.database,
+            video_dir=self.video_dir,
+            filters=filters,
+            page_size=self.page_size,
+            current_page=self.current_page,
+            rebuild=rebuild,
+            logger=self.logger,
+            parent=self,
+        )
+        self._load_worker = worker
+        worker.loaded.connect(lambda rid, payload, notice=show_notice: self._on_video_load_finished(rid, payload, notice))
+        worker.failed.connect(lambda rid, error, notice=show_notice: self._on_video_load_failed(rid, error, notice))
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _show_loading_state(self, message: str) -> None:
+        self.empty_label.setText(message)
+        self.empty_label.show()
+        if self.table.rowCount() == 0:
+            self.total_count_label.setText("正在加载...")
+
+    def _on_video_load_finished(self, request_id: int, payload: object, show_notice: bool) -> None:
+        if request_id != self._load_request_id:
+            self.logger.info("忽略过期视频查询结果：request=%s, current=%s", request_id, self._load_request_id)
+            return
+        self._load_worker = None
+        result = payload if isinstance(payload, dict) else {}
+        rows = result.get("rows") or []
+        self.total_count = int(result.get("total_count") or 0)
+        self.total_pages = int(result.get("total_pages") or 1)
+        self.current_page = int(result.get("current_page") or 1)
+        offset = int(result.get("offset") or 0)
+        rebuild = bool(result.get("rebuild"))
+        self._render_rows(rows, offset)
+        self._has_loaded_once = True
+        self.video_query_dirty = False
+        self.logger.info(
+            "视频查询后台加载完成：request=%s, rows=%s, total=%s, page=%s/%s, rebuild=%s",
+            request_id,
+            len(rows),
+            self.total_count,
+            self.current_page,
+            self.total_pages,
+            rebuild,
+        )
+        if show_notice:
+            if rebuild:
+                self._show_notice("列表已刷新。", "success")
+            if not rows:
+                self._show_notice("当前目录未找到视频文件。", "warning")
+        self._consume_pending_video_load()
+
+    def _on_video_load_failed(self, request_id: int, error: str, _show_notice: bool) -> None:
+        if request_id != self._load_request_id:
+            return
+        self._load_worker = None
+        self.empty_label.setText(f"加载失败：{error}")
+        self.empty_label.show()
+        self._show_notice(f"刷新失败：{error}", "error")
+        self.logger.error("视频查询后台加载失败：request=%s, error=%s", request_id, error)
+        self._consume_pending_video_load()
+
+    def _consume_pending_video_load(self) -> None:
+        if not self._pending_load:
+            return
+        rebuild = self._pending_load_rebuild
+        show_notice = self._pending_load_show_notice
+        self._pending_load = False
+        self._pending_load_rebuild = False
+        self._pending_load_show_notice = False
+        QTimer.singleShot(0, lambda: self.refresh(rebuild=rebuild, show_notice=show_notice))
 
     def _apply_filter(self, reset_page: bool = False) -> None:
         keyword = self.search_input.text().strip()
@@ -628,55 +790,44 @@ class QueryTab(QWidget):
             record_type or "全部",
             upload_status or "全部",
         )
-        filters = self._current_query_filters(upload_status)
-        self.total_count = self.database.count_videos(filters)
-        self.total_pages = max(1, (self.total_count + self.page_size - 1) // self.page_size)
-        if self.current_page > self.total_pages:
-            old_page = self.current_page
-            self.current_page = self.total_pages
-            self.logger.info("分页页码自动修正：%s -> %s", old_page, self.current_page)
-        if self.current_page < 1:
-            self.current_page = 1
+        self._request_video_load(rebuild=False, show_notice=False)
 
-        offset = (self.current_page - 1) * self.page_size
-        rows = self.database.query_videos(
-            {
-                **filters,
-                "limit": self.page_size,
-                "offset": offset,
-            }
-        )
-
-        self.table.setRowCount(0)
-        self.empty_label.setVisible(not rows)
-        for row_index, item in enumerate(rows):
-            path = Path(str(item.get("file_path", "")))
-            self.table.insertRow(row_index)
-            self.table.setRowHeight(row_index, 72)
-            self._set_item(row_index, 0, str(offset + row_index + 1), path)
-            self._set_item(row_index, 1, str(item.get("order_no", "")) or "-", path)
-            self._set_item(row_index, 2, self._recording_time_text(item), path)
-            self._set_two_line_item(
-                row_index,
-                3,
-                str(item.get("resolution") or "-"),
-                str(item.get("codec") or "-"),
-                path,
-            )
-            self._set_two_line_item(
-                row_index,
-                4,
-                str(item.get("file_size_text") or "-"),
-                self._duration_text(item),
-                path,
-                second_line_state="warning" if self._has_short_duration_warning(item) else None,
-                second_line_tooltip="时长过短" if self._has_short_duration_warning(item) else "",
-            )
-            self._set_record_type_cell(row_index, item, path)
-            self._set_remark_item(row_index, item, path)
-            self._set_status_item(row_index, item, path)
-            self._set_scene_video_cell(row_index, item, path)
-            self._set_delete_button(row_index, item)
+    def _render_rows(self, rows: list[dict[str, Any]], offset: int) -> None:
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(0)
+            self.empty_label.setText("未找到符合条件的视频。")
+            self.empty_label.setVisible(not rows)
+            for row_index, item in enumerate(rows):
+                path = Path(str(item.get("file_path", "")))
+                self.table.insertRow(row_index)
+                self.table.setRowHeight(row_index, 72)
+                self._set_item(row_index, 0, str(offset + row_index + 1), path)
+                self._set_item(row_index, 1, str(item.get("order_no", "")) or "-", path)
+                self._set_item(row_index, 2, self._recording_time_text(item), path)
+                self._set_two_line_item(
+                    row_index,
+                    3,
+                    str(item.get("resolution") or "-"),
+                    str(item.get("codec") or "-"),
+                    path,
+                )
+                self._set_two_line_item(
+                    row_index,
+                    4,
+                    str(item.get("file_size_text") or "-"),
+                    self._duration_text(item),
+                    path,
+                    second_line_state="warning" if self._has_short_duration_warning(item) else None,
+                    second_line_tooltip="时长过短" if self._has_short_duration_warning(item) else "",
+                )
+                self._set_record_type_cell(row_index, item, path)
+                self._set_remark_item(row_index, item, path)
+                self._set_status_item(row_index, item, path)
+                self._set_scene_video_cell(row_index, item, path)
+                self._set_delete_button(row_index, item)
+        finally:
+            self.table.setUpdatesEnabled(True)
         self._update_pagination_bar()
 
     def _set_item(self, row: int, column: int, text: str, path: Path) -> None:

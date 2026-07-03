@@ -120,6 +120,15 @@ QLabel#previewLabel {
     border-radius: 8px;
 }
 
+QLabel#previewLabel[recordingAlert="weak"],
+QLabel#previewLabel[recordingAlert="steady"] {
+    border: 3px solid rgba(220, 38, 38, 0.42);
+}
+
+QLabel#previewLabel[recordingAlert="strong"] {
+    border: 3px solid rgba(220, 38, 38, 0.55);
+}
+
 QLabel#recBadge {
     background: #dc2626;
     color: #ffffff;

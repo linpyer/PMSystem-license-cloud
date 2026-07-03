@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.camera import list_camera_devices
+from app.core.changelog import CHANGELOG_ENTRIES
 from app.core.config_manager import ConfigManager
 from app.core.netdisk_sync import (
     BaiduNetdiskClient,
@@ -68,6 +70,9 @@ VOICE_SETTINGS_EVENTS: tuple[tuple[str, str, str, str], ...] = (
     ("switch", "切换录制提示语", "切换录制提示音", "switch"),
     ("duplicate", "重复录制提示语", "重复录制提示音", "duplicate"),
     ("no_order", "未输入单号提示语", "未输入单号提示音", "no_order"),
+    ("camera_lost", "摄像头异常提示语", "摄像头异常提示音", "camera_lost"),
+    ("record_error", "录制异常提示语", "录制异常提示音", "record_error"),
+    ("disk_full", "磁盘空间不足提示语", "磁盘空间不足提示音", "disk_full"),
 )
 
 
@@ -103,6 +108,7 @@ class SettingsDialog(QDialog):
         self.logger.info("基础配置页签初始化")
         self.logger.info("语音提示页签初始化")
         self.logger.info("网盘同步页签初始化")
+        self.logger.info("更新日志页签初始化")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.closed.emit()
@@ -117,7 +123,84 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_basic_tab(), "基础配置")
         self.tabs.addTab(self._build_voice_tab(), "语音提示")
         self.tabs.addTab(self._build_netdisk_tab(), "网盘同步")
+        self.tabs.addTab(self._build_changelog_tab(), "更新日志")
         root_layout.addWidget(self.tabs, 1)
+
+    def _build_changelog_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+
+        for entry in CHANGELOG_ENTRIES:
+            card = QFrame()
+            card.setObjectName("changelogCard")
+            card.setStyleSheet(
+                """
+                QFrame#changelogCard {
+                    background: #ffffff;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                }
+                QLabel#changelogVersion {
+                    color: #0f172a;
+                    font-size: 15pt;
+                    font-weight: 700;
+                }
+                QLabel#changelogSection {
+                    color: #0f766e;
+                    font-size: 10pt;
+                    font-weight: 700;
+                    margin-top: 6px;
+                }
+                QLabel#changelogItem {
+                    color: #334155;
+                    font-size: 9pt;
+                    line-height: 1.45;
+                }
+                """
+            )
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(14, 12, 14, 12)
+            card_layout.setSpacing(6)
+
+            version_label = QLabel(str(entry.get("version", "")))
+            version_label.setObjectName("changelogVersion")
+            card_layout.addWidget(version_label)
+
+            sections = (
+                ("新增", entry.get("features", [])),
+                ("优化", entry.get("optimizations", [])),
+                ("修复", entry.get("fixes", [])),
+                ("说明", entry.get("notes", [])),
+            )
+            for title, items in sections:
+                if not items:
+                    continue
+                section_label = QLabel(title)
+                section_label.setObjectName("changelogSection")
+                card_layout.addWidget(section_label)
+                for item in items:
+                    item_label = QLabel(f"• {item}")
+                    item_label.setObjectName("changelogItem")
+                    item_label.setWordWrap(True)
+                    card_layout.addWidget(item_label)
+
+            content_layout.addWidget(card)
+
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        return widget
 
     def _build_basic_tab(self) -> QWidget:
         widget = QWidget()

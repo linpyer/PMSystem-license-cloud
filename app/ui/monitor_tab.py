@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import math
+import time
 from pathlib import Path
 
 import cv2
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
@@ -57,6 +59,7 @@ FPS_OPTIONS = [15, 20, 25, 30, 60]
 DEFAULT_FPS = 25
 LONG_EDGE_OPTIONS = [0, 960, 1280, 1920]
 DEFAULT_LONG_EDGE = 1280
+ENABLE_CAMERA_ERROR_WAVE_EFFECT = True
 
 FPS_HELP_TEXT = """帧率表示每秒录制多少张画面。
 
@@ -141,6 +144,102 @@ WATERMARK_MARGIN_HELP_TEXT = """水印边距用于设置水印文字距离视频
 如果水印占用画面太多，可以适当减小边距。"""
 
 
+class PreviewAlertOverlay(QWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._active = False
+        self._phase = 0.0
+        self._boost_until = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(100)
+        self._timer.timeout.connect(self._advance_phase)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.hide()
+
+    def set_alert_state(self, state: str) -> None:
+        state = state if state in {"none", "weak", "strong", "steady"} else "none"
+        if state == "none":
+            self.stop_warning()
+            return
+        self.start_warning(boost=state == "strong")
+
+    def start_warning(self, *, boost: bool = False) -> None:
+        now = time.monotonic()
+        if boost and not self._active:
+            self._boost_until = now + 0.45
+        if self._active:
+            self.update()
+            return
+        self._active = True
+        self._phase = 0.0
+        self.show()
+        self._timer.start()
+        self.update()
+
+    def stop_warning(self) -> None:
+        self._timer.stop()
+        self._active = False
+        self._phase = 0.0
+        self._boost_until = 0.0
+        self.hide()
+        self.update()
+
+    def _advance_phase(self) -> None:
+        if not self._active:
+            self._timer.stop()
+            return
+        self._phase = (self._phase + (2 * math.pi / 22)) % (2 * math.pi)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        if not self._active:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        rect = self.rect()
+        wave = (math.sin(self._phase) + 1.0) / 2.0
+        opacity = 0.26 + 0.09 * math.sin(self._phase)
+        if time.monotonic() < self._boost_until:
+            opacity = min(0.45, max(opacity, 0.42))
+        opacity = max(0.18, min(0.38 if time.monotonic() >= self._boost_until else 0.45, opacity))
+        thickness = int(44 + 18 * wave)
+        thickness = min(thickness, max(12, rect.width() // 4), max(12, rect.height() // 4))
+        edge_alpha = int(255 * opacity)
+        soft_alpha = int(edge_alpha * 0.45)
+
+        top = QLinearGradient(0, rect.top(), 0, rect.top() + thickness)
+        top.setColorAt(0.0, QColor(153, 27, 27, edge_alpha))
+        top.setColorAt(0.55, QColor(220, 38, 38, soft_alpha))
+        top.setColorAt(1.0, QColor(220, 38, 38, 0))
+        painter.fillRect(rect.left(), rect.top(), rect.width(), thickness, top)
+
+        bottom = QLinearGradient(0, rect.bottom(), 0, rect.bottom() - thickness)
+        bottom.setColorAt(0.0, QColor(153, 27, 27, edge_alpha))
+        bottom.setColorAt(0.55, QColor(220, 38, 38, soft_alpha))
+        bottom.setColorAt(1.0, QColor(220, 38, 38, 0))
+        painter.fillRect(rect.left(), rect.bottom() - thickness + 1, rect.width(), thickness, bottom)
+
+        left = QLinearGradient(rect.left(), 0, rect.left() + thickness, 0)
+        left.setColorAt(0.0, QColor(153, 27, 27, edge_alpha))
+        left.setColorAt(0.55, QColor(220, 38, 38, soft_alpha))
+        left.setColorAt(1.0, QColor(220, 38, 38, 0))
+        painter.fillRect(rect.left(), rect.top(), thickness, rect.height(), left)
+
+        right = QLinearGradient(rect.right(), 0, rect.right() - thickness, 0)
+        right.setColorAt(0.0, QColor(153, 27, 27, edge_alpha))
+        right.setColorAt(0.55, QColor(220, 38, 38, soft_alpha))
+        right.setColorAt(1.0, QColor(220, 38, 38, 0))
+        painter.fillRect(rect.right() - thickness + 1, rect.top(), thickness, rect.height(), right)
+
+        border = QColor(220, 38, 38, min(160, edge_alpha + 35))
+        painter.fillRect(rect.left(), rect.top(), rect.width(), 3, border)
+        painter.fillRect(rect.left(), rect.bottom() - 2, rect.width(), 3, border)
+        painter.fillRect(rect.left(), rect.top(), 3, rect.height(), border)
+        painter.fillRect(rect.right() - 2, rect.top(), 3, rect.height(), border)
+
+
 class MonitorTab(QWidget):
     status_message = Signal(str)
     video_dir_changed = Signal(str)
@@ -160,6 +259,14 @@ class MonitorTab(QWidget):
         self.scan_feedback_timer = QTimer(self)
         self.scan_feedback_timer.setSingleShot(True)
         self.scan_feedback_timer.timeout.connect(self._reset_scan_feedback)
+        self.recording_alert_timer = QTimer(self)
+        self.recording_alert_timer.setInterval(1000)
+        self.recording_alert_timer.timeout.connect(self._pulse_recording_alert_border)
+        self._recording_alert_steps: list[str] = []
+        self._last_recording_alert_reason = ""
+        self._last_recording_alert_at = 0.0
+        self._camera_error_active = False
+        self._camera_error_reason = ""
         self._normalize_video_config_on_startup()
         self.scanner_guard = ScannerGuard(self.config, logger)
         self.voice_prompt = VoicePrompt(self.config, logger)
@@ -179,6 +286,7 @@ class MonitorTab(QWidget):
         QTimer.singleShot(0, self.refresh_recent_recordings)
 
     def shutdown(self) -> None:
+        self._clear_recording_alert()
         if self._event_filter_installed:
             app = QApplication.instance()
             if app is not None:
@@ -187,6 +295,15 @@ class MonitorTab(QWidget):
         self.recorder.stop_thread()
         self.recorder.wait(5000)
         self.voice_prompt.stop()
+
+    def hideEvent(self, event) -> None:  # type: ignore[override]
+        self._clear_recording_alert()
+        super().hideEvent(event)
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        if self._camera_error_active:
+            self.refresh_status_card()
 
     def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
         focus_widget = QApplication.focusWidget()
@@ -339,11 +456,23 @@ class MonitorTab(QWidget):
         content_layout.setColumnMinimumWidth(1, 400)
         root_layout.addLayout(content_layout, 1)
 
+        preview_container = QFrame()
+        preview_container.setObjectName("previewContainer")
+        preview_container.setMinimumSize(720, 480)
+        preview_layout = QGridLayout(preview_container)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(0)
+
         self.preview_label = QLabel("正在打开摄像头...")
         self.preview_label.setObjectName("previewLabel")
+        self.preview_label.setProperty("recordingAlert", "none")
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumSize(720, 480)
-        content_layout.addWidget(self.preview_label, 0, 0)
+        self.preview_alert_overlay = PreviewAlertOverlay(preview_container)
+        preview_layout.addWidget(self.preview_label, 0, 0)
+        preview_layout.addWidget(self.preview_alert_overlay, 0, 0)
+        self.preview_alert_overlay.raise_()
+        content_layout.addWidget(preview_container, 0, 0)
 
         side_scroll = QScrollArea()
         side_scroll.setObjectName("rightOperationScroll")
@@ -646,6 +775,12 @@ class MonitorTab(QWidget):
         self.refresh_status_card()
 
     def refresh_status_card(self) -> None:
+        if self._camera_error_active:
+            reason = self._camera_error_reason or "摄像头连接异常，请检查 iVCam 或摄像头"
+            detail = f"{reason}  请检查 iVCam 或摄像头连接"
+            self._set_scan_feedback("error", "异常", detail, auto_reset=False)
+            self._start_recording_alert_border()
+            return
         if self.is_recording:
             detail = f"单号：{self.current_order_id}" if self.current_order_id else ""
             self._set_scan_feedback("recording", "录制中", detail, auto_reset=False)
@@ -706,6 +841,63 @@ class MonitorTab(QWidget):
             return
         self._set_scan_feedback("error", "异常", str(data.get("message") or "请重新扫描"), auto_reset=False)
 
+    def show_recording_alert(self, reason: str, *, play_voice: bool = True) -> None:
+        reason = str(reason or "录制异常").strip()
+        if self._pending_voice_action in {"start", "switch"}:
+            self._pending_voice_action = None
+        if self._pending_scan_feedback and self._pending_scan_feedback.get("event") in {"start", "switch"}:
+            self._pending_scan_feedback = None
+        detail = f"{reason}  请检查摄像头 / iVCam / 磁盘空间后重试"
+        self._set_scan_feedback("error", "异常", detail, auto_reset=False)
+        self._start_recording_alert_border()
+        if not play_voice:
+            return
+        now = time.monotonic()
+        duplicate_voice = reason == self._last_recording_alert_reason and now - self._last_recording_alert_at < 5.0
+        self._last_recording_alert_reason = reason
+        self._last_recording_alert_at = now
+        if duplicate_voice:
+            self.logger.info("录制异常语音去重：reason=%s", reason)
+            return
+        event_key = self._voice_event_for_recording_alert(reason)
+        if self.voice_prompt.play(event_key):
+            self.logger.info("录制异常语音已提交播放：event=%s, reason=%s", event_key, reason)
+        else:
+            self.logger.warning("录制异常语音提交失败：event=%s, reason=%s", event_key, reason)
+
+    @staticmethod
+    def _voice_event_for_recording_alert(reason: str) -> str:
+        if "磁盘" in reason or "空间" in reason:
+            return "disk_full"
+        if "摄像头" in reason or "iVCam" in reason or "读取失败" in reason or "冻结" in reason:
+            return "camera_lost"
+        return "record_error"
+
+    def _start_recording_alert_border(self) -> None:
+        self.recording_alert_timer.stop()
+        self._recording_alert_steps = []
+        self._set_preview_alert_state("strong")
+
+    def _pulse_recording_alert_border(self) -> None:
+        self.recording_alert_timer.stop()
+        self._recording_alert_steps = []
+        self._set_preview_alert_state("steady")
+
+    def _set_preview_alert_state(self, state: str) -> None:
+        state = state if state in {"none", "weak", "strong", "steady"} else "none"
+        self.preview_label.setProperty("recordingAlert", state)
+        self.preview_label.style().unpolish(self.preview_label)
+        self.preview_label.style().polish(self.preview_label)
+        if hasattr(self, "preview_alert_overlay"):
+            overlay_state = state if ENABLE_CAMERA_ERROR_WAVE_EFFECT else "none"
+            self.preview_alert_overlay.set_alert_state(overlay_state)
+            self.preview_alert_overlay.raise_()
+
+    def _clear_recording_alert(self) -> None:
+        self.recording_alert_timer.stop()
+        self._recording_alert_steps = []
+        self._set_preview_alert_state("none")
+
     def _scan_feedback_for_scan(self, order_id: str, previous_order_id: str) -> dict[str, str] | None:
         order_id = order_id.strip()
         previous_order_id = previous_order_id.strip()
@@ -720,6 +912,28 @@ class MonitorTab(QWidget):
         if order_id:
             return {"event": "start", "order_no": order_id}
         return None
+
+    def _camera_start_block_reason(self) -> str:
+        try:
+            health = self.recorder.camera_health()
+        except Exception as exc:
+            self.logger.exception("读取摄像头健康状态失败")
+            return f"摄像头状态异常：{exc}"
+        if bool(health.get("is_healthy", False)):
+            return ""
+        reason = str(health.get("last_error") or "").strip()
+        return reason or "摄像头连接异常，请检查 iVCam 或摄像头"
+
+    def _block_recording_start_for_camera_error(self, reason: str) -> None:
+        reason = str(reason or "摄像头连接异常，请检查 iVCam 或摄像头").strip()
+        self._pending_voice_action = None
+        self._pending_scan_feedback = None
+        self._camera_error_active = True
+        self._camera_error_reason = reason
+        self.logger.warning("摄像头异常，拦截开始录制：%s", reason)
+        self.show_recording_alert(reason)
+        self.warning_message.emit(reason)
+        self.status_message.emit(reason)
 
     def _handle_scan_return(self) -> None:
         raw_text = self.scan_input.text()
@@ -736,6 +950,13 @@ class MonitorTab(QWidget):
             self.focus_scan_input(80)
             return
         if not result.should_ignore:
+            if not self.is_recording and result.cleaned_code:
+                camera_error = self._camera_start_block_reason()
+                if camera_error:
+                    self._block_recording_start_for_camera_error(camera_error)
+                    self.scan_input.clear()
+                    self.focus_scan_input(80)
+                    return
             is_duplicate = self._warn_if_duplicate_recording(result.cleaned_code)
             self._pending_voice_action = self._voice_action_for_scan(result.cleaned_code, is_duplicate)
             self._pending_scan_feedback = self._scan_feedback_for_scan(result.cleaned_code, self.current_order_id)
@@ -753,6 +974,12 @@ class MonitorTab(QWidget):
                 self._notify_no_order()
             else:
                 self.warning_message.emit("请先输入或扫描单号。")
+            self.focus_scan_input(80)
+            return
+        camera_error = self._camera_start_block_reason()
+        if camera_error:
+            self._block_recording_start_for_camera_error(camera_error)
+            self.scan_input.clear()
             self.focus_scan_input(80)
             return
         is_duplicate = self._warn_if_duplicate_recording(result.cleaned_code)
@@ -973,10 +1200,23 @@ class MonitorTab(QWidget):
         self.camera_status_label.setText(message)
         self.camera_status_label.setToolTip(message)
         if not available:
-            self.preview_label.setText("摄像头不可用")
+            if self.preview_label.pixmap() is None:
+                self.preview_label.setText("摄像头不可用")
+            was_error = self._camera_error_active
+            self._camera_error_active = True
+            self._camera_error_reason = message or "摄像头连接异常，请检查 iVCam 或摄像头"
+            self.show_recording_alert(self._camera_error_reason, play_voice=not was_error)
+        else:
+            self._camera_error_active = False
+            self._camera_error_reason = ""
+            self._clear_recording_alert()
+            self.refresh_status_card()
         self.status_message.emit(message)
 
     def _set_status_badge(self, recording: bool) -> None:
+        if self._camera_error_active:
+            self.refresh_status_card()
+            return
         if recording:
             detail = f"单号：{self.current_order_id}" if self.current_order_id else ""
             self._set_scan_feedback("recording", "录制中", detail, auto_reset=False)
@@ -991,6 +1231,8 @@ class MonitorTab(QWidget):
         self.is_recording = recording
         self._set_record_type_enabled(not recording)
         if recording:
+            if not self._camera_error_active:
+                self._clear_recording_alert()
             self.current_order_id = order_id
             self._set_status_badge(True)
             self._set_start_time_visible(True)
@@ -1050,8 +1292,41 @@ class MonitorTab(QWidget):
     def _is_recording_save_failed_message(message: str) -> bool:
         return message.startswith("视频保存失败") or "保存失败" in message
 
+    @staticmethod
+    def _is_recording_alert_message(message: str) -> bool:
+        text = str(message or "")
+        if not text:
+            return False
+        return any(
+            keyword in text
+            for keyword in (
+                "录制异常",
+                "摄像头连接异常",
+                "摄像头读取失败",
+                "摄像头画面异常",
+                "iVCam",
+                "视频写入失败",
+                "磁盘空间不足",
+                "无法开始录制",
+                "recording error",
+                "camera lost",
+                "disk full",
+            )
+        )
+
+    @staticmethod
+    def _recording_alert_reason(message: str) -> str:
+        text = str(message or "").strip()
+        for prefix in ("录制异常：", "录制异常:", "错误：", "错误:"):
+            if text.startswith(prefix):
+                text = text[len(prefix) :].strip()
+                break
+        return text or "录制异常"
+
     def _on_recorder_message(self, message: str) -> None:
         self.status_message.emit(message)
+        if self._is_recording_alert_message(message):
+            self.show_recording_alert(self._recording_alert_reason(message))
         if self._is_recording_save_complete_message(message):
             self.logger.info("新视频保存后刷新最近录制模块")
             QTimer.singleShot(200, self.refresh_recent_recordings)
@@ -1074,11 +1349,15 @@ class MonitorTab(QWidget):
     def _on_warning_message(self, message: str) -> None:
         self.warning_message.emit(message)
         self.status_message.emit(message)
+        if self._is_recording_alert_message(message):
+            self.show_recording_alert(self._recording_alert_reason(message))
         self.focus_scan_input()
 
     def _on_critical_message(self, message: str) -> None:
         self.critical_message.emit(message)
         self.status_message.emit(message)
+        if self._is_recording_alert_message(message):
+            self.show_recording_alert(self._recording_alert_reason(message))
         self.focus_scan_input()
 
     def _update_video_dir_label(self) -> None:

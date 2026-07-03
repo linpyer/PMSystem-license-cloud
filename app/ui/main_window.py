@@ -316,7 +316,7 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index: int) -> None:
         if self.tabs.widget(index) is self.query_tab:
-            self.query_tab.refresh()
+            QTimer.singleShot(0, self.query_tab.activate)
         elif self.tabs.widget(index) is self.monitor_tab:
             QTimer.singleShot(0, self._restore_monitor_focus)
 
@@ -402,6 +402,8 @@ class MainWindow(QMainWindow):
         self.show_status_tip(message, level, timeout_ms)
 
     def _on_monitor_status_message(self, message: str) -> None:
+        if self._is_video_data_changed_message(message):
+            self.query_tab.mark_dirty()
         if self._is_silent_monitor_message(message):
             self.logger.debug("监控页静默成功提示已忽略：%s", message)
             return
@@ -414,6 +416,20 @@ class MainWindow(QMainWindow):
         if text in SILENT_MONITOR_MESSAGES:
             return True
         return any(text.startswith(prefix) for prefix in SILENT_MONITOR_MESSAGE_PREFIXES)
+
+    @staticmethod
+    def _is_video_data_changed_message(message: str) -> bool:
+        text = (message or "").strip()
+        return any(
+            keyword in text
+            for keyword in (
+                "视频已保存",
+                "视频保存异常",
+                "视频文件不存在，校验失败",
+                "视频已删除",
+                "记录已移除",
+            )
+        )
 
     def _setup_status_tip(self) -> None:
         self.status_tip_label = StatusTipLabel(self)

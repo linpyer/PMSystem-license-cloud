@@ -196,7 +196,7 @@ cd "E:\PM System"
 
 ## 打包和制作安装包
 
-当前版本：`v1.0.2`。软件可以使用 PyInstaller 打包为 onedir 程序目录，再使用 Inno Setup 制作 Windows 安装包。目标电脑不需要安装 Python，不需要安装 SQLite，也不需要部署任何数据库服务。
+当前版本：`v1.0.3`。软件可以使用 PyInstaller 打包为 onedir 程序目录，再使用 Inno Setup 制作 Windows 安装包。目标电脑不需要安装 Python，不需要安装 SQLite，也不需要部署任何数据库服务。
 
 安装依赖：
 
@@ -263,7 +263,7 @@ installer\PMSystem.iss
 也可以手动打开这个 `.iss` 文件并点击 Compile。最终安装包位置：
 
 ```text
-installer\output\PMSystem_Setup_v1.0.2.exe
+installer\output\PMSystem_Setup_v1.0.3.exe
 ```
 
 安装包界面使用简体中文，支持选择安装位置、创建桌面快捷方式、开始菜单快捷方式、卸载，以及安装完成后立即运行。
