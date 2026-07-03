@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -27,6 +28,22 @@ UPLOAD_UPLOADING = "上传中"
 UPLOAD_DONE = "已上传"
 UPLOAD_FAILED = "上传失败"
 VALID_UPLOAD_STATUSES = {UPLOAD_PENDING, UPLOAD_UPLOADING, UPLOAD_DONE, UPLOAD_FAILED}
+UPLOAD_STATUS_PRIORITY = {
+    UPLOAD_PENDING: 1,
+    UPLOAD_UPLOADING: 2,
+    UPLOAD_FAILED: 3,
+    UPLOAD_DONE: 4,
+}
+
+
+def normalize_file_path(path: str | Path | None) -> str:
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    normalized = os.path.normpath(os.path.abspath(raw))
+    if os.name == "nt":
+        normalized = os.path.normcase(normalized)
+    return normalized.strip()
 
 
 class DatabaseManager:
@@ -46,6 +63,7 @@ class DatabaseManager:
             connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute("PRAGMA foreign_keys=ON")
             self.create_tables()
+            self.repair_duplicate_video_records()
             self.reset_interrupted_uploads()
             if self.logger:
                 self.logger.info("SQLite 数据库初始化成功：%s", self.db_path)
@@ -73,6 +91,7 @@ class DatabaseManager:
                         order_no TEXT NOT NULL,
                         file_name TEXT NOT NULL,
                         file_path TEXT NOT NULL UNIQUE,
+                        normalized_file_path TEXT,
                         file_ext TEXT,
                         file_size_bytes INTEGER DEFAULT 0,
                         file_size_text TEXT,
@@ -85,6 +104,9 @@ class DatabaseManager:
                         fps REAL DEFAULT 0,
                         record_type TEXT NOT NULL DEFAULT '发货',
                         remark TEXT DEFAULT '',
+                        is_important INTEGER DEFAULT 0,
+                        important_note TEXT DEFAULT '',
+                        important_at TEXT,
                         status TEXT DEFAULT '正常',
                         recorded_at TEXT,
                         created_time TEXT,
@@ -112,6 +134,8 @@ class DatabaseManager:
                     """
                 )
                 self._ensure_upload_columns(connection)
+                self._sync_normalized_file_paths(connection)
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_videos_normalized_file_path ON videos(normalized_file_path)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_videos_upload_status ON videos(upload_status)")
                 connection.commit()
                 if self.logger:
@@ -137,6 +161,10 @@ class DatabaseManager:
             "validation_error": "TEXT DEFAULT ''",
             "validation_warning": "TEXT DEFAULT ''",
             "validated_at": "TEXT",
+            "normalized_file_path": "TEXT",
+            "is_important": "INTEGER DEFAULT 0",
+            "important_note": "TEXT DEFAULT ''",
+            "important_at": "TEXT",
         }
         for column, definition in required_columns.items():
             if column in existing_columns:
@@ -144,6 +172,21 @@ class DatabaseManager:
             connection.execute(f"ALTER TABLE videos ADD COLUMN {column} {definition}")
             if self.logger:
                 self.logger.info("SQLite 自动迁移 videos.%s 字段成功", column)
+
+    def _sync_normalized_file_paths(self, connection: sqlite3.Connection) -> int:
+        rows = connection.execute("SELECT id, file_path, normalized_file_path FROM videos").fetchall()
+        updated = 0
+        for row in rows:
+            normalized = normalize_file_path(row["file_path"])
+            if normalized and normalized != str(row["normalized_file_path"] or ""):
+                connection.execute(
+                    "UPDATE videos SET normalized_file_path = ? WHERE id = ?",
+                    (normalized, int(row["id"])),
+                )
+                updated += 1
+        if updated and self.logger:
+            self.logger.info("已同步规范化视频路径：%s 条", updated)
+        return updated
 
     def insert_video_record(self, record: dict[str, Any]) -> None:
         self.upsert_video_record(record)
@@ -153,6 +196,7 @@ class DatabaseManager:
             "order_no",
             "file_name",
             "file_path",
+            "normalized_file_path",
             "file_ext",
             "file_size_bytes",
             "file_size_text",
@@ -180,6 +224,11 @@ class DatabaseManager:
         normalized = {field: record.get(field) for field in fields}
         normalized["record_type"] = self.normalize_record_type(normalized.get("record_type"))
         normalized["remark"] = str(normalized.get("remark") or "")[:500]
+        normalized_path = normalize_file_path(normalized.get("file_path"))
+        if not normalized_path:
+            raise ValueError("视频路径为空，无法写入数据库")
+        normalized["normalized_file_path"] = normalized_path
+        normalized["file_path"] = str(Path(str(normalized.get("file_path") or normalized_path)).resolve())
 
         placeholders = ", ".join("?" for _ in fields)
         field_list = ", ".join(fields)
@@ -201,14 +250,37 @@ class DatabaseManager:
         with self._lock:
             connection = self.get_connection()
             try:
-                connection.execute(
-                    f"""
-                    INSERT INTO videos ({field_list})
-                    VALUES ({placeholders})
-                    ON CONFLICT(file_path) DO UPDATE SET {update_list}
-                    """,
-                    values,
-                )
+                existing = connection.execute(
+                    "SELECT id FROM videos WHERE normalized_file_path = ?",
+                    (normalized_path,),
+                ).fetchone()
+                if existing:
+                    assignments: list[str] = []
+                    update_values: list[Any] = []
+                    for field in fields:
+                        if field == "file_path":
+                            continue
+                        if field == "remark":
+                            if normalized.get("remark"):
+                                assignments.append("remark = ?")
+                                update_values.append(normalized.get("remark"))
+                            continue
+                        assignments.append(f"{field} = ?")
+                        update_values.append(normalized.get(field))
+                    update_values.append(int(existing["id"]))
+                    connection.execute(
+                        f"UPDATE videos SET {', '.join(assignments)} WHERE id = ?",
+                        update_values,
+                    )
+                else:
+                    connection.execute(
+                        f"""
+                        INSERT INTO videos ({field_list})
+                        VALUES ({placeholders})
+                        ON CONFLICT(file_path) DO UPDATE SET {update_list}
+                        """,
+                        values,
+                    )
                 connection.commit()
                 if self.logger:
                     self.logger.info("插入或更新视频记录成功：%s", normalized.get("file_path"))
@@ -287,18 +359,19 @@ class DatabaseManager:
     def update_video_remark_by_path(self, file_path: str | Path, remark: str) -> int:
         remark = str(remark or "")[:500]
         path_text = str(Path(file_path).resolve())
+        path_clause, path_params = self._path_match_clause(file_path)
         now_text = format_datetime()
         with self._lock:
             connection = self.get_connection()
             try:
                 cursor = connection.execute(
-                    """
+                    f"""
                     UPDATE videos
                     SET remark = ?,
                         updated_at = ?
-                    WHERE file_path = ?
+                    WHERE {path_clause}
                     """,
-                    (remark, now_text, path_text),
+                    [remark, now_text] + path_params,
                 )
                 connection.commit()
                 if self.logger:
@@ -347,14 +420,68 @@ class DatabaseManager:
                     self.logger.exception("修改备注失败并 rollback：db=%s, id=%s, remark_len=%s", self.db_path, record_id, len(remark))
                 raise
 
+    def update_video_importance(self, record_id: int, is_important: bool, note: str = "") -> int:
+        note = str(note or "").strip()[:500]
+        now_text = format_datetime()
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                if is_important:
+                    cursor = connection.execute(
+                        """
+                        UPDATE videos
+                        SET is_important = 1,
+                            important_note = ?,
+                            important_at = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (note, now_text, now_text, int(record_id)),
+                    )
+                else:
+                    cursor = connection.execute(
+                        """
+                        UPDATE videos
+                        SET is_important = 0,
+                            important_note = '',
+                            important_at = '',
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (now_text, int(record_id)),
+                    )
+                connection.commit()
+                if self.logger:
+                    self.logger.info(
+                        "修改重要视频标记：db=%s, id=%s, important=%s, affected=%s, note_len=%s",
+                        self.db_path,
+                        record_id,
+                        bool(is_important),
+                        cursor.rowcount,
+                        len(note),
+                    )
+                return int(cursor.rowcount)
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception(
+                        "修改重要视频标记失败并 rollback：db=%s, id=%s, important=%s, note_len=%s",
+                        self.db_path,
+                        record_id,
+                        bool(is_important),
+                        len(note),
+                    )
+                raise
+
     def delete_video_record(self, file_path: str | Path) -> bool:
         path_text = str(Path(file_path).resolve())
         existing = self.get_video_by_path(path_text)
         order_no = str(existing.get("order_no") or "") if existing else ""
+        path_clause, path_params = self._path_match_clause(file_path)
         with self._lock:
             connection = self.get_connection()
             try:
-                cursor = connection.execute("DELETE FROM videos WHERE file_path = ?", (path_text,))
+                cursor = connection.execute(f"DELETE FROM videos WHERE {path_clause}", path_params)
                 connection.commit()
                 if order_no:
                     self.recalculate_duplicate_sequences(order_no)
@@ -366,6 +493,40 @@ class DatabaseManager:
                 if self.logger:
                     self.logger.exception("删除 SQLite 视频记录失败并 rollback：%s", path_text)
                 raise
+
+    def delete_video_by_id(self, record_id: int) -> bool:
+        record_id = int(record_id or 0)
+        if record_id <= 0:
+            return False
+        existing = self.get_video_by_id(record_id)
+        order_no = str(existing.get("order_no") or "") if existing else ""
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                cursor = connection.execute("DELETE FROM videos WHERE id = ?", (record_id,))
+                connection.commit()
+                if order_no:
+                    self.recalculate_duplicate_sequences(order_no)
+                if self.logger:
+                    self.logger.info(
+                        "按 id 删除 SQLite 视频记录：id=%s, affected=%s, order_no=%s",
+                        record_id,
+                        cursor.rowcount,
+                        order_no or "-",
+                    )
+                return cursor.rowcount > 0
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception("按 id 删除 SQLite 视频记录失败并 rollback：id=%s", record_id)
+                raise
+
+    def delete_videos_by_ids(self, record_ids: list[int]) -> int:
+        deleted = 0
+        for record_id in record_ids:
+            if self.delete_video_by_id(int(record_id or 0)):
+                deleted += 1
+        return deleted
 
     def mark_file_missing(self, file_path: str | Path) -> bool:
         ok = self._update_fields(
@@ -389,6 +550,7 @@ class DatabaseManager:
         if status not in VALID_UPLOAD_STATUSES:
             status = UPLOAD_PENDING
         path_text = str(Path(file_path).resolve())
+        path_clause, path_params = self._path_match_clause(file_path)
         now_text = format_datetime()
         error_text = str(error or "")[:500]
 
@@ -397,7 +559,7 @@ class DatabaseManager:
             try:
                 if increment_retry:
                     cursor = connection.execute(
-                        """
+                        f"""
                         UPDATE videos
                         SET upload_status = ?,
                             upload_time = CASE WHEN ? = ? THEN ? ELSE upload_time END,
@@ -405,22 +567,22 @@ class DatabaseManager:
                             upload_error = ?,
                             upload_retry_count = COALESCE(upload_retry_count, 0) + 1,
                             updated_at = ?
-                        WHERE file_path = ?
+                        WHERE {path_clause}
                         """,
-                        (status, status, UPLOAD_DONE, now_text, remote_path, error_text, now_text, path_text),
+                        [status, status, UPLOAD_DONE, now_text, remote_path, error_text, now_text] + path_params,
                     )
                 else:
                     cursor = connection.execute(
-                        """
+                        f"""
                         UPDATE videos
                         SET upload_status = ?,
                             upload_time = CASE WHEN ? = ? THEN ? ELSE upload_time END,
                             upload_remote_path = COALESCE(?, upload_remote_path),
                             upload_error = ?,
                             updated_at = ?
-                        WHERE file_path = ?
+                        WHERE {path_clause}
                         """,
-                        (status, status, UPLOAD_DONE, now_text, remote_path, error_text, now_text, path_text),
+                        [status, status, UPLOAD_DONE, now_text, remote_path, error_text, now_text] + path_params,
                     )
                 connection.commit()
                 if cursor.rowcount <= 0 and self.logger:
@@ -470,6 +632,279 @@ class DatabaseManager:
                     self.logger.exception("恢复上次中断上传状态失败并 rollback")
                 raise
 
+    def backup_database_before_dedupe(self) -> Path:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = self.db_path.with_name(f"pm_system_backup_before_dedupe_{timestamp}.db")
+        try:
+            with sqlite3.connect(str(backup_path)) as backup_connection:
+                self.get_connection().backup(backup_connection)
+            if self.logger:
+                self.logger.warning("数据库去重前备份完成：%s", backup_path)
+            return backup_path
+        except Exception:
+            if self.logger:
+                self.logger.exception("数据库去重前备份失败：%s", backup_path)
+            raise
+
+    def diagnose_video_records(self, query_dir: str | Path | None = None) -> dict[str, int]:
+        with self._lock:
+            connection = self.get_connection()
+            self._sync_normalized_file_paths(connection)
+            connection.commit()
+            conditions = ["1=1"]
+            params: list[Any] = []
+            if query_dir:
+                directory_clause, directory_params = self._directory_filter_clause(query_dir)
+                conditions.append(directory_clause)
+                params.extend(directory_params)
+            where_sql = " AND ".join(conditions)
+            total = int(connection.execute(f"SELECT COUNT(*) AS total FROM videos WHERE {where_sql}", params).fetchone()["total"])
+            duplicate_orders = int(
+                connection.execute(
+                    f"""
+                    SELECT COUNT(*) AS total
+                    FROM (
+                        SELECT order_no
+                        FROM videos
+                        WHERE {where_sql} AND order_no IS NOT NULL AND order_no <> ''
+                        GROUP BY order_no
+                        HAVING COUNT(*) > 1
+                    )
+                    """,
+                    params,
+                ).fetchone()["total"]
+            )
+            duplicate_paths = int(
+                connection.execute(
+                    f"""
+                    SELECT COUNT(*) AS total
+                    FROM (
+                        SELECT normalized_file_path
+                        FROM videos
+                        WHERE {where_sql}
+                          AND normalized_file_path IS NOT NULL
+                          AND normalized_file_path <> ''
+                        GROUP BY normalized_file_path
+                        HAVING COUNT(*) > 1
+                    )
+                    """,
+                    params,
+                ).fetchone()["total"]
+            )
+            suspicious_files = int(
+                connection.execute(
+                    f"""
+                    SELECT COUNT(*) AS total
+                    FROM (
+                        SELECT file_name, COALESCE(file_size_bytes, 0), ROUND(COALESCE(duration_seconds, 0), 1), order_no
+                        FROM videos
+                        WHERE {where_sql}
+                        GROUP BY file_name, COALESCE(file_size_bytes, 0), ROUND(COALESCE(duration_seconds, 0), 1), order_no
+                        HAVING COUNT(*) > 1
+                    )
+                    """,
+                    params,
+                ).fetchone()["total"]
+            )
+            if self.logger:
+                self.logger.warning(
+                    "视频记录诊断：db=%s, query_dir=%s, normalized_query_dir=%s, total=%s, duplicate_order_groups=%s, duplicate_path_groups=%s, suspicious_file_groups=%s, sql_where=%s, params=%s",
+                    self.db_path,
+                    query_dir or "<全部>",
+                    normalize_file_path(query_dir) if query_dir else "<全部>",
+                    total,
+                    duplicate_orders,
+                    duplicate_paths,
+                    suspicious_files,
+                    where_sql,
+                    params,
+                )
+            return {
+                "total": total,
+                "duplicate_order_groups": duplicate_orders,
+                "duplicate_path_groups": duplicate_paths,
+                "suspicious_file_groups": suspicious_files,
+            }
+
+    def repair_duplicate_video_records(self) -> int:
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                self._sync_normalized_file_paths(connection)
+                connection.commit()
+                groups = connection.execute(
+                    """
+                    SELECT normalized_file_path, COUNT(*) AS total
+                    FROM videos
+                    WHERE normalized_file_path IS NOT NULL AND normalized_file_path <> ''
+                    GROUP BY normalized_file_path
+                    HAVING COUNT(*) > 1
+                    """
+                ).fetchall()
+                if not groups:
+                    connection.execute(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_normalized_file_path_unique
+                        ON videos(normalized_file_path)
+                        WHERE normalized_file_path IS NOT NULL AND normalized_file_path <> ''
+                        """
+                    )
+                    connection.commit()
+                    return 0
+                self.diagnose_video_records()
+                try:
+                    backup_path = self.backup_database_before_dedupe()
+                except Exception:
+                    connection.rollback()
+                    if self.logger:
+                        self.logger.error("数据库备份失败，已跳过自动去重修复")
+                    return 0
+                columns = self._video_column_names(connection)
+                affected_order_numbers: set[str] = set()
+                removed_count = 0
+                for group in groups:
+                    normalized_path = str(group["normalized_file_path"] or "")
+                    rows = [
+                        dict(row)
+                        for row in connection.execute(
+                            "SELECT * FROM videos WHERE normalized_file_path = ? ORDER BY id ASC",
+                            (normalized_path,),
+                        ).fetchall()
+                    ]
+                    if len(rows) <= 1:
+                        continue
+                    main = self._choose_duplicate_primary(rows)
+                    merged = self._merge_duplicate_rows(rows, main, columns)
+                    update_fields = [key for key in merged if key in columns and key != "id"]
+                    assignments = ", ".join(f"{key} = ?" for key in update_fields)
+                    values = [merged[key] for key in update_fields] + [int(main["id"])]
+                    connection.execute(f"UPDATE videos SET {assignments} WHERE id = ?", values)
+                    duplicate_ids = [int(row["id"]) for row in rows if int(row["id"]) != int(main["id"])]
+                    if duplicate_ids:
+                        placeholders = ", ".join("?" for _ in duplicate_ids)
+                        connection.execute(f"DELETE FROM videos WHERE id IN ({placeholders})", duplicate_ids)
+                        removed_count += len(duplicate_ids)
+                    for row in rows:
+                        order_no = str(row.get("order_no") or "").strip()
+                        if order_no:
+                            affected_order_numbers.add(order_no)
+                    if self.logger:
+                        self.logger.warning(
+                            "合并重复视频记录：normalized_path=%s, keep_id=%s, remove_ids=%s, upload_status=%s, remote_path=%s",
+                            normalized_path,
+                            int(main["id"]),
+                            duplicate_ids,
+                            merged.get("upload_status") or "",
+                            merged.get("upload_remote_path") or "",
+                        )
+                connection.commit()
+                for order_no in affected_order_numbers:
+                    self.recalculate_duplicate_sequences(order_no)
+                connection.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_videos_normalized_file_path_unique
+                    ON videos(normalized_file_path)
+                    WHERE normalized_file_path IS NOT NULL AND normalized_file_path <> ''
+                    """
+                )
+                connection.commit()
+                if self.logger:
+                    self.logger.warning("重复视频记录修复完成：backup=%s, removed=%s", backup_path, removed_count)
+                return removed_count
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception("重复视频记录修复失败并 rollback")
+                raise
+
+    def _video_column_names(self, connection: sqlite3.Connection) -> set[str]:
+        return {str(row["name"]) for row in connection.execute("PRAGMA table_info(videos)").fetchall()}
+
+    def _choose_duplicate_primary(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        uploaded = [row for row in rows if str(row.get("upload_status") or "") == UPLOAD_DONE]
+        if uploaded:
+            return max(uploaded, key=lambda row: (str(row.get("upload_time") or ""), int(row.get("id") or 0)))
+        return min(rows, key=lambda row: int(row.get("id") or 0))
+
+    def _merge_duplicate_rows(
+        self,
+        rows: list[dict[str, Any]],
+        main: dict[str, Any],
+        columns: set[str],
+    ) -> dict[str, Any]:
+        merged = dict(main)
+        final_status = max(
+            (str(row.get("upload_status") or UPLOAD_PENDING) for row in rows),
+            key=lambda status: UPLOAD_STATUS_PRIORITY.get(status, 0),
+        )
+        merged["upload_status"] = final_status
+        merged["upload_time"] = self._latest_nonempty(rows, "upload_time")
+        merged["upload_remote_path"] = self._first_nonempty(rows, "upload_remote_path") or str(main.get("upload_remote_path") or "")
+        merged["upload_retry_count"] = max(int(row.get("upload_retry_count") or 0) for row in rows)
+        merged["upload_error"] = self._first_nonempty(rows, "upload_error") if final_status == UPLOAD_FAILED else ""
+        if not str(merged.get("remark") or "").strip():
+            merged["remark"] = self._first_nonempty(rows, "remark")
+        merged["status"] = self._preferred_text(rows, "status", [ERROR_STATUS, NORMAL_STATUS, MISSING_STATUS])
+        merged["validation_status"] = self._preferred_text(rows, "validation_status", [ERROR_STATUS, NORMAL_STATUS, MISSING_STATUS, "未校验"])
+        if not str(merged.get("validation_error") or ""):
+            merged["validation_error"] = self._first_nonempty(rows, "validation_error")
+        if not str(merged.get("validation_warning") or ""):
+            merged["validation_warning"] = self._first_nonempty(rows, "validation_warning")
+        merged["validated_at"] = self._latest_nonempty(rows, "validated_at") or str(main.get("validated_at") or "")
+        merged["file_size_bytes"] = max(int(row.get("file_size_bytes") or 0) for row in rows)
+        if int(merged.get("file_size_bytes") or 0) > 0:
+            merged["file_size_text"] = human_file_size(int(merged.get("file_size_bytes") or 0))
+        merged["duration_seconds"] = max(float(row.get("duration_seconds") or 0.0) for row in rows)
+        if float(merged.get("duration_seconds") or 0.0) > 0:
+            merged["duration_text"] = format_duration(int(round(float(merged.get("duration_seconds") or 0.0))))
+        for field in ("width", "height"):
+            merged[field] = max(int(row.get(field) or 0) for row in rows)
+        if int(merged.get("width") or 0) > 0 and int(merged.get("height") or 0) > 0:
+            merged["resolution"] = f"{int(merged['width'])} x {int(merged['height'])}"
+        for field in ("codec", "fps", "record_type", "created_time", "recorded_at"):
+            if not str(merged.get(field) or "").strip():
+                merged[field] = self._first_nonempty(rows, field)
+        for field in (
+            "is_important",
+            "important_note",
+            "important_at",
+            "file_hash",
+            "hash_algorithm",
+            "hash_generated_at",
+            "hash_verify_status",
+            "hash_verify_at",
+        ):
+            if field not in columns:
+                continue
+            if field == "is_important":
+                merged[field] = max(int(row.get(field) or 0) for row in rows)
+            elif not str(merged.get(field) or "").strip():
+                merged[field] = self._first_nonempty(rows, field)
+        merged["normalized_file_path"] = normalize_file_path(merged.get("file_path"))
+        merged["updated_at"] = format_datetime()
+        return merged
+
+    @staticmethod
+    def _first_nonempty(rows: list[dict[str, Any]], field: str) -> str:
+        for row in rows:
+            value = str(row.get(field) or "").strip()
+            if value:
+                return value
+        return ""
+
+    @staticmethod
+    def _latest_nonempty(rows: list[dict[str, Any]], field: str) -> str:
+        values = [str(row.get(field) or "").strip() for row in rows if str(row.get(field) or "").strip()]
+        return max(values) if values else ""
+
+    @staticmethod
+    def _preferred_text(rows: list[dict[str, Any]], field: str, priority: list[str]) -> str:
+        values = [str(row.get(field) or "").strip() for row in rows if str(row.get(field) or "").strip()]
+        for item in priority:
+            if item in values:
+                return item
+        return values[0] if values else ""
+
     def query_upload_candidates(
         self,
         query_dir: str | Path | None = None,
@@ -514,6 +949,50 @@ class DatabaseManager:
                 self.logger.exception("查询网盘上传候选视频失败：dir=%s", query_dir or "<全部>")
             return []
 
+    def query_upload_history(
+        self,
+        upload_status: str | None = None,
+        keyword: str = "",
+        limit: int = 5000,
+    ) -> list[dict[str, Any]]:
+        conditions = ["1=1"]
+        params: list[Any] = []
+        status = str(upload_status or "").strip()
+        if status and status in VALID_UPLOAD_STATUSES:
+            conditions.append("COALESCE(upload_status, ?) = ?")
+            params.extend([UPLOAD_PENDING, status])
+        keyword_text = str(keyword or "").strip()
+        if keyword_text:
+            conditions.append("(order_no LIKE ? OR file_name LIKE ?)")
+            like_text = f"%{keyword_text}%"
+            params.extend([like_text, like_text])
+        params.append(max(1, min(int(limit or 5000), 5000)))
+        sql = f"""
+            SELECT *
+            FROM videos
+            WHERE {' AND '.join(conditions)}
+            ORDER BY
+                CASE WHEN upload_time IS NULL OR upload_time = '' THEN 1 ELSE 0 END ASC,
+                upload_time DESC,
+                COALESCE(NULLIF(updated_at, ''), NULLIF(recorded_at, ''), NULLIF(created_time, ''), printf('%012d', id)) DESC,
+                id DESC
+            LIMIT ?
+        """
+        try:
+            rows = [self._row_to_item(row) for row in self.get_connection().execute(sql, params).fetchall()]
+            if self.logger:
+                self.logger.info(
+                    "查询网盘同步记录成功：status=%s, keyword=%s, count=%s",
+                    status or "全部",
+                    keyword_text,
+                    len(rows),
+                )
+            return rows
+        except Exception:
+            if self.logger:
+                self.logger.exception("查询网盘同步记录失败：status=%s, keyword=%s", status or "全部", keyword_text)
+            return []
+
     def query_videos(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}
         started = time.perf_counter()
@@ -536,6 +1015,7 @@ class DatabaseManager:
         """
         try:
             rows = [self._row_to_item(row) for row in self.get_connection().execute(sql, params).fetchall()]
+            self._apply_query_scoped_duplicates(rows, filters)
             self.last_query_truncated = False
             elapsed_ms = (time.perf_counter() - started) * 1000
             if self.logger:
@@ -553,6 +1033,46 @@ class DatabaseManager:
             if self.logger:
                 self.logger.exception("查询视频列表失败：filters=%s", filters)
             return []
+
+    def _apply_query_scoped_duplicates(self, rows: list[dict[str, Any]], filters: dict[str, Any]) -> None:
+        query_dir = filters.get("query_dir")
+        if not query_dir or not rows:
+            return
+        order_numbers = sorted({str(row.get("order_no") or "").strip() for row in rows if str(row.get("order_no") or "").strip()})
+        if not order_numbers:
+            return
+        path_condition, path_params = self._directory_filter_clause(query_dir)
+        connection = self.get_connection()
+        scoped: dict[int, tuple[int, int]] = {}
+        for order_no in order_numbers:
+            scoped_rows = connection.execute(
+                f"""
+                SELECT id
+                FROM videos
+                WHERE order_no = ?
+                  AND status <> ?
+                  AND {path_condition}
+                ORDER BY
+                    COALESCE(NULLIF(recorded_at, ''), NULLIF(created_time, ''), printf('%012d', id)) ASC,
+                    file_name ASC,
+                    id ASC
+                """,
+                [order_no, MISSING_STATUS] + path_params,
+            ).fetchall()
+            count = len(scoped_rows)
+            for sequence, row in enumerate(scoped_rows, start=1):
+                scoped[int(row["id"])] = (sequence, count)
+        for row in rows:
+            record_id = int(row.get("id") or 0)
+            sequence, count = scoped.get(record_id, (0, 0))
+            if count > 1:
+                row["is_duplicate"] = True
+                row["duplicate_count"] = count
+                row["duplicate_sequence"] = sequence
+            else:
+                row["is_duplicate"] = False
+                row["duplicate_count"] = 1 if count == 1 else 0
+                row["duplicate_sequence"] = 1 if count == 1 else 0
 
     def count_videos(self, filters: dict[str, Any] | None = None) -> int:
         filters = filters or {}
@@ -589,7 +1109,7 @@ class DatabaseManager:
         for path in directory.rglob("*"):
             if not self._is_video_file(path):
                 continue
-            resolved = str(path.resolve())
+            resolved = normalize_file_path(path)
             scanned_paths.add(resolved)
             try:
                 self.upsert_video_file(path)
@@ -599,7 +1119,8 @@ class DatabaseManager:
 
         for row in self.query_videos({"query_dir": directory, "limit": 5000}):
             path = Path(str(row.get("file_path", "")))
-            if str(path.resolve()) not in scanned_paths and not path.exists():
+            row_path = str(row.get("normalized_file_path") or "") or normalize_file_path(path)
+            if row_path not in scanned_paths and not path.exists():
                 try:
                     self.mark_file_missing(path)
                 except Exception:
@@ -680,9 +1201,9 @@ class DatabaseManager:
         conditions = ["order_no = ?", "status <> ?"]
         params: list[Any] = [order_no, MISSING_STATUS]
         if video_dir:
-            prefix = str(Path(video_dir).resolve()).rstrip("\\/")
-            conditions.append("(file_path = ? OR file_path LIKE ?)")
-            params.extend([prefix, prefix + "\\%"])
+            path_condition, path_params = self._directory_filter_clause(video_dir)
+            conditions.append(path_condition)
+            params.extend(path_params)
         sql = f"SELECT COUNT(*) AS total FROM videos WHERE {' AND '.join(conditions)}"
         try:
             row = self.get_connection().execute(sql, params).fetchone()
@@ -697,9 +1218,9 @@ class DatabaseManager:
         conditions = ["status = ?"]
         params: list[Any] = [NORMAL_STATUS]
         if video_dir:
-            prefix = str(Path(video_dir).resolve()).rstrip("\\/")
-            conditions.append("(file_path = ? OR file_path LIKE ?)")
-            params.extend([prefix, prefix + "\\%"])
+            path_condition, path_params = self._directory_filter_clause(video_dir)
+            conditions.append(path_condition)
+            params.extend(path_params)
         limit = max(1, min(int(limit or 3), 10))
         params.append(limit)
         sql = f"""
@@ -727,9 +1248,10 @@ class DatabaseManager:
             return []
 
     def get_video_by_path(self, file_path: str | Path) -> dict[str, Any] | None:
+        path_clause, path_params = self._path_match_clause(file_path)
         row = self.get_connection().execute(
-            "SELECT * FROM videos WHERE file_path = ?",
-            (str(Path(file_path).resolve()),),
+            f"SELECT * FROM videos WHERE {path_clause} ORDER BY id ASC LIMIT 1",
+            path_params,
         ).fetchone()
         return self._row_to_item(row) if row else None
 
@@ -739,6 +1261,38 @@ class DatabaseManager:
             (int(record_id),),
         ).fetchone()
         return self._row_to_item(row) if row else None
+
+    def get_videos_by_order_no(self, order_no: str, query_dir: str | Path | None = None) -> list[dict[str, Any]]:
+        order_no = str(order_no or "").strip()
+        if not order_no:
+            return []
+        conditions = ["order_no = ?"]
+        params: list[Any] = [order_no]
+        if query_dir:
+            path_condition, path_params = self._directory_filter_clause(query_dir)
+            conditions.append(path_condition)
+            params.extend(path_params)
+        try:
+            with self._lock:
+                rows = self.get_connection().execute(
+                    f"""
+                    SELECT *
+                    FROM videos
+                    WHERE {' AND '.join(conditions)}
+                    ORDER BY
+                        COALESCE(NULLIF(recorded_at, ''), NULLIF(created_time, ''), printf('%012d', id)) DESC,
+                        id DESC
+                    """,
+                    params,
+                ).fetchall()
+            items = [self._row_to_item(row) for row in rows]
+            if query_dir:
+                self._apply_query_scoped_duplicates(items, {"query_dir": query_dir})
+            return items
+        except Exception:
+            if self.logger:
+                self.logger.exception("按单号查询视频记录失败：order_no=%s", order_no)
+            return []
 
     def close(self) -> None:
         if self._connection is not None:
@@ -751,9 +1305,9 @@ class DatabaseManager:
 
         query_dir = filters.get("query_dir")
         if query_dir:
-            prefix = str(Path(str(query_dir)).resolve()).rstrip("\\/")
-            conditions.append("(file_path = ? OR file_path LIKE ?)")
-            params.extend([prefix, prefix + "\\%"])
+            path_condition, path_params = self._directory_filter_clause(query_dir)
+            conditions.append(path_condition)
+            params.extend(path_params)
 
         keyword = str(filters.get("keyword") or "").strip()
         if keyword:
@@ -788,16 +1342,36 @@ class DatabaseManager:
 
         return conditions, params
 
+    def _directory_filter_clause(self, directory: str | Path) -> tuple[str, list[Any]]:
+        normalized_prefix = normalize_file_path(directory).rstrip("\\/")
+        resolved_prefix = str(Path(str(directory)).resolve()).rstrip("\\/")
+        separator = "\\" if os.name == "nt" else "/"
+        return (
+            "(normalized_file_path = ? OR normalized_file_path LIKE ? OR file_path = ? OR file_path LIKE ?)",
+            [
+                normalized_prefix,
+                normalized_prefix + separator + "%",
+                resolved_prefix,
+                resolved_prefix + "\\%",
+            ],
+        )
+
+    def _path_match_clause(self, file_path: str | Path) -> tuple[str, list[Any]]:
+        normalized = normalize_file_path(file_path)
+        resolved = str(Path(str(file_path)).resolve())
+        return "(normalized_file_path = ? OR file_path = ?)", [normalized, resolved]
+
     def _update_fields(self, file_path: str | Path, values: dict[str, Any], action_name: str) -> bool:
         if not values:
             return False
         path_text = str(Path(file_path).resolve())
+        path_clause, path_params = self._path_match_clause(file_path)
         assignments = ", ".join(f"{key} = ?" for key in values)
-        params = list(values.values()) + [path_text]
+        params = list(values.values()) + path_params
         with self._lock:
             connection = self.get_connection()
             try:
-                cursor = connection.execute(f"UPDATE videos SET {assignments} WHERE file_path = ?", params)
+                cursor = connection.execute(f"UPDATE videos SET {assignments} WHERE {path_clause}", params)
                 connection.commit()
                 if cursor.rowcount <= 0 and self.logger:
                     self.logger.warning("%s 失败：数据库记录不存在，path=%s", action_name, path_text)
@@ -935,6 +1509,10 @@ class DatabaseManager:
         item["validation_error"] = item.get("validation_error") or ""
         item["validation_warning"] = item.get("validation_warning") or ""
         item["validated_at"] = item.get("validated_at") or ""
+        item["normalized_file_path"] = item.get("normalized_file_path") or normalize_file_path(item.get("file_path"))
+        item["is_important"] = bool(item.get("is_important"))
+        item["important_note"] = item.get("important_note") or ""
+        item["important_at"] = item.get("important_at") or ""
         return item
 
     @staticmethod

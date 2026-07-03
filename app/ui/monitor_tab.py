@@ -1485,7 +1485,7 @@ class MonitorTab(QWidget):
                 return
 
             file_exists = path.exists()
-            confirm = self._confirm_recent_delete(order_no, path, file_exists)
+            confirm = self._confirm_recent_delete(order_no, path, file_exists, record)
             if not confirm:
                 self.logger.info(
                     "打包监控页最近录制取消删除：record_id=%s, order_no=%s, path=%s",
@@ -1578,27 +1578,49 @@ class MonitorTab(QWidget):
         except OSError:
             return str(temp_path) == str(path)
 
-    def _confirm_recent_delete(self, order_no: str, path: Path, file_exists: bool) -> bool:
+    def _confirm_recent_delete(self, order_no: str, path: Path, file_exists: bool, record: dict | None = None) -> bool:
+        is_important = self._is_important_record(record or {})
+        important_note = str((record or {}).get("important_note") or "").strip()
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
         box.setWindowTitle("删除最近录制" if file_exists else "删除最近录制记录")
         if file_exists:
-            box.setText("确定要删除这条录制视频吗？")
-            box.setInformativeText(
+            if is_important:
+                box.setText("该视频已标记为重要，可能涉及售后争议。\n确定仍要删除吗？")
+            else:
+                box.setText("确定要删除这条录制视频吗？")
+            detail = (
                 f"单号：{order_no}\n"
                 "删除后将从列表中移除，并删除本地视频文件。\n"
                 "如该视频已上传网盘，本次仅删除本地记录和本地文件，不会删除网盘文件。"
             )
-            confirm_text = "确认删除"
+            if important_note:
+                detail += f"\n重要原因：{important_note}"
+            box.setInformativeText(detail)
+            confirm_text = "仍然删除" if is_important else "确认删除"
         else:
-            box.setText("当前视频文件已不存在，是否从列表中移除此记录？")
-            box.setInformativeText(f"单号：{order_no}\n记录路径：{path}")
-            confirm_text = "移除记录"
+            if is_important:
+                box.setText("该视频已标记为重要，可能涉及售后争议。\n当前视频文件已不存在，确定仍要从列表中移除此记录吗？")
+            else:
+                box.setText("当前视频文件已不存在，是否从列表中移除此记录？")
+            detail = f"单号：{order_no}\n记录路径：{path}"
+            if important_note:
+                detail += f"\n重要原因：{important_note}"
+            box.setInformativeText(detail)
+            confirm_text = "仍然移除" if is_important else "移除记录"
         cancel_button = box.addButton("取消", QMessageBox.RejectRole)
         confirm_button = box.addButton(confirm_text, QMessageBox.AcceptRole)
         box.setDefaultButton(cancel_button)
         box.exec()
         return box.clickedButton() is confirm_button
+
+    @staticmethod
+    def _is_important_record(record: dict) -> bool:
+        return bool(
+            record.get("is_important")
+            or str(record.get("important_note") or "").strip()
+            or str(record.get("important_at") or "").strip()
+        )
 
     def _refresh_query_tab_after_recent_delete(self) -> None:
         parent = self.parent()

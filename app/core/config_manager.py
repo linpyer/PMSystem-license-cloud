@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +115,36 @@ DEFAULT_CONFIG: dict[str, Any] = {
 LEGACY_NO_ORDER_PROMPT = "请先输入或扫描" + "物流" + "单号"
 CURRENT_NO_ORDER_PROMPT = "请先输入或扫描单号"
 
+CONFIG_EXPORT_VERSION = 1
+CONFIG_EXPORT_APP = "PMSystem"
+NETDISK_EXPORT_SECRET_KEYS = {
+    "client_secret",
+    "access_token",
+    "refresh_token",
+    "token_expires_at",
+    "last_auth_time",
+}
+EXPORTABLE_CONFIG_KEYS = {
+    "video_save_dir",
+    "camera_index",
+    "camera_name",
+    "resolution",
+    "fps",
+    "video_format",
+    "recording_max_long_edge",
+    "current_record_type",
+    "auto_continue_recording",
+    "use_default_player",
+    "watermark_font_size",
+    "watermark_margin",
+    "scanner_guard",
+    "recording_quality",
+    "disk_space",
+    "preview",
+    "voice_prompt",
+    "netdisk_sync",
+}
+
 
 class ConfigManager:
     def __init__(self, base_dir: Path) -> None:
@@ -169,6 +202,226 @@ class ConfigManager:
         if path.is_absolute():
             return path
         return (self.base_dir / path).resolve()
+
+    def export_config(self, export_path: str | Path) -> dict[str, Any]:
+        export_path = Path(export_path)
+        if export_path.suffix.lower() != ".json":
+            export_path = export_path.with_suffix(".json")
+        export_path.parent.mkdir(parents=True, exist_ok=True)
+
+        settings = self._exportable_settings()
+        voice_result = self._export_voice_files(export_path, settings)
+        payload = {
+            "app": CONFIG_EXPORT_APP,
+            "config_version": CONFIG_EXPORT_VERSION,
+            "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "settings": settings,
+            "voice_files": {
+                "folder": voice_result["folder_name"],
+                "files": voice_result["files"],
+                "warnings": voice_result["warnings"],
+            },
+            "security_note": "网盘 Secret 和授权 Token 已排除，导入后需要重新授权。",
+        }
+
+        with export_path.open("w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False, indent=2)
+
+        return {
+            "path": str(export_path),
+            "voice_folder": voice_result["folder"],
+            "voice_files": voice_result["files"],
+            "warnings": voice_result["warnings"],
+            "excluded_sensitive_fields": sorted(NETDISK_EXPORT_SECRET_KEYS),
+        }
+
+    def import_config(self, import_path: str | Path) -> dict[str, Any]:
+        import_path = Path(import_path)
+        with import_path.open("r", encoding="utf-8") as file:
+            payload = json.load(file)
+
+        if not isinstance(payload, dict):
+            raise ValueError("配置文件格式不正确")
+        if payload.get("app") != CONFIG_EXPORT_APP:
+            raise ValueError("不是 PMSystem 配置文件")
+        config_version = int(payload.get("config_version") or 0)
+        if config_version < 1 or config_version > CONFIG_EXPORT_VERSION:
+            raise ValueError(f"不支持的配置版本：{config_version}")
+        settings = payload.get("settings")
+        if not isinstance(settings, dict):
+            raise ValueError("配置文件缺少 settings")
+
+        backup_path = self.backup_current_config()
+        old_config = deepcopy(self.config)
+        warnings: list[str] = []
+        try:
+            imported = self._sanitize_import_settings(settings)
+            voice_result = self._import_voice_files(import_path, payload, imported)
+            warnings.extend(voice_result["warnings"])
+
+            merged = deepcopy(self.config)
+            self._deep_update(merged, imported)
+            self._ensure_imported_video_dir(merged)
+            self.save(merged)
+        except Exception:
+            self.config = old_config
+            raise
+
+        return {
+            "backup_path": str(backup_path),
+            "config_version": config_version,
+            "imported_keys": sorted(imported.keys()),
+            "voice_files": voice_result["files"],
+            "warnings": warnings,
+            "requires_netdisk_reauth": "netdisk_sync" in imported,
+        }
+
+    def backup_current_config(self) -> Path:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = self.config_path.with_name(f"config_backup_{timestamp}.json")
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.config_path.exists():
+            shutil.copy2(self.config_path, backup_path)
+        else:
+            with backup_path.open("w", encoding="utf-8") as file:
+                json.dump(self.config, file, ensure_ascii=False, indent=2)
+        return backup_path
+
+    def _exportable_settings(self) -> dict[str, Any]:
+        settings = {
+            key: deepcopy(value)
+            for key, value in self.config.items()
+            if key in EXPORTABLE_CONFIG_KEYS
+        }
+        if "netdisk_sync" in settings and isinstance(settings["netdisk_sync"], dict):
+            settings["netdisk_sync"] = self._sanitize_netdisk_export(settings["netdisk_sync"])
+        if "voice_prompt" in settings and isinstance(settings["voice_prompt"], dict):
+            voice_config = settings["voice_prompt"]
+            voice_config["custom_voice_dir"] = DEFAULT_CONFIG["voice_prompt"]["custom_voice_dir"]
+            custom_files = voice_config.get("custom_files")
+            if isinstance(custom_files, dict):
+                voice_config["custom_files"] = {key: "" for key in custom_files}
+        return settings
+
+    def _export_voice_files(self, export_path: Path, settings: dict[str, Any]) -> dict[str, Any]:
+        source_voice = self.config.get("voice_prompt", {})
+        source_files = source_voice.get("custom_files", {}) if isinstance(source_voice, dict) else {}
+        source_files = source_files if isinstance(source_files, dict) else {}
+        voice_folder = export_path.with_name(f"{export_path.stem}_voice")
+        copied: dict[str, str] = {}
+        warnings: list[str] = []
+
+        for event_key, path_text in source_files.items():
+            source = self._config_path_to_path(str(path_text or ""))
+            if source is None:
+                continue
+            if not source.exists() or not source.is_file():
+                warnings.append(f"{event_key}: 自定义语音文件不存在，已跳过")
+                continue
+            voice_folder.mkdir(parents=True, exist_ok=True)
+            target_name = f"{event_key}{source.suffix.lower()}"
+            target = voice_folder / target_name
+            shutil.copy2(source, target)
+            copied[str(event_key)] = target_name
+
+        voice_settings = settings.get("voice_prompt")
+        if isinstance(voice_settings, dict):
+            existing = voice_settings.get("custom_files", {})
+            if isinstance(existing, dict):
+                voice_settings["custom_files"] = {key: copied.get(str(key), "") for key in existing}
+        return {
+            "folder": str(voice_folder) if copied else "",
+            "folder_name": voice_folder.name if copied else "",
+            "files": copied,
+            "warnings": warnings,
+        }
+
+    def _import_voice_files(self, import_path: Path, payload: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+        voice_settings = settings.get("voice_prompt")
+        if not isinstance(voice_settings, dict):
+            return {"files": {}, "warnings": []}
+
+        custom_files = voice_settings.get("custom_files")
+        if not isinstance(custom_files, dict):
+            return {"files": {}, "warnings": []}
+
+        voice_meta = payload.get("voice_files", {})
+        folder_name = ""
+        if isinstance(voice_meta, dict):
+            folder_name = str(voice_meta.get("folder") or "")
+        voice_folder = import_path.with_name(folder_name) if folder_name else import_path.with_name(f"{import_path.stem}_voice")
+        target_dir = self._config_path_to_path(
+            str(voice_settings.get("custom_voice_dir") or DEFAULT_CONFIG["voice_prompt"]["custom_voice_dir"])
+        ) or self.resolve_path("voice")
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        copied: dict[str, str] = {}
+        warnings: list[str] = []
+        for event_key, file_name in list(custom_files.items()):
+            file_name = Path(str(file_name or "")).name
+            if not file_name:
+                custom_files[event_key] = ""
+                continue
+            source = voice_folder / file_name
+            if not source.exists() or not source.is_file():
+                custom_files[event_key] = ""
+                warnings.append(f"{event_key}: 导入包中未找到语音文件 {file_name}")
+                continue
+            target = target_dir / file_name
+            shutil.copy2(source, target)
+            custom_files[event_key] = str(target)
+            copied[str(event_key)] = str(target)
+        voice_settings["custom_voice_dir"] = str(target_dir)
+        voice_settings["custom_files"] = custom_files
+        return {"files": copied, "warnings": warnings}
+
+    def _sanitize_import_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
+        imported = {
+            key: deepcopy(value)
+            for key, value in settings.items()
+            if key in EXPORTABLE_CONFIG_KEYS
+        }
+        if "netdisk_sync" in imported and isinstance(imported["netdisk_sync"], dict):
+            imported["netdisk_sync"] = self._sanitize_netdisk_import(imported["netdisk_sync"])
+        if "voice_prompt" in imported and isinstance(imported["voice_prompt"], dict):
+            imported["voice_prompt"] = self._merge_defaults(imported["voice_prompt"], DEFAULT_CONFIG["voice_prompt"])
+        return imported
+
+    def _sanitize_netdisk_export(self, config: dict[str, Any]) -> dict[str, Any]:
+        sanitized = deepcopy(config)
+        for key in NETDISK_EXPORT_SECRET_KEYS:
+            sanitized[key] = ""
+        return sanitized
+
+    def _sanitize_netdisk_import(self, config: dict[str, Any]) -> dict[str, Any]:
+        sanitized = self._merge_defaults(config, DEFAULT_CONFIG["netdisk_sync"])
+        for key in NETDISK_EXPORT_SECRET_KEYS:
+            sanitized[key] = ""
+        return sanitized
+
+    def _ensure_imported_video_dir(self, config: dict[str, Any]) -> None:
+        if "video_save_dir" not in config:
+            return
+        video_dir = self.resolve_path(str(config.get("video_save_dir") or "videos"))
+        video_dir.mkdir(parents=True, exist_ok=True)
+
+    def _config_path_to_path(self, value: str) -> Path | None:
+        value = str(value or "").strip()
+        if not value:
+            return None
+        expanded = os.path.expandvars(value)
+        path = Path(expanded).expanduser()
+        if path.is_absolute():
+            return path
+        return (self.base_dir / path).resolve()
+
+    @staticmethod
+    def _deep_update(target: dict[str, Any], values: dict[str, Any]) -> None:
+        for key, value in values.items():
+            if isinstance(value, dict) and isinstance(target.get(key), dict):
+                ConfigManager._deep_update(target[key], value)
+            else:
+                target[key] = value
 
     def _normalize_legacy_display_text(self) -> bool:
         voice_config = self.config.get("voice_prompt")

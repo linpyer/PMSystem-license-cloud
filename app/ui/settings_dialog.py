@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import shutil
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -108,6 +109,7 @@ class SettingsDialog(QDialog):
         self.logger.info("基础配置页签初始化")
         self.logger.info("语音提示页签初始化")
         self.logger.info("网盘同步页签初始化")
+        self.logger.info("配置管理页签初始化")
         self.logger.info("更新日志页签初始化")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
@@ -123,8 +125,72 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_basic_tab(), "基础配置")
         self.tabs.addTab(self._build_voice_tab(), "语音提示")
         self.tabs.addTab(self._build_netdisk_tab(), "网盘同步")
+        self.tabs.addTab(self._build_config_management_tab(), "配置管理")
         self.tabs.addTab(self._build_changelog_tab(), "更新日志")
         root_layout.addWidget(self.tabs, 1)
+
+    def _build_config_management_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(14)
+
+        card = QFrame()
+        card.setObjectName("configManagementCard")
+        card.setStyleSheet(
+            """
+            QFrame#configManagementCard {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+            }
+            QLabel#configManagementTitle {
+                color: #0f172a;
+                font-size: 15px;
+                font-weight: 700;
+            }
+            QLabel#configManagementHint {
+                color: #475569;
+                line-height: 1.45;
+            }
+            """
+        )
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 14, 16, 14)
+        card_layout.setSpacing(12)
+
+        title = QLabel("配置导出 / 导入")
+        title.setObjectName("configManagementTitle")
+        card_layout.addWidget(title)
+
+        hint = QLabel(
+            "用于换电脑或重装软件时迁移主要配置。导出文件不会包含数据库、视频、日志，也不会包含网盘 Secret 和授权 Token；导入后如需网盘同步，请重新授权。"
+        )
+        hint.setObjectName("configManagementHint")
+        hint.setWordWrap(True)
+        card_layout.addWidget(hint)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+        self.export_config_button = QPushButton("导出配置")
+        self.export_config_button.setObjectName("primaryButton")
+        self.export_config_button.clicked.connect(self._export_config)
+        self.import_config_button = QPushButton("导入配置")
+        self.import_config_button.setObjectName("secondaryButton")
+        self.import_config_button.clicked.connect(self._import_config)
+        button_row.addWidget(self.export_config_button)
+        button_row.addWidget(self.import_config_button)
+        button_row.addStretch(1)
+        card_layout.addLayout(button_row)
+
+        note = QLabel("自定义语音包会随配置导出到同名 _voice 文件夹；导入时会复制到本机用户数据目录。")
+        note.setObjectName("configManagementHint")
+        note.setWordWrap(True)
+        card_layout.addWidget(note)
+
+        layout.addWidget(card)
+        layout.addStretch(1)
+        return widget
 
     def _build_changelog_tab(self) -> QWidget:
         widget = QWidget()
@@ -659,6 +725,98 @@ class SettingsDialog(QDialog):
         action_layout.addStretch(1)
         layout.addLayout(action_layout)
         return widget
+
+    def _export_config(self) -> None:
+        default_name = f"PMSystem_Config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出配置",
+            str(Path.home() / default_name),
+            "JSON 配置文件 (*.json)",
+        )
+        if not selected:
+            return
+        export_path = Path(selected)
+        if export_path.suffix.lower() != ".json":
+            export_path = export_path.with_suffix(".json")
+
+        try:
+            result = self.config_manager.export_config(export_path)
+            voice_count = len(result.get("voice_files", {}) or {})
+            warnings = result.get("warnings", []) or []
+            self.logger.info(
+                "配置导出成功：path=%s, voice_files=%s, excluded=%s, warnings=%s",
+                result.get("path"),
+                voice_count,
+                result.get("excluded_sensitive_fields"),
+                len(warnings),
+            )
+            detail = "出于安全考虑，已排除网盘 Secret 和授权 Token，导入后需要重新授权。"
+            if voice_count:
+                detail += f"\n已导出自定义语音文件 {voice_count} 个。"
+            if warnings:
+                detail += "\n部分语音文件未导出，请查看日志。"
+            self._set_status("配置已导出", "success")
+            QMessageBox.information(self, "导出配置", f"配置已导出\n\n{detail}")
+        except Exception as exc:
+            self.logger.exception("配置导出失败：path=%s", export_path)
+            self._set_status(f"配置导出失败：{exc}", "error")
+
+    def _import_config(self) -> None:
+        if self.is_recording_callback():
+            self._set_status("录制中不能导入配置，请结束录制后再导入。", "warning")
+            return
+
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "导入配置",
+            "",
+            "JSON 配置文件 (*.json)",
+        )
+        if not selected:
+            return
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("导入配置")
+        box.setText("导入配置将覆盖当前部分设置，是否继续？")
+        box.setInformativeText("导入前会自动备份当前 config.json。网盘授权 Token 和 Secret 不会导入，导入后需要重新授权。")
+        cancel_button = box.addButton("取消", QMessageBox.RejectRole)
+        confirm_button = box.addButton("继续导入", QMessageBox.AcceptRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+        if box.clickedButton() is not confirm_button:
+            return
+
+        import_path = Path(selected)
+        try:
+            result = self.config_manager.import_config(import_path)
+            self.voice_prompt.update_config(self.config_manager.config)
+            self._load_basic_config_to_ui()
+            self._load_voice_config_to_ui()
+            self._load_netdisk_config_to_ui()
+            self.config_saved.emit(self.config_manager.config)
+            self.basic_config_saved.emit(self.config_manager.config)
+            warnings = result.get("warnings", []) or []
+            self.logger.info(
+                "配置导入成功：path=%s, config_version=%s, keys=%s, backup=%s, voice_files=%s, warnings=%s",
+                import_path,
+                result.get("config_version"),
+                result.get("imported_keys"),
+                result.get("backup_path"),
+                len(result.get("voice_files", {}) or {}),
+                len(warnings),
+            )
+            detail = f"已备份原配置：{result.get('backup_path')}"
+            if result.get("requires_netdisk_reauth"):
+                detail += "\n网盘授权信息未导入，请重新授权。"
+            if warnings:
+                detail += "\n部分自定义语音文件未恢复，请查看日志。"
+            self._set_status("配置已导入，部分设置重启后生效", "success")
+            QMessageBox.information(self, "导入配置", f"配置已导入，部分设置重启后生效。\n\n{detail}")
+        except Exception as exc:
+            self.logger.exception("配置导入失败：path=%s", import_path)
+            self._set_status(f"配置导入失败：{exc}", "error")
 
     def refresh_state(self, is_recording: bool | None = None) -> None:
         self._load_basic_config_to_ui()

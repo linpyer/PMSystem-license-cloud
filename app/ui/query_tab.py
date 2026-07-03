@@ -12,9 +12,11 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QCalendarWidget,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -86,6 +88,17 @@ class ClickableDateEdit(QPushButton):
         self._calendar.setFocus()
 
 
+class ClickableLabel(QLabel):
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class FlowLayout(QLayout):
     def __init__(self, parent: QWidget | None = None, h_spacing: int = 5, v_spacing: int = 4) -> None:
         super().__init__(parent)
@@ -153,6 +166,45 @@ class FlowLayout(QLayout):
         return y + line_height - rect.y()
 
 
+class ImportantMarkDialog(QDialog):
+    def __init__(self, order_no: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("标记重要视频")
+        self.resize(420, 260)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 14)
+        layout.setSpacing(12)
+
+        title = QLabel("该视频将被标记为重要，删除时会额外提醒。")
+        title.setWordWrap(True)
+        title.setStyleSheet("font-weight: 700; color: #0f172a;")
+        layout.addWidget(title)
+
+        order_label = QLabel(f"单号：{order_no or '-'}")
+        order_label.setStyleSheet("color: #475569;")
+        layout.addWidget(order_label)
+
+        self.note_edit = QTextEdit()
+        self.note_edit.setPlaceholderText("例如：售后争议、客户反馈、待核实")
+        self.note_edit.setMaximumHeight(110)
+        layout.addWidget(self.note_edit)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel_button = QPushButton("取消")
+        cancel_button.setObjectName("secondaryButton")
+        cancel_button.clicked.connect(self.reject)
+        confirm_button = QPushButton("确认标记")
+        confirm_button.setObjectName("primaryButton")
+        confirm_button.clicked.connect(self.accept)
+        buttons.addWidget(cancel_button)
+        buttons.addWidget(confirm_button)
+        layout.addLayout(buttons)
+
+    def note(self) -> str:
+        return self.note_edit.toPlainText().strip()
+
+
 class VideoQueryLoadWorker(QThread):
     loaded = Signal(int, object)
     failed = Signal(int, str)
@@ -209,6 +261,638 @@ class VideoQueryLoadWorker(QThread):
         except Exception as exc:
             self.logger.exception("视频查询后台加载失败：dir=%s, rebuild=%s", self.video_dir, self.rebuild)
             self.failed.emit(self.request_id, str(exc))
+
+
+class RecordDetailDialog(QDialog):
+    def __init__(self, record: dict[str, Any], duplicates: list[dict[str, Any]], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.record = dict(record)
+        self.duplicates = [dict(item) for item in duplicates]
+        self.setWindowTitle("单号详情")
+        self.resize(820, 620)
+        self.setMinimumSize(720, 520)
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 14)
+        layout.setSpacing(14)
+
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(10)
+        order_title = QLabel(self._field("order_no", "-"))
+        order_title.setObjectName("detailOrderTitle")
+        order_title.setStyleSheet("font-size: 22px; font-weight: 700; color: #0f172a;")
+        header_layout.addWidget(order_title, 1)
+        file_status = self._field("status", NORMAL_STATUS)
+        header_layout.addWidget(self._status_badge(file_status, self._file_status_color(file_status)))
+        upload_status = self._field("upload_status", UPLOAD_PENDING)
+        header_layout.addWidget(self._status_badge(upload_status, self._upload_status_color(upload_status)))
+        layout.addLayout(header_layout)
+
+        info_grid = QGridLayout()
+        info_grid.setHorizontalSpacing(16)
+        info_grid.setVerticalSpacing(10)
+        row = 0
+        row = self._add_text_row(info_grid, row, "单号", self._field("order_no", "-"))
+        row = self._add_text_row(info_grid, row, "录制时间", self._recording_time(self.record))
+        row = self._add_text_row(info_grid, row, "类型", self._field("record_type", "发货"))
+        row = self._add_text_row(info_grid, row, "视频大小", self._field("file_size_text", "-"))
+        row = self._add_text_row(info_grid, row, "视频时长", self._field("duration_text", "-"))
+        row = self._add_text_row(info_grid, row, "文件状态", file_status)
+        row = self._add_text_row(info_grid, row, "上传状态", upload_status)
+        important = bool(self.record.get("is_important"))
+        row = self._add_text_row(info_grid, row, "重要标记", "是" if important else "否")
+        if important:
+            row = self._add_text_row(info_grid, row, "重要原因", self._field("important_note", "暂无"))
+            row = self._add_text_row(info_grid, row, "标记时间", self._field("important_at", "暂无"))
+        upload_error = self._field("upload_error", "")
+        if upload_error:
+            row = self._add_text_row(info_grid, row, "失败原因", upload_error)
+        row = self._add_copy_row(info_grid, row, "本地路径", self._field("file_path", "暂无"))
+        row = self._add_copy_row(info_grid, row, "网盘路径", self._field("upload_remote_path", "暂无"))
+        layout.addLayout(info_grid)
+
+        remark_label = QLabel("备注")
+        remark_label.setObjectName("detailSectionTitle")
+        remark_label.setStyleSheet("font-weight: 700; color: #334155;")
+        layout.addWidget(remark_label)
+        remark = self._field("remark", "暂无备注")
+        remark_box = QTextEdit()
+        remark_box.setReadOnly(True)
+        remark_box.setPlainText(remark)
+        remark_box.setMinimumHeight(70)
+        remark_box.setMaximumHeight(120)
+        layout.addWidget(remark_box)
+
+        duplicate_label = QLabel("重复录制记录")
+        duplicate_label.setObjectName("detailSectionTitle")
+        duplicate_label.setStyleSheet("font-weight: 700; color: #334155;")
+        layout.addWidget(duplicate_label)
+        duplicate_table = QTableWidget(0, 7)
+        duplicate_table.setHorizontalHeaderLabels(["录制时间", "类型", "视频大小", "视频时长", "文件状态", "上传状态", "标记"])
+        duplicate_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        duplicate_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        duplicate_table.verticalHeader().setVisible(False)
+        duplicate_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        duplicate_table.setAlternatingRowColors(True)
+        current_id = self._record_id(self.record)
+        for row_index, item in enumerate(self.duplicates or [self.record]):
+            duplicate_table.insertRow(row_index)
+            values = [
+                self._recording_time(item),
+                self._text(item.get("record_type"), "发货"),
+                self._text(item.get("file_size_text"), "-"),
+                self._text(item.get("duration_text"), "-"),
+                self._text(item.get("status"), NORMAL_STATUS),
+                self._text(item.get("upload_status"), UPLOAD_PENDING),
+                "当前记录" if self._record_id(item) == current_id else "",
+            ]
+            for column, value in enumerate(values):
+                cell = QTableWidgetItem(value)
+                cell.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                cell.setTextAlignment(Qt.AlignCenter)
+                if column == 4:
+                    cell.setForeground(QColor(self._file_status_color(value)))
+                elif column == 5:
+                    cell.setForeground(QColor(self._upload_status_color(value)))
+                elif column == 6 and value:
+                    cell.setForeground(QColor("#0f766e"))
+                duplicate_table.setItem(row_index, column, cell)
+        duplicate_table.setMinimumHeight(160)
+        layout.addWidget(duplicate_table, 1)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        close_button = QPushButton("关闭")
+        close_button.setObjectName("secondaryButton")
+        close_button.clicked.connect(self.accept)
+        footer.addWidget(close_button)
+        layout.addLayout(footer)
+
+    def _add_text_row(self, grid: QGridLayout, row: int, label: str, value: str) -> int:
+        name = QLabel(f"{label}：")
+        name.setStyleSheet("color: #64748b;")
+        value_label = QLabel(value)
+        value_label.setWordWrap(True)
+        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        value_label.setStyleSheet("color: #0f172a;")
+        grid.addWidget(name, row, 0, Qt.AlignTop)
+        grid.addWidget(value_label, row, 1)
+        return row + 1
+
+    def _add_copy_row(self, grid: QGridLayout, row: int, label: str, value: str) -> int:
+        name = QLabel(f"{label}：")
+        name.setStyleSheet("color: #64748b;")
+        line = QLineEdit(value)
+        line.setReadOnly(True)
+        button = QPushButton("复制")
+        button.setObjectName("secondaryButton")
+        button.setFixedWidth(58)
+        button.clicked.connect(lambda _checked=False, text=value: QApplication.clipboard().setText(text))
+        row_layout = QHBoxLayout()
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        row_layout.addWidget(line, 1)
+        row_layout.addWidget(button)
+        grid.addWidget(name, row, 0, Qt.AlignTop)
+        grid.addLayout(row_layout, row, 1)
+        return row + 1
+
+    def _status_badge(self, text: str, color: str) -> QLabel:
+        badge = QLabel(text)
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setStyleSheet(
+            f"color: {color}; border: 1px solid {color}; border-radius: 10px; "
+            "padding: 2px 10px; font-weight: 700; background: #ffffff;"
+        )
+        return badge
+
+    def _field(self, key: str, default: str = "") -> str:
+        return self._text(self.record.get(key), default)
+
+    @staticmethod
+    def _text(value: Any, default: str = "") -> str:
+        text = str(value or "").strip()
+        return text if text else default
+
+    @staticmethod
+    def _record_id(entry: dict[str, Any]) -> int:
+        try:
+            return int(entry.get("id") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def _recording_time(cls, entry: dict[str, Any]) -> str:
+        return cls._text(entry.get("recorded_at") or entry.get("created_time"), "-")
+
+    @staticmethod
+    def _file_status_color(status: str) -> str:
+        if status == NORMAL_STATUS:
+            return "#047857"
+        if status == MISSING_STATUS:
+            return "#dc2626"
+        return "#dc2626"
+
+    @staticmethod
+    def _upload_status_color(status: str) -> str:
+        if status == UPLOAD_DONE:
+            return "#047857"
+        if status == UPLOAD_FAILED:
+            return "#dc2626"
+        if status == UPLOAD_UPLOADING:
+            return "#2563eb"
+        return "#d97706"
+
+
+class DuplicateRecordsDialog(QDialog):
+    def __init__(
+        self,
+        database: DatabaseManager,
+        order_no: str,
+        query_dir: Path,
+        current_record_id: int,
+        notice_callback,
+        changed_callback,
+        logger: logging.Logger,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.database = database
+        self.order_no = str(order_no or "").strip()
+        self.query_dir = Path(query_dir)
+        self.current_record_id = int(current_record_id or 0)
+        self.notice_callback = notice_callback
+        self.changed_callback = changed_callback
+        self.logger = logger
+        self.records: list[dict[str, Any]] = []
+        self.checkboxes: dict[int, QCheckBox] = {}
+        self._all_checked = False
+        self.setWindowTitle("重复单号记录")
+        self.resize(980, 640)
+        self.setMinimumSize(900, 560)
+        self._build_ui()
+        self.reload_records()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 14)
+        layout.setSpacing(12)
+
+        title = QLabel("重复单号记录")
+        title.setStyleSheet("font-size: 20px; font-weight: 700; color: #0f172a;")
+        layout.addWidget(title)
+
+        self.subtitle_label = QLabel("")
+        self.subtitle_label.setStyleSheet("color: #475569; font-size: 13px;")
+        layout.addWidget(self.subtitle_label)
+
+        self.table = QTableWidget(0, 10)
+        self.table.setHorizontalHeaderLabels(["☐", "序号", "录制时间", "类型", "视频大小", "视频时长", "文件状态", "上传状态", "备注", "操作"])
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        header = self.table.horizontalHeader()
+        header.sectionClicked.connect(self._on_header_clicked)
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.Fixed)
+        header.setSectionResizeMode(7, QHeaderView.Fixed)
+        header.setSectionResizeMode(8, QHeaderView.Stretch)
+        header.setSectionResizeMode(9, QHeaderView.Fixed)
+        self.table.setColumnWidth(0, 46)
+        self.table.setColumnWidth(1, 96)
+        self.table.setColumnWidth(3, 70)
+        self.table.setColumnWidth(6, 92)
+        self.table.setColumnWidth(7, 92)
+        self.table.setColumnWidth(9, 76)
+        layout.addWidget(self.table, 1)
+
+        footer = QHBoxLayout()
+        self.selected_label = QLabel("已选择 0 条")
+        self.selected_label.setStyleSheet("color: #64748b;")
+        footer.addWidget(self.selected_label)
+        footer.addStretch(1)
+        self.batch_delete_button = QPushButton("批量删除")
+        self.batch_delete_button.setObjectName("tableDangerButton")
+        self.batch_delete_button.setEnabled(False)
+        self.batch_delete_button.clicked.connect(self._delete_selected_records)
+        footer.addWidget(self.batch_delete_button)
+        close_button = QPushButton("关闭")
+        close_button.setObjectName("secondaryButton")
+        close_button.clicked.connect(self.accept)
+        footer.addWidget(close_button)
+        layout.addLayout(footer)
+
+    def reload_records(self) -> None:
+        self.records = self.database.get_videos_by_order_no(self.order_no, self.query_dir)
+        self.subtitle_label.setText(f"单号：{self.order_no or '-'}    共 {len(self.records)} 条录制记录")
+        self.checkboxes.clear()
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(0)
+        try:
+            for row_index, record in enumerate(self.records):
+                self.table.insertRow(row_index)
+                self._populate_row(row_index, record)
+        finally:
+            self.table.setUpdatesEnabled(True)
+        self._all_checked = False
+        self.table.horizontalHeaderItem(0).setText("☐")
+        self._update_selected_count()
+
+    def _populate_row(self, row: int, record: dict[str, Any]) -> None:
+        record_id = self._record_id(record)
+        checkbox = QCheckBox()
+        checkbox.setCursor(Qt.PointingHandCursor)
+        checkbox.stateChanged.connect(self._update_selected_count)
+        self.checkboxes[record_id] = checkbox
+        checkbox_container = QWidget()
+        checkbox_layout = QHBoxLayout(checkbox_container)
+        checkbox_layout.setContentsMargins(0, 0, 0, 0)
+        checkbox_layout.setAlignment(Qt.AlignCenter)
+        checkbox_layout.addWidget(checkbox)
+        self.table.setCellWidget(row, 0, checkbox_container)
+
+        sequence = int(record.get("duplicate_sequence") or row + 1)
+        sequence_text = f"第 {sequence} 次"
+        if record_id == self.current_record_id:
+            sequence_text += "（当前）"
+        values = [
+            sequence_text,
+            self._recording_time(record),
+            self._text(record.get("record_type"), "发货"),
+            self._text(record.get("file_size_text"), "-"),
+            self._text(record.get("duration_text"), "-"),
+            self._text(record.get("status"), NORMAL_STATUS),
+            self._text(record.get("upload_status"), UPLOAD_PENDING),
+            self._text(record.get("remark"), "点击添加备注"),
+        ]
+        for column_offset, value in enumerate(values, start=1):
+            cell = QTableWidgetItem(value)
+            cell.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            cell.setTextAlignment(Qt.AlignCenter if column_offset != 8 else Qt.AlignLeft | Qt.AlignVCenter)
+            if column_offset == 1 and record_id == self.current_record_id:
+                cell.setForeground(QColor("#0f766e"))
+            elif column_offset == 6:
+                cell.setForeground(QColor(RecordDetailDialog._file_status_color(value)))
+            elif column_offset == 7:
+                cell.setForeground(QColor(RecordDetailDialog._upload_status_color(value)))
+                upload_error = str(record.get("upload_error") or "").strip()
+                if upload_error:
+                    cell.setToolTip(upload_error)
+            elif column_offset == 8:
+                remark = str(record.get("remark") or "").strip()
+                if remark:
+                    cell.setToolTip(remark)
+            self.table.setItem(row, column_offset, cell)
+
+        delete_button = QPushButton("删除")
+        delete_button.setObjectName("tableDangerButton")
+        delete_button.setFixedSize(50, 26)
+        delete_button.clicked.connect(lambda _checked=False, rid=record_id: self._delete_single_record(rid))
+        delete_container = QWidget()
+        delete_layout = QHBoxLayout(delete_container)
+        delete_layout.setContentsMargins(0, 0, 0, 0)
+        delete_layout.setAlignment(Qt.AlignCenter)
+        delete_layout.addWidget(delete_button)
+        self.table.setCellWidget(row, 9, delete_container)
+
+    def _on_header_clicked(self, section: int) -> None:
+        if section != 0:
+            return
+        self._all_checked = not self._all_checked
+        for checkbox in self.checkboxes.values():
+            checkbox.setChecked(self._all_checked)
+        self.table.horizontalHeaderItem(0).setText("☑" if self._all_checked else "☐")
+        self._update_selected_count()
+
+    def _update_selected_count(self) -> None:
+        selected = len(self._selected_records())
+        self.selected_label.setText(f"已选择 {selected} 条")
+        self.batch_delete_button.setEnabled(selected > 0)
+        if selected != len(self.checkboxes):
+            self._all_checked = False
+            if self.table.horizontalHeaderItem(0):
+                self.table.horizontalHeaderItem(0).setText("☐")
+
+    def _selected_records(self) -> list[dict[str, Any]]:
+        selected_ids = {record_id for record_id, checkbox in self.checkboxes.items() if checkbox.isChecked()}
+        return [record for record in self.records if self._record_id(record) in selected_ids]
+
+    def _delete_single_record(self, record_id: int) -> None:
+        record = self._record_by_id(record_id)
+        if not record:
+            self._notice("记录不存在，列表已刷新", "warning")
+            self.reload_records()
+            return
+        if not self._confirm_delete([record], batch=False):
+            return
+        success, failed = self._delete_records([record])
+        self._after_delete(success, failed)
+
+    def _delete_selected_records(self) -> None:
+        records = self._selected_records()
+        if not records:
+            self._notice("请先选择要删除的记录", "warning")
+            return
+        if not self._confirm_delete(records, batch=True):
+            return
+        success, failed = self._delete_records(records)
+        self._after_delete(success, failed)
+
+    def _confirm_delete(self, records: list[dict[str, Any]], batch: bool) -> bool:
+        if not records:
+            return False
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        if batch:
+            box.setWindowTitle("批量删除重复录制记录")
+            box.setText(f"确定要删除选中的 {len(records)} 条录制记录吗？")
+            detail = "删除后将删除本地视频文件和数据库记录。\n如其中部分视频已上传网盘，本次不会删除网盘文件。"
+            missing_count = sum(1 for record in records if not Path(str(record.get("file_path") or "")).exists())
+            if missing_count:
+                detail += f"\n其中 {missing_count} 条本地视频文件已不存在，确认后仅移除数据库记录。"
+        else:
+            record = records[0]
+            box.setWindowTitle("删除重复录制记录")
+            box.setText("确定要删除这条录制记录吗？")
+            detail = (
+                f"单号：{self.order_no}\n"
+                f"录制时间：{self._recording_time(record)}\n"
+                "删除后将删除本地视频文件和数据库记录。"
+            )
+            if str(record.get("upload_status") or "") == UPLOAD_DONE:
+                detail += "\n如该视频已上传网盘，本次仅删除本地文件和本地记录，不会删除网盘文件。"
+            if not Path(str(record.get("file_path") or "")).exists():
+                detail += "\n当前视频文件已不存在，确认后仅移除数据库记录。"
+        important_count = sum(1 for record in records if self._is_important(record))
+        if important_count:
+            if batch:
+                detail += f"\n选中记录中包含 {important_count} 条重要视频，请谨慎删除。"
+            else:
+                detail += "\n该视频已标记为重要，可能涉及售后争议，是否仍要删除？"
+        box.setInformativeText(detail)
+        confirm_button = box.addButton("仍然删除" if important_count else "确认删除", QMessageBox.AcceptRole)
+        cancel_button = box.addButton("取消", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+        return box.clickedButton() is confirm_button
+
+    def _delete_records(self, records: list[dict[str, Any]]) -> tuple[int, list[str]]:
+        success = 0
+        failed: list[str] = []
+        for record in records:
+            record_id = self._record_id(record)
+            file_path = Path(str(record.get("file_path") or ""))
+            try:
+                file_exists_before = file_path.exists()
+                if file_exists_before:
+                    file_path.unlink()
+                deleted = self.database.delete_video_by_id(record_id)
+                if not deleted:
+                    failed.append(f"{record_id}: 数据库记录不存在")
+                    continue
+                success += 1
+                self.logger.info(
+                    "重复单号聚合弹窗删除记录：id=%s, order_no=%s, file_exists_before=%s, path=%s",
+                    record_id,
+                    self.order_no,
+                    file_exists_before,
+                    file_path,
+                )
+            except PermissionError as exc:
+                failed.append(f"{record_id}: 权限不足或文件被占用")
+                self.logger.exception("重复单号记录删除失败：权限不足，id=%s, path=%s", record_id, file_path)
+            except OSError as exc:
+                failed.append(f"{record_id}: {exc}")
+                self.logger.exception("重复单号记录删除失败：id=%s, path=%s", record_id, file_path)
+            except Exception as exc:
+                failed.append(f"{record_id}: {exc}")
+                self.logger.exception("重复单号记录删除未知异常：id=%s, path=%s", record_id, file_path)
+        try:
+            self.database.recalculate_duplicate_sequences(self.order_no)
+        except Exception:
+            self.logger.exception("删除重复单号记录后重算序号失败：order_no=%s", self.order_no)
+        return success, failed
+
+    def _after_delete(self, success: int, failed: list[str]) -> None:
+        self.reload_records()
+        self.changed_callback()
+        if success and not failed:
+            self._notice("视频已删除" if success == 1 else f"删除完成：成功 {success} 条", "success")
+        elif success:
+            self._notice(f"删除完成：成功 {success} 条，失败 {len(failed)} 条", "warning")
+        else:
+            self._notice(f"删除失败：{failed[0] if failed else '未知错误'}", "error")
+
+    def _record_by_id(self, record_id: int) -> dict[str, Any] | None:
+        for record in self.records:
+            if self._record_id(record) == int(record_id or 0):
+                return record
+        return self.database.get_video_by_id(record_id)
+
+    def _notice(self, message: str, level: str) -> None:
+        if self.notice_callback:
+            self.notice_callback(message, level)
+
+    @staticmethod
+    def _is_important(record: dict[str, Any]) -> bool:
+        return bool(
+            record.get("is_important")
+            or str(record.get("important_note") or "").strip()
+            or str(record.get("important_at") or "").strip()
+        )
+
+    @staticmethod
+    def _record_id(entry: dict[str, Any]) -> int:
+        try:
+            return int(entry.get("id") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _text(value: Any, default: str = "") -> str:
+        text = str(value or "").strip()
+        return text if text else default
+
+    @classmethod
+    def _recording_time(cls, entry: dict[str, Any]) -> str:
+        return cls._text(entry.get("recorded_at") or entry.get("created_time"), "-")
+
+
+class NetdiskHistoryDialog(QDialog):
+    STATUS_OPTIONS = ("全部", UPLOAD_DONE, UPLOAD_FAILED, UPLOAD_UPLOADING, UPLOAD_PENDING)
+
+    def __init__(self, database: DatabaseManager, logger: logging.Logger, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.database = database
+        self.logger = logger
+        self.setWindowTitle("网盘同步记录")
+        self.resize(980, 620)
+        self.setMinimumSize(860, 520)
+        self._build_ui()
+        self.reload_records()
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 14)
+        layout.setSpacing(12)
+
+        title = QLabel("网盘同步记录")
+        title.setStyleSheet("font-size: 20px; font-weight: 700; color: #0f172a;")
+        layout.addWidget(title)
+
+        filter_layout = QHBoxLayout()
+        filter_layout.setSpacing(8)
+        filter_layout.addWidget(QLabel("上传状态："))
+        self.status_combo = QComboBox()
+        self.status_combo.addItems(self.STATUS_OPTIONS)
+        self.status_combo.setFixedWidth(110)
+        filter_layout.addWidget(self.status_combo)
+        self.order_search_input = QLineEdit()
+        self.order_search_input.setPlaceholderText("搜索单号")
+        self.order_search_input.setClearButtonEnabled(True)
+        filter_layout.addWidget(self.order_search_input, 1)
+        self.refresh_button = QPushButton("刷新")
+        self.refresh_button.setObjectName("secondaryButton")
+        filter_layout.addWidget(self.refresh_button)
+        layout.addLayout(filter_layout)
+
+        self.table = QTableWidget(0, 7)
+        self.table.setHorizontalHeaderLabels(["上传时间", "单号", "文件名", "上传状态", "失败原因", "远程路径", "重试次数"])
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.Fixed)
+        self.table.setColumnWidth(3, 86)
+        self.table.setColumnWidth(6, 70)
+        layout.addWidget(self.table, 1)
+
+        self.hint_label = QLabel("双击远程路径可复制。")
+        self.hint_label.setStyleSheet("color: #64748b; font-size: 12px;")
+        layout.addWidget(self.hint_label)
+
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        close_button = QPushButton("关闭")
+        close_button.setObjectName("secondaryButton")
+        close_button.clicked.connect(self.accept)
+        footer.addWidget(close_button)
+        layout.addLayout(footer)
+
+        self.status_combo.currentIndexChanged.connect(lambda _index: self.reload_records())
+        self.order_search_input.returnPressed.connect(self.reload_records)
+        self.refresh_button.clicked.connect(self.reload_records)
+        self.table.cellDoubleClicked.connect(self._copy_remote_path)
+
+    def reload_records(self) -> None:
+        status = self.status_combo.currentText().strip()
+        status_filter = None if status == "全部" else status
+        keyword = self.order_search_input.text().strip()
+        rows = self.database.query_upload_history(status_filter, keyword)
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(0)
+        try:
+            for row_index, record in enumerate(rows):
+                self.table.insertRow(row_index)
+                self._populate_row(row_index, record)
+        finally:
+            self.table.setUpdatesEnabled(True)
+        self.hint_label.setText(f"共 {len(rows)} 条记录。双击远程路径可复制。")
+
+    def _populate_row(self, row: int, record: dict[str, Any]) -> None:
+        upload_status = str(record.get("upload_status") or UPLOAD_PENDING)
+        upload_time = str(record.get("upload_time") or "").strip() or "暂无"
+        upload_error = str(record.get("upload_error") or "").strip()
+        remote_path = str(record.get("upload_remote_path") or "").strip()
+        values = [
+            upload_time,
+            str(record.get("order_no") or ""),
+            str(record.get("file_name") or ""),
+            upload_status,
+            upload_error if upload_status == UPLOAD_FAILED and upload_error else "-",
+            remote_path if remote_path else "-",
+            str(int(record.get("upload_retry_count") or 0)),
+        ]
+        for column, value in enumerate(values):
+            item = QTableWidgetItem(value)
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            item.setTextAlignment(Qt.AlignCenter if column in {0, 1, 3, 6} else Qt.AlignLeft | Qt.AlignVCenter)
+            if column == 3:
+                item.setForeground(QColor(RecordDetailDialog._upload_status_color(upload_status)))
+            if column == 4 and upload_error:
+                item.setToolTip(upload_error)
+            if column == 5 and remote_path:
+                item.setToolTip(remote_path)
+                item.setData(Qt.UserRole, remote_path)
+            self.table.setItem(row, column, item)
+
+    def _copy_remote_path(self, row: int, column: int) -> None:
+        if column != 5:
+            return
+        item = self.table.item(row, column)
+        if item is None:
+            return
+        remote_path = str(item.data(Qt.UserRole) or "").strip()
+        if not remote_path:
+            return
+        QApplication.clipboard().setText(remote_path)
+        self.hint_label.setText("远程路径已复制。")
 
 
 class QueryTab(QWidget):
@@ -366,6 +1050,9 @@ class QueryTab(QWidget):
         self.retry_failed_upload_button = QPushButton("重试上传失败")
         self.retry_failed_upload_button.setObjectName("retryUploadButton")
         self.retry_failed_upload_button.setToolTip("重试当前筛选条件下上传失败的视频")
+        self.netdisk_history_button = QPushButton("同步记录")
+        self.netdisk_history_button.setObjectName("secondaryButton")
+        self.netdisk_history_button.setToolTip("查看百度网盘上传历史和失败原因")
 
         self.date_filter_button_group = QButtonGroup(self)
         self.date_filter_button_group.setExclusive(True)
@@ -415,6 +1102,7 @@ class QueryTab(QWidget):
             *self.upload_status_buttons,
             self.sync_netdisk_button,
             self.retry_failed_upload_button,
+            self.netdisk_history_button,
         )
 
         date_toolbar.addWidget(QLabel("开始日期："))
@@ -439,6 +1127,7 @@ class QueryTab(QWidget):
         netdisk_toolbar.addStretch(1)
         netdisk_toolbar.addWidget(self.sync_netdisk_button)
         netdisk_toolbar.addWidget(self.retry_failed_upload_button)
+        netdisk_toolbar.addWidget(self.netdisk_history_button)
         layout.addWidget(self.netdisk_filter_row)
 
         self.netdisk_progress_container = QWidget()
@@ -502,7 +1191,7 @@ class QueryTab(QWidget):
         self.table.setTextElideMode(Qt.ElideRight)
         self.table.setWordWrap(False)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.table.setColumnWidth(self.ACTION_COLUMN, 78)
+        self.table.setColumnWidth(self.ACTION_COLUMN, 112)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(72)
         self.table.verticalHeader().setMinimumSectionSize(68)
@@ -529,7 +1218,7 @@ class QueryTab(QWidget):
         self.table.setColumnWidth(5, 92)
         self.table.setColumnWidth(self.STATUS_COLUMN, 152)
         self.table.setColumnWidth(self.SCENE_COLUMN, 118)
-        self.table.setColumnWidth(self.ACTION_COLUMN, 78)
+        self.table.setColumnWidth(self.ACTION_COLUMN, 112)
         layout.addWidget(self.table, 1)
 
         self.pagination_container = QWidget()
@@ -604,6 +1293,7 @@ class QueryTab(QWidget):
         self.upload_status_uploading_button.clicked.connect(lambda: self._set_upload_status_filter(UPLOAD_UPLOADING))
         self.sync_netdisk_button.clicked.connect(self._sync_unuploaded_videos)
         self.retry_failed_upload_button.clicked.connect(self._retry_failed_uploads)
+        self.netdisk_history_button.clicked.connect(self._show_netdisk_history)
         self.table.itemClicked.connect(self._on_item_clicked)
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         self.table.customContextMenuRequested.connect(self._show_table_context_menu)
@@ -803,7 +1493,7 @@ class QueryTab(QWidget):
                 self.table.insertRow(row_index)
                 self.table.setRowHeight(row_index, 72)
                 self._set_item(row_index, 0, str(offset + row_index + 1), path)
-                self._set_item(row_index, 1, str(item.get("order_no", "")) or "-", path)
+                self._set_order_no_item(row_index, item, path)
                 self._set_item(row_index, 2, self._recording_time_text(item), path)
                 self._set_two_line_item(
                     row_index,
@@ -836,6 +1526,41 @@ class QueryTab(QWidget):
         item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         item.setTextAlignment(Qt.AlignCenter)
         self.table.setItem(row, column, item)
+
+    def _set_order_no_item(self, row: int, entry: dict[str, Any], path: Path) -> None:
+        order_no = str(entry.get("order_no") or "-")
+        item = QTableWidgetItem(order_no)
+        item.setData(Qt.UserRole, str(path))
+        item.setData(self.COPY_TEXT_ROLE, order_no)
+        item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        item.setTextAlignment(Qt.AlignCenter)
+        tooltip = ""
+        if self._is_important_entry(entry):
+            tooltip = self._important_tooltip(entry)
+            item.setToolTip(tooltip)
+        self.table.setItem(row, 1, item)
+
+        if not self._is_important_entry(entry):
+            return
+
+        container = QWidget()
+        container.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(4)
+        layout.setAlignment(Qt.AlignCenter)
+
+        icon = QLabel("❗")
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setToolTip(tooltip)
+        icon.setStyleSheet("color: #DC2626; font-size: 14px; font-weight: 800;")
+        text = QLabel(order_no)
+        text.setAlignment(Qt.AlignCenter)
+        text.setToolTip(tooltip)
+        text.setStyleSheet("color: #0f172a;")
+        layout.addWidget(icon, 0, Qt.AlignCenter)
+        layout.addWidget(text, 0, Qt.AlignCenter)
+        self.table.setCellWidget(row, 1, container)
 
     def _set_two_line_item(
         self,
@@ -922,6 +1647,21 @@ class QueryTab(QWidget):
             return 0
         return max(0, record_id)
 
+    @staticmethod
+    def _is_important_entry(entry: dict[str, Any]) -> bool:
+        return bool(
+            entry.get("is_important")
+            or str(entry.get("important_note") or "").strip()
+            or str(entry.get("important_at") or "").strip()
+        )
+
+    @classmethod
+    def _important_tooltip(cls, entry: dict[str, Any]) -> str:
+        note = str(entry.get("important_note") or "").strip()
+        if note:
+            return f"重要或有争议的单号\n备注：{note}"
+        return "重要或有争议的单号"
+
     def _set_scene_video_cell(self, row: int, entry: dict[str, Any], path: Path) -> None:
         item = QTableWidgetItem("")
         item.setData(Qt.UserRole, str(path))
@@ -988,7 +1728,6 @@ class QueryTab(QWidget):
 
         container = QWidget()
         container.setObjectName("statusCell")
-        container.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
@@ -1016,14 +1755,16 @@ class QueryTab(QWidget):
         if normal_status and bool(entry.get("is_duplicate")) and duplicate_count > 1 and duplicate_sequence > 0:
             duplicate_tip = f"该单号第 {duplicate_sequence} 次录制，共 {duplicate_count} 次"
             tooltip_parts.append(duplicate_tip)
-            badge = QLabel(f"重复第 {duplicate_sequence} 次")
+            badge = ClickableLabel(f"重复第 {duplicate_sequence} 次")
             badge.setObjectName("duplicateBadge")
             badge.setAlignment(Qt.AlignCenter)
             badge.setToolTip(duplicate_tip)
+            badge.setCursor(Qt.PointingHandCursor)
             badge.setWordWrap(False)
             badge.setMinimumHeight(20)
             badge.setMinimumWidth(badge.sizeHint().width() + 8)
             badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+            badge.clicked.connect(lambda row_entry=dict(entry): self._show_duplicate_records(row_entry))
             status_line_layout.addWidget(badge, 0, Qt.AlignCenter)
 
         validation_error = str(entry.get("validation_error") or "").strip()
@@ -1063,6 +1804,19 @@ class QueryTab(QWidget):
         layout.setSpacing(6)
         layout.setAlignment(Qt.AlignCenter)
 
+        important = self._is_important_entry(entry)
+        important_button = QPushButton("★" if important else "☆")
+        important_button.setFixedSize(30, 26)
+        important_button.setCursor(Qt.PointingHandCursor)
+        important_button.setToolTip("取消重要标记" if important else "标记为重要视频")
+        important_button.setStyleSheet(
+            "QPushButton { color: #DC2626; font-weight: 800; border: 1px solid #FCA5A5; "
+            "background: #FFF1F2; border-radius: 4px; }"
+            "QPushButton:hover { background: #FEE2E2; }"
+        )
+        important_button.clicked.connect(lambda _checked=False, row_entry=dict(entry): self._toggle_important(row_entry))
+        layout.addWidget(important_button)
+
         if self._should_show_upload_action(entry, path):
             upload_status = str(entry.get("upload_status") or UPLOAD_PENDING)
             upload_button = QPushButton("上传" if upload_status != UPLOAD_UPLOADING else "上传中")
@@ -1101,13 +1855,15 @@ class QueryTab(QWidget):
         self.retry_failed_upload_button.setVisible(enabled)
         self.retry_failed_upload_button.setEnabled(enabled and not self.is_netdisk_syncing())
         self.retry_failed_upload_button.setText("重试中..." if self.is_netdisk_syncing() and self.netdisk_task_mode == "retry" else "重试上传失败")
+        self.netdisk_history_button.setVisible(enabled)
+        self.netdisk_history_button.setEnabled(enabled)
         for widget in getattr(self, "upload_status_filter_widgets", ()):
             widget.setVisible(enabled)
         if not enabled and self.upload_status_filter != "全部":
             self.upload_status_filter = "全部"
             self._sync_upload_status_filter_buttons()
         self.table.setColumnWidth(self.STATUS_COLUMN, 170 if enabled else 152)
-        self.table.setColumnWidth(self.ACTION_COLUMN, 128 if enabled else 78)
+        self.table.setColumnWidth(self.ACTION_COLUMN, 158 if enabled else 112)
         if not enabled and not self.is_netdisk_syncing():
             self._hide_netdisk_progress()
 
@@ -1133,6 +1889,67 @@ class QueryTab(QWidget):
         if upload_status == UPLOAD_FAILED:
             return "failed"
         return "pending"
+
+    def _show_netdisk_history(self) -> None:
+        if not self._netdisk_sync_enabled():
+            self._show_notice("请先开启网盘同步", "warning")
+            return
+        try:
+            dialog = NetdiskHistoryDialog(self.database, self.logger, self)
+            dialog.exec()
+        except Exception as exc:
+            self.logger.exception("打开网盘同步记录窗口失败")
+            self._show_notice(f"打开同步记录失败：{exc}", "error")
+
+    def _toggle_important(self, entry: dict[str, Any]) -> None:
+        record_id = self._record_id_from_entry(entry)
+        if record_id <= 0:
+            self._show_notice("未找到视频记录", "warning")
+            return
+        try:
+            latest = self.database.get_video_by_id(record_id)
+            if latest is None:
+                self._show_notice("未找到视频记录", "warning")
+                return
+            order_no = str(latest.get("order_no") or "-")
+            if self._is_important_entry(latest):
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Question)
+                box.setWindowTitle("取消重要标记")
+                box.setText("确定要取消该视频的重要标记吗？")
+                box.setInformativeText(f"单号：{order_no}")
+                cancel_button = box.addButton("取消", QMessageBox.RejectRole)
+                confirm_button = box.addButton("确认取消", QMessageBox.AcceptRole)
+                box.setDefaultButton(cancel_button)
+                box.exec()
+                if box.clickedButton() is not confirm_button:
+                    return
+                affected = self.database.update_video_importance(record_id, False)
+                if affected != 1:
+                    self._show_notice("取消重要标记失败：未找到对应记录", "error")
+                    return
+                self.logger.info("取消重要视频标记：id=%s, order_no=%s", record_id, order_no)
+                self._show_notice("已取消重要标记", "success")
+            else:
+                dialog = ImportantMarkDialog(order_no, self)
+                if dialog.exec() != QDialog.Accepted:
+                    return
+                note = dialog.note()
+                affected = self.database.update_video_importance(record_id, True, note)
+                if affected != 1:
+                    self._show_notice("标记重要失败：未找到对应记录", "error")
+                    return
+                self.logger.info(
+                    "标记重要视频：id=%s, order_no=%s, note_len=%s",
+                    record_id,
+                    order_no,
+                    len(note),
+                )
+                self._show_notice("已标记为重要视频", "success")
+            self.refresh(rebuild=False, show_notice=False)
+        except Exception as exc:
+            self.logger.exception("修改重要视频标记失败：id=%s", record_id)
+            self._show_notice(f"修改重要标记失败：{exc}", "error")
 
     def _sync_unuploaded_videos(self) -> None:
         if not self._ensure_netdisk_ready():
@@ -1435,8 +2252,60 @@ class QueryTab(QWidget):
             return
         if column == self.REMARK_COLUMN:
             self._edit_remark(row)
-        else:
-            self._open_scene_video(self._path_from_row(row))
+            return
+        if column in {self.SCENE_COLUMN, self.ACTION_COLUMN}:
+            return
+        self._show_record_detail(row)
+
+    def _show_record_detail(self, row: int) -> None:
+        record_id = self._record_id_from_row(row)
+        path = self._path_from_row(row)
+        try:
+            record = self.database.get_video_by_id(record_id) if record_id else None
+            if record is None:
+                record = self.database.get_video_by_path(path)
+            if record is None:
+                self._show_notice("未找到视频记录", "warning")
+                return
+            order_no = str(record.get("order_no") or "").strip()
+            duplicates = self.database.get_videos_by_order_no(order_no, self.video_dir) if order_no else [record]
+            if not duplicates:
+                duplicates = [record]
+            dialog = RecordDetailDialog(record, duplicates, self)
+            dialog.exec()
+        except Exception as exc:
+            self.logger.exception("打开单号详情失败：id=%s, path=%s", record_id or "-", path)
+            self._show_notice(f"打开详情失败：{exc}", "error")
+
+    def _show_duplicate_records(self, entry: dict[str, Any]) -> None:
+        record_id = int(entry.get("id") or 0)
+        order_no = str(entry.get("order_no") or "").strip()
+        if not order_no:
+            self._show_notice("未找到单号", "warning")
+            return
+        try:
+            record = self.database.get_video_by_id(record_id) if record_id else None
+            if record is not None:
+                order_no = str(record.get("order_no") or order_no).strip()
+            records = self.database.get_videos_by_order_no(order_no, self.video_dir)
+            if len(records) <= 1:
+                self._show_notice("该单号当前只有一条录制记录", "warning")
+                self.refresh(rebuild=False, show_notice=False)
+                return
+            dialog = DuplicateRecordsDialog(
+                database=self.database,
+                order_no=order_no,
+                query_dir=self.video_dir,
+                current_record_id=record_id,
+                notice_callback=self._show_notice,
+                changed_callback=lambda: self.refresh(rebuild=False, show_notice=False),
+                logger=self.logger,
+                parent=self,
+            )
+            dialog.exec()
+        except Exception as exc:
+            self.logger.exception("打开重复单号记录弹窗失败：order_no=%s, id=%s", order_no, record_id or "-")
+            self._show_notice(f"打开重复记录失败：{exc}", "error")
 
     def _show_table_context_menu(self, pos) -> None:
         row = self.table.rowAt(pos.y())
@@ -1593,13 +2462,26 @@ class QueryTab(QWidget):
 
     def _delete_video(self, path: Path) -> None:
         path = Path(path)
+        try:
+            record = self.database.get_video_by_path(path)
+        except Exception:
+            self.logger.exception("删除前读取视频记录失败：path=%s", path)
+            record = None
+        is_important = self._is_important_entry(record or {})
+        important_note = str((record or {}).get("important_note") or "").strip()
         if not path.exists():
             box = QMessageBox(self)
             box.setIcon(QMessageBox.Warning)
             box.setWindowTitle("删除记录")
-            box.setText("当前视频文件已不存在，是否从列表中移除此记录？")
-            box.setInformativeText(f"记录路径：{path}")
-            confirm_button = box.addButton("确认", QMessageBox.AcceptRole)
+            if is_important:
+                box.setText("该视频已标记为重要，可能涉及售后争议。\n当前视频文件已不存在，确定仍要从列表中移除此记录吗？")
+            else:
+                box.setText("当前视频文件已不存在，是否从列表中移除此记录？")
+            detail = f"记录路径：{path}"
+            if important_note:
+                detail += f"\n重要原因：{important_note}"
+            box.setInformativeText(detail)
+            confirm_button = box.addButton("仍然移除" if is_important else "确认", QMessageBox.AcceptRole)
             cancel_button = box.addButton("取消", QMessageBox.RejectRole)
             box.setDefaultButton(cancel_button)
             box.exec()
@@ -1628,9 +2510,15 @@ class QueryTab(QWidget):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
         box.setWindowTitle("确认删除")
-        box.setText("确定要删除该视频文件吗？")
-        box.setInformativeText(f"文件名：{path.name}\n位置：{path}")
-        confirm_button = box.addButton("确认", QMessageBox.AcceptRole)
+        if is_important:
+            box.setText("该视频已标记为重要，可能涉及售后争议。\n确定仍要删除吗？")
+        else:
+            box.setText("确定要删除该视频文件吗？")
+        detail = f"文件名：{path.name}\n位置：{path}"
+        if important_note:
+            detail += f"\n重要原因：{important_note}"
+        box.setInformativeText(detail)
+        confirm_button = box.addButton("仍然删除" if is_important else "确认", QMessageBox.AcceptRole)
         cancel_button = box.addButton("取消", QMessageBox.RejectRole)
         box.setDefaultButton(cancel_button)
         box.exec()
