@@ -1186,6 +1186,7 @@ class NetdiskHistoryDialog(QDialog):
         self.total_count = 0
         self.total_pages = 1
         self._last_filter_key: tuple[str, str] | None = None
+        self._retry_running = False
         self.setWindowTitle("网盘同步记录")
         self.resize(980, 620)
         self.setMinimumSize(860, 520)
@@ -1215,7 +1216,45 @@ class NetdiskHistoryDialog(QDialog):
         self.refresh_button = QPushButton("刷新")
         self.refresh_button.setObjectName("secondaryButton")
         filter_layout.addWidget(self.refresh_button)
+        self.retry_failed_button = QPushButton("重试上传失败")
+        self.retry_failed_button.setObjectName("secondaryButton")
+        self.retry_failed_button.setMinimumWidth(116)
+        self.retry_failed_button.setToolTip("重试当前同步记录筛选条件下的上传失败记录")
+        filter_layout.addWidget(self.retry_failed_button)
         layout.addLayout(filter_layout)
+
+        self.retry_progress_container = QWidget()
+        self.retry_progress_container.setObjectName("netdiskProgressPanel")
+        retry_progress_layout = QVBoxLayout(self.retry_progress_container)
+        retry_progress_layout.setContentsMargins(10, 8, 10, 8)
+        retry_progress_layout.setSpacing(6)
+
+        retry_progress_top = QHBoxLayout()
+        retry_progress_top.setContentsMargins(0, 0, 0, 0)
+        self.retry_progress_title = QLabel("正在重试上传失败：0 / 0")
+        self.retry_progress_title.setObjectName("netdiskProgressTitle")
+        self.retry_progress_stats = QLabel("")
+        self.retry_progress_stats.setObjectName("netdiskProgressStats")
+        self.retry_progress_stats.setTextFormat(Qt.RichText)
+        retry_progress_top.addWidget(self.retry_progress_title)
+        retry_progress_top.addStretch(1)
+        retry_progress_top.addWidget(self.retry_progress_stats)
+
+        self.retry_progress_bar = QProgressBar()
+        self.retry_progress_bar.setObjectName("netdiskProgressBar")
+        self.retry_progress_bar.setTextVisible(False)
+        self.retry_progress_bar.setRange(0, 1)
+        self.retry_progress_bar.setValue(0)
+
+        self.retry_progress_current = QLabel("")
+        self.retry_progress_current.setObjectName("netdiskProgressCurrent")
+        self.retry_progress_current.setWordWrap(False)
+
+        retry_progress_layout.addLayout(retry_progress_top)
+        retry_progress_layout.addWidget(self.retry_progress_bar)
+        retry_progress_layout.addWidget(self.retry_progress_current)
+        self.retry_progress_container.hide()
+        layout.addWidget(self.retry_progress_container)
 
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["上传时间", "单号", "上传状态", "失败原因", "远程路径", "重试次数"])
@@ -1278,6 +1317,7 @@ class NetdiskHistoryDialog(QDialog):
         self.status_combo.currentIndexChanged.connect(lambda _index: self._on_filter_changed())
         self.order_search_input.returnPressed.connect(self._on_filter_changed)
         self.refresh_button.clicked.connect(lambda: self.reload_records(reset_page=False))
+        self.retry_failed_button.clicked.connect(self._request_retry_failed_uploads)
         self.page_size_combo.currentTextChanged.connect(self._on_page_size_changed)
         self.prev_page_button.clicked.connect(lambda: self._go_to_page(self.current_page - 1))
         self.next_page_button.clicked.connect(lambda: self._go_to_page(self.current_page + 1))
@@ -1287,6 +1327,8 @@ class NetdiskHistoryDialog(QDialog):
         self.table.cellDoubleClicked.connect(self._copy_cell_from_double_click)
 
     def reload_records(self, reset_page: bool = False) -> None:
+        if self._retry_running:
+            return
         if reset_page:
             self.current_page = 1
         status = self.status_combo.currentText().strip()
@@ -1311,6 +1353,81 @@ class NetdiskHistoryDialog(QDialog):
             self.table.setUpdatesEnabled(True)
         self._update_pagination_controls()
         self.hint_label.setText("右键单号或远程路径可复制。")
+        self._update_retry_button_text()
+
+    def current_status_filter(self) -> str | None:
+        status = self.status_combo.currentText().strip()
+        return None if status == "全部" else status
+
+    def current_keyword(self) -> str:
+        return self.order_search_input.text().strip()
+
+    def set_retry_running(self, running: bool) -> None:
+        self._retry_running = bool(running)
+        for widget in (
+            self.status_combo,
+            self.order_search_input,
+            self.refresh_button,
+            self.page_size_combo,
+            self.prev_page_button,
+            self.next_page_button,
+            self.jump_page_input,
+            self.jump_page_button,
+        ):
+            widget.setEnabled(not self._retry_running)
+        self.retry_failed_button.setEnabled(not self._retry_running)
+        self.retry_failed_button.setText("重试中..." if self._retry_running else "重试上传失败")
+        if not self._retry_running:
+            self._update_pagination_controls()
+
+    def show_retry_progress(
+        self,
+        current: int,
+        total: int,
+        file_name: str,
+        success_count: int,
+        fail_count: int,
+    ) -> None:
+        total = max(1, int(total or 1))
+        current = max(0, min(int(current or 0), total))
+        self.retry_progress_bar.setRange(0, total)
+        self.retry_progress_bar.setValue(current)
+        self.retry_progress_title.setText(f"正在重试上传失败：{current} / {total}")
+        self.retry_progress_stats.setText(
+            f"成功 {success_count} 个，<span style='color:#dc2626;'>失败 {fail_count} 个</span>"
+            if fail_count
+            else f"成功 {success_count} 个，失败 0 个"
+        )
+        self.retry_progress_current.setText(f"当前：{file_name}" if file_name else "")
+        self.retry_progress_current.setToolTip(file_name or "")
+        self.retry_progress_container.show()
+
+    def show_retry_finished(self, success_count: int, fail_count: int) -> None:
+        total = max(1, success_count + fail_count, self.retry_progress_bar.maximum())
+        self.retry_progress_bar.setRange(0, total)
+        self.retry_progress_bar.setValue(total)
+        self.retry_progress_title.setText(f"重试完成：成功 {success_count} 个，失败 {fail_count} 个")
+        self.retry_progress_stats.setText(
+            f"成功 {success_count} 个，<span style='color:#dc2626;'>失败 {fail_count} 个</span>"
+            if fail_count
+            else f"成功 {success_count} 个，失败 0 个"
+        )
+        self.retry_progress_current.setText("重试完成，列表已刷新。")
+        self.retry_progress_container.show()
+        self.set_retry_running(False)
+        self.reload_records(reset_page=False)
+
+    def _request_retry_failed_uploads(self) -> None:
+        parent = self.parent()
+        if hasattr(parent, "_retry_failed_uploads_from_history"):
+            parent._retry_failed_uploads_from_history(self)
+
+    def _update_retry_button_text(self) -> None:
+        try:
+            failed_count = self.database.count_upload_history(UPLOAD_FAILED, self.current_keyword())
+        except Exception:
+            failed_count = 0
+        self.retry_failed_button.setText(f"重试上传失败（{failed_count}）" if failed_count else "重试上传失败")
 
     def _populate_row(self, row: int, record: dict[str, Any]) -> None:
         upload_status = str(record.get("upload_status") or "")
@@ -1373,6 +1490,19 @@ class NetdiskHistoryDialog(QDialog):
         self.jump_page_input.setValidator(QIntValidator(1, max(1, self.total_pages), self))
         self.prev_page_button.setEnabled(self.current_page > 1)
         self.next_page_button.setEnabled(self.current_page < self.total_pages)
+
+    def reject(self) -> None:
+        if self._retry_running:
+            QMessageBox.information(self, "正在重试上传失败", "当前正在重试上传失败，请等待任务完成。")
+            return
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        if self._retry_running:
+            QMessageBox.information(self, "正在重试上传失败", "当前正在重试上传失败，请等待任务完成。")
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _show_context_menu(self, position: QPoint) -> None:
         index = self.table.indexAt(position)
@@ -1451,6 +1581,7 @@ class QueryTab(QWidget):
         self._pending_load_rebuild = False
         self._pending_load_show_notice = False
         self.netdisk_task_mode = "sync"
+        self.netdisk_history_dialog: NetdiskHistoryDialog | None = None
         self.netdisk_progress_hide_timer = QTimer(self)
         self.netdisk_progress_hide_timer.setSingleShot(True)
         self.netdisk_progress_hide_timer.timeout.connect(self._hide_netdisk_progress)
@@ -1567,9 +1698,6 @@ class QueryTab(QWidget):
         self.sync_netdisk_button = QPushButton("同步至网盘")
         self.sync_netdisk_button.setObjectName("primaryButton")
         self.sync_netdisk_button.setToolTip("将当前查询目录中未上传的视频同步到百度网盘")
-        self.retry_failed_upload_button = QPushButton("重试上传失败")
-        self.retry_failed_upload_button.setObjectName("retryUploadButton")
-        self.retry_failed_upload_button.setToolTip("重试当前筛选条件下上传失败的视频")
         self.netdisk_history_button = QPushButton("同步记录")
         self.netdisk_history_button.setObjectName("secondaryButton")
         self.netdisk_history_button.setToolTip("查看百度网盘上传历史和失败原因")
@@ -1621,7 +1749,6 @@ class QueryTab(QWidget):
             self.upload_status_label,
             *self.upload_status_buttons,
             self.sync_netdisk_button,
-            self.retry_failed_upload_button,
             self.netdisk_history_button,
         )
 
@@ -1646,7 +1773,6 @@ class QueryTab(QWidget):
             netdisk_toolbar.addWidget(status_button)
         netdisk_toolbar.addStretch(1)
         netdisk_toolbar.addWidget(self.sync_netdisk_button)
-        netdisk_toolbar.addWidget(self.retry_failed_upload_button)
         netdisk_toolbar.addWidget(self.netdisk_history_button)
         layout.addWidget(self.netdisk_filter_row)
 
@@ -1812,7 +1938,6 @@ class QueryTab(QWidget):
         self.upload_status_failed_button.clicked.connect(lambda: self._set_upload_status_filter(UPLOAD_FAILED))
         self.upload_status_uploading_button.clicked.connect(lambda: self._set_upload_status_filter(UPLOAD_UPLOADING))
         self.sync_netdisk_button.clicked.connect(self._sync_unuploaded_videos)
-        self.retry_failed_upload_button.clicked.connect(self._retry_failed_uploads)
         self.netdisk_history_button.clicked.connect(self._show_netdisk_history)
         self.table.itemClicked.connect(self._on_item_clicked)
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
@@ -2361,9 +2486,6 @@ class QueryTab(QWidget):
         self.sync_netdisk_button.setVisible(enabled)
         self.sync_netdisk_button.setEnabled(enabled and not self.is_netdisk_syncing())
         self.sync_netdisk_button.setText("同步中..." if self.is_netdisk_syncing() else "同步至网盘")
-        self.retry_failed_upload_button.setVisible(enabled)
-        self.retry_failed_upload_button.setEnabled(enabled and not self.is_netdisk_syncing())
-        self.retry_failed_upload_button.setText("重试中..." if self.is_netdisk_syncing() and self.netdisk_task_mode == "retry" else "重试上传失败")
         self.netdisk_history_button.setVisible(enabled)
         self.netdisk_history_button.setEnabled(enabled)
         for widget in getattr(self, "upload_status_filter_widgets", ()):
@@ -2405,10 +2527,13 @@ class QueryTab(QWidget):
             return
         try:
             dialog = NetdiskHistoryDialog(self.database, self.logger, self)
+            self.netdisk_history_dialog = dialog
             dialog.exec()
         except Exception as exc:
             self.logger.exception("打开网盘同步记录窗口失败")
             self._show_notice(f"打开同步记录失败：{exc}", "error")
+        finally:
+            self.netdisk_history_dialog = None
 
     def _toggle_important(self, entry: dict[str, Any]) -> None:
         record_id = self._record_id_from_entry(entry)
@@ -2545,6 +2670,61 @@ class QueryTab(QWidget):
             return
         self._start_netdisk_upload(upload_entries, mode="retry")
 
+    def _retry_failed_uploads_from_history(self, dialog: NetdiskHistoryDialog) -> None:
+        if not self._ensure_netdisk_ready():
+            return
+        selected_upload_status = dialog.current_status_filter()
+        if selected_upload_status and selected_upload_status != UPLOAD_FAILED:
+            self._show_notice("当前筛选条件下没有需要重试的失败记录", "info")
+            return
+        keyword = dialog.current_keyword()
+        retry_entries = self.database.query_upload_history(UPLOAD_FAILED, keyword, limit=5000, offset=0)
+        upload_entries: list[dict[str, Any]] = []
+        skipped_count = 0
+        for entry in retry_entries:
+            if str(entry.get("status") or NORMAL_STATUS) != NORMAL_STATUS:
+                skipped_count += 1
+                continue
+            path = Path(str(entry.get("file_path") or ""))
+            if not path.exists():
+                skipped_count += 1
+                try:
+                    self.database.mark_file_missing(path)
+                except Exception:
+                    self.logger.exception("同步记录重试上传失败时标记本地文件不存在失败：%s", path)
+                continue
+            try:
+                if path.stat().st_size <= 0:
+                    skipped_count += 1
+                    continue
+            except OSError:
+                skipped_count += 1
+                continue
+            upload_entries.append(entry)
+
+        if not upload_entries:
+            dialog.reload_records(reset_page=False)
+            self.refresh(rebuild=False, show_notice=False)
+            self._show_notice("当前没有需要重试的失败记录", "info")
+            return
+
+        message = f"即将重试上传 {len(upload_entries)} 条失败记录，是否继续？"
+        if skipped_count:
+            message += f"\n已跳过 {skipped_count} 条本地文件不可用的记录。"
+        answer = QMessageBox.question(
+            dialog,
+            "重试上传失败",
+            message,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.netdisk_history_dialog = dialog
+        dialog.set_retry_running(True)
+        dialog.show_retry_progress(0, len(upload_entries), "准备重试...", 0, 0)
+        self._start_netdisk_upload(upload_entries, mode="retry")
+
     def _ensure_netdisk_ready(self) -> bool:
         if not self._netdisk_sync_enabled():
             self._show_notice("网盘同步未开启。", "warning")
@@ -2609,6 +2789,8 @@ class QueryTab(QWidget):
 
     def _on_netdisk_upload_progress(self, current: int, total: int, file_name: str, success_count: int, fail_count: int) -> None:
         self._show_netdisk_progress(current, total, file_name, success_count, fail_count)
+        if self.netdisk_task_mode == "retry" and self.netdisk_history_dialog is not None:
+            self.netdisk_history_dialog.show_retry_progress(current, total, file_name, success_count, fail_count)
 
     def _hide_netdisk_progress(self) -> None:
         if hasattr(self, "netdisk_progress_container") and not self.is_netdisk_syncing():
@@ -2633,6 +2815,8 @@ class QueryTab(QWidget):
         self.upload_worker = None
         self._update_netdisk_controls()
         self.refresh(rebuild=False, show_notice=False)
+        if finished_mode == "retry" and self.netdisk_history_dialog is not None:
+            self.netdisk_history_dialog.show_retry_finished(success_count, fail_count)
         total = max(success_count + fail_count, self.netdisk_progress_bar.maximum())
         self.netdisk_progress_bar.setRange(0, max(1, total))
         self.netdisk_progress_bar.setValue(total)

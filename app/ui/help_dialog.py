@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QTabWidget, QTextBrowser, QVBoxLayout
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QDialog, QTabWidget, QTextBrowser, QToolButton, QVBoxLayout
+
+from app.utils.runtime_paths import resource_path
 
 
 HELP_STYLE = """
@@ -201,17 +204,13 @@ class HelpDialog(QDialog):
 
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName("helpTabs")
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.tabBar().setExpanding(False)
+        self.tabs.tabBar().setObjectName("helpTabBar")
         for title, html in HELP_TABS:
             self.tabs.addTab(self._create_tab(html), title)
         layout.addWidget(self.tabs, 1)
-
-        button_layout = QHBoxLayout()
-        button_layout.addStretch(1)
-        self.close_button = QPushButton("关闭", self)
-        self.close_button.setFixedWidth(96)
-        self.close_button.clicked.connect(self.close)
-        button_layout.addWidget(self.close_button)
-        layout.addLayout(button_layout)
+        QTimer.singleShot(0, self._style_tab_scroll_buttons)
 
     def _create_tab(self, html: str) -> QTextBrowser:
         browser = QTextBrowser(self)
@@ -219,6 +218,35 @@ class HelpDialog(QDialog):
         browser.setOpenExternalLinks(False)
         browser.setHtml(f'<!doctype html><html><head><meta charset="utf-8"><style>{HELP_STYLE}</style></head><body>{html}</body></html>')
         return browser
+
+    def _style_tab_scroll_buttons(self) -> None:
+        left_icon = QIcon(str(resource_path("app/assets/icons/chevron-left.svg")))
+        right_icon = QIcon(str(resource_path("app/assets/icons/chevron-right.svg")))
+        for button in self.tabs.findChildren(QToolButton):
+            arrow = button.arrowType()
+            if arrow == Qt.LeftArrow:
+                button.setObjectName("helpPrevButton")
+                button.setArrowType(Qt.NoArrow)
+                button.setIcon(left_icon)
+            elif arrow == Qt.RightArrow:
+                button.setObjectName("helpNextButton")
+                button.setArrowType(Qt.NoArrow)
+                button.setIcon(right_icon)
+            elif button.objectName() not in {"helpPrevButton", "helpNextButton"}:
+                continue
+            button.setFixedSize(36, 36)
+            button.setIconSize(QSize(16, 16))
+            button.setCursor(Qt.PointingHandCursor)
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        QTimer.singleShot(0, self._style_tab_scroll_buttons)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._style_tab_scroll_buttons)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.closed.emit()

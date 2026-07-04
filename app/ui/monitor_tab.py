@@ -1404,9 +1404,12 @@ class MonitorTab(QWidget):
             path = Path(str(item.get("file_path", "")))
             row_widget = QWidget()
             row_widget.setObjectName("recentRecordingRow")
-            row_layout = QVBoxLayout(row_widget)
+            row_layout = QHBoxLayout(row_widget)
             row_layout.setContentsMargins(0, 2, 0, 4)
-            row_layout.setSpacing(2)
+            row_layout.setSpacing(8)
+            info_layout = QVBoxLayout()
+            info_layout.setContentsMargins(0, 0, 0, 0)
+            info_layout.setSpacing(2)
 
             order_label = QLabel(str(item.get("order_no") or "-"))
             order_label.setObjectName("recentOrderText")
@@ -1425,20 +1428,21 @@ class MonitorTab(QWidget):
             meta_layout.setSpacing(8)
 
             delete_button = QPushButton("删除")
-            delete_button.setObjectName("tableDangerButton")
+            delete_button.setObjectName("recentDeleteButton")
             delete_button.setCursor(Qt.PointingHandCursor)
-            delete_button.setFixedSize(48, 24)
+            delete_button.setFixedSize(76, 36)
             delete_button.setToolTip("删除这条最近录制视频")
             delete_button.clicked.connect(
                 lambda _checked=False, row_entry=dict(item): self._delete_recent_recording(row_entry)
             )
 
-            row_layout.addWidget(order_label)
+            info_layout.addWidget(order_label)
             meta_layout.addWidget(record_type_label)
             meta_layout.addWidget(duration_label)
             meta_layout.addStretch(1)
-            meta_layout.addWidget(delete_button)
-            row_layout.addLayout(meta_layout)
+            info_layout.addLayout(meta_layout)
+            row_layout.addLayout(info_layout, 1)
+            row_layout.addWidget(delete_button, 0, Qt.AlignVCenter)
             self.recent_recordings_layout.addWidget(row_widget)
 
     @staticmethod
