@@ -122,7 +122,12 @@ class DatabaseManager:
                         validation_status TEXT DEFAULT '未校验',
                         validation_error TEXT DEFAULT '',
                         validation_warning TEXT DEFAULT '',
-                        validated_at TEXT
+                        validated_at TEXT,
+                        file_hash TEXT DEFAULT '',
+                        hash_algorithm TEXT DEFAULT '',
+                        hash_generated_at TEXT DEFAULT '',
+                        hash_verify_status TEXT DEFAULT '',
+                        hash_verify_at TEXT DEFAULT ''
                     );
 
                     CREATE INDEX IF NOT EXISTS idx_videos_order_no ON videos(order_no);
@@ -161,6 +166,11 @@ class DatabaseManager:
             "validation_error": "TEXT DEFAULT ''",
             "validation_warning": "TEXT DEFAULT ''",
             "validated_at": "TEXT",
+            "file_hash": "TEXT DEFAULT ''",
+            "hash_algorithm": "TEXT DEFAULT ''",
+            "hash_generated_at": "TEXT DEFAULT ''",
+            "hash_verify_status": "TEXT DEFAULT ''",
+            "hash_verify_at": "TEXT DEFAULT ''",
             "normalized_file_path": "TEXT",
             "is_important": "INTEGER DEFAULT 0",
             "important_note": "TEXT DEFAULT ''",
@@ -473,6 +483,131 @@ class DatabaseManager:
                     )
                 raise
 
+    def update_video_hash(
+        self,
+        record_id: int,
+        file_hash: str,
+        algorithm: str = "SHA256",
+        generated_at: str | None = None,
+    ) -> int:
+        hash_text = str(file_hash or "").strip()
+        algorithm_text = str(algorithm or "SHA256").strip().upper()
+        generated_at_text = generated_at or format_datetime()
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE videos
+                    SET file_hash = ?,
+                        hash_algorithm = ?,
+                        hash_generated_at = ?,
+                        hash_verify_status = '未校验',
+                        hash_verify_at = '',
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (hash_text, algorithm_text, generated_at_text, generated_at_text, int(record_id)),
+                )
+                connection.commit()
+                if self.logger:
+                    self.logger.info(
+                        "视频哈希写入 SQLite：db=%s, id=%s, affected=%s, algorithm=%s, hash_prefix=%s",
+                        self.db_path,
+                        record_id,
+                        cursor.rowcount,
+                        algorithm_text,
+                        hash_text[:12],
+                    )
+                return int(cursor.rowcount)
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception("视频哈希写入失败并 rollback：db=%s, id=%s", self.db_path, record_id)
+                raise
+
+    def update_video_hash_by_path(
+        self,
+        file_path: str | Path,
+        file_hash: str,
+        algorithm: str = "SHA256",
+        generated_at: str | None = None,
+    ) -> int:
+        hash_text = str(file_hash or "").strip()
+        algorithm_text = str(algorithm or "SHA256").strip().upper()
+        generated_at_text = generated_at or format_datetime()
+        path_text = str(Path(file_path).resolve())
+        path_clause, path_params = self._path_match_clause(file_path)
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                cursor = connection.execute(
+                    f"""
+                    UPDATE videos
+                    SET file_hash = ?,
+                        hash_algorithm = ?,
+                        hash_generated_at = ?,
+                        hash_verify_status = '未校验',
+                        hash_verify_at = '',
+                        updated_at = ?
+                    WHERE {path_clause}
+                    """,
+                    [hash_text, algorithm_text, generated_at_text, generated_at_text] + path_params,
+                )
+                connection.commit()
+                if self.logger:
+                    self.logger.info(
+                        "视频哈希按路径写入 SQLite：db=%s, path=%s, affected=%s, algorithm=%s, hash_prefix=%s",
+                        self.db_path,
+                        path_text,
+                        cursor.rowcount,
+                        algorithm_text,
+                        hash_text[:12],
+                    )
+                return int(cursor.rowcount)
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception("视频哈希按路径写入失败并 rollback：db=%s, path=%s", self.db_path, path_text)
+                raise
+
+    def update_video_hash_verify_status(
+        self,
+        record_id: int,
+        verify_status: str,
+        verified_at: str | None = None,
+    ) -> int:
+        status_text = str(verify_status or "").strip()
+        verified_at_text = verified_at or format_datetime()
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE videos
+                    SET hash_verify_status = ?,
+                        hash_verify_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (status_text, verified_at_text, verified_at_text, int(record_id)),
+                )
+                connection.commit()
+                if self.logger:
+                    self.logger.info(
+                        "视频哈希校验状态写入 SQLite：db=%s, id=%s, status=%s, affected=%s",
+                        self.db_path,
+                        record_id,
+                        status_text,
+                        cursor.rowcount,
+                    )
+                return int(cursor.rowcount)
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception("视频哈希校验状态写入失败并 rollback：db=%s, id=%s", self.db_path, record_id)
+                raise
+
     def delete_video_record(self, file_path: str | Path) -> bool:
         path_text = str(Path(file_path).resolve())
         existing = self.get_video_by_path(path_text)
@@ -562,27 +697,27 @@ class DatabaseManager:
                         f"""
                         UPDATE videos
                         SET upload_status = ?,
-                            upload_time = CASE WHEN ? = ? THEN ? ELSE upload_time END,
+                            upload_time = CASE WHEN ? IN (?, ?, ?) THEN ? ELSE upload_time END,
                             upload_remote_path = COALESCE(?, upload_remote_path),
                             upload_error = ?,
                             upload_retry_count = COALESCE(upload_retry_count, 0) + 1,
                             updated_at = ?
                         WHERE {path_clause}
                         """,
-                        [status, status, UPLOAD_DONE, now_text, remote_path, error_text, now_text] + path_params,
+                        [status, status, UPLOAD_UPLOADING, UPLOAD_DONE, UPLOAD_FAILED, now_text, remote_path, error_text, now_text] + path_params,
                     )
                 else:
                     cursor = connection.execute(
                         f"""
                         UPDATE videos
                         SET upload_status = ?,
-                            upload_time = CASE WHEN ? = ? THEN ? ELSE upload_time END,
+                            upload_time = CASE WHEN ? IN (?, ?, ?) THEN ? ELSE upload_time END,
                             upload_remote_path = COALESCE(?, upload_remote_path),
                             upload_error = ?,
                             updated_at = ?
                         WHERE {path_clause}
                         """,
-                        [status, status, UPLOAD_DONE, now_text, remote_path, error_text, now_text] + path_params,
+                        [status, status, UPLOAD_UPLOADING, UPLOAD_DONE, UPLOAD_FAILED, now_text, remote_path, error_text, now_text] + path_params,
                     )
                 connection.commit()
                 if cursor.rowcount <= 0 and self.logger:
@@ -954,19 +1089,22 @@ class DatabaseManager:
         upload_status: str | None = None,
         keyword: str = "",
         limit: int = 5000,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
-        conditions = ["1=1"]
-        params: list[Any] = []
+        conditions = ["COALESCE(upload_status, ?) IN (?, ?)"]
+        params: list[Any] = [UPLOAD_PENDING, UPLOAD_DONE, UPLOAD_FAILED]
         status = str(upload_status or "").strip()
-        if status and status in VALID_UPLOAD_STATUSES:
+        if status and status in {UPLOAD_DONE, UPLOAD_FAILED}:
             conditions.append("COALESCE(upload_status, ?) = ?")
             params.extend([UPLOAD_PENDING, status])
         keyword_text = str(keyword or "").strip()
         if keyword_text:
-            conditions.append("(order_no LIKE ? OR file_name LIKE ?)")
+            conditions.append("order_no LIKE ?")
             like_text = f"%{keyword_text}%"
-            params.extend([like_text, like_text])
-        params.append(max(1, min(int(limit or 5000), 5000)))
+            params.append(like_text)
+        safe_limit = max(1, min(int(limit or 5000), 5000))
+        safe_offset = max(0, int(offset or 0))
+        params.extend([safe_limit, safe_offset])
         sql = f"""
             SELECT *
             FROM videos
@@ -976,15 +1114,17 @@ class DatabaseManager:
                 upload_time DESC,
                 COALESCE(NULLIF(updated_at, ''), NULLIF(recorded_at, ''), NULLIF(created_time, ''), printf('%012d', id)) DESC,
                 id DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
         """
         try:
             rows = [self._row_to_item(row) for row in self.get_connection().execute(sql, params).fetchall()]
             if self.logger:
                 self.logger.info(
-                    "查询网盘同步记录成功：status=%s, keyword=%s, count=%s",
+                    "查询网盘同步记录成功：status=%s, keyword=%s, limit=%s, offset=%s, count=%s",
                     status or "全部",
                     keyword_text,
+                    safe_limit,
+                    safe_offset,
                     len(rows),
                 )
             return rows
@@ -992,6 +1132,26 @@ class DatabaseManager:
             if self.logger:
                 self.logger.exception("查询网盘同步记录失败：status=%s, keyword=%s", status or "全部", keyword_text)
             return []
+
+    def count_upload_history(self, upload_status: str | None = None, keyword: str = "") -> int:
+        conditions = ["COALESCE(upload_status, ?) IN (?, ?)"]
+        params: list[Any] = [UPLOAD_PENDING, UPLOAD_DONE, UPLOAD_FAILED]
+        status = str(upload_status or "").strip()
+        if status and status in {UPLOAD_DONE, UPLOAD_FAILED}:
+            conditions.append("COALESCE(upload_status, ?) = ?")
+            params.extend([UPLOAD_PENDING, status])
+        keyword_text = str(keyword or "").strip()
+        if keyword_text:
+            conditions.append("order_no LIKE ?")
+            params.append(f"%{keyword_text}%")
+        sql = f"SELECT COUNT(*) FROM videos WHERE {' AND '.join(conditions)}"
+        try:
+            row = self.get_connection().execute(sql, params).fetchone()
+            return int(row[0] or 0) if row else 0
+        except Exception:
+            if self.logger:
+                self.logger.exception("统计网盘同步记录失败：status=%s, keyword=%s", status or "全部", keyword_text)
+            return 0
 
     def query_videos(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         filters = filters or {}
@@ -1509,6 +1669,11 @@ class DatabaseManager:
         item["validation_error"] = item.get("validation_error") or ""
         item["validation_warning"] = item.get("validation_warning") or ""
         item["validated_at"] = item.get("validated_at") or ""
+        item["file_hash"] = item.get("file_hash") or ""
+        item["hash_algorithm"] = item.get("hash_algorithm") or ""
+        item["hash_generated_at"] = item.get("hash_generated_at") or ""
+        item["hash_verify_status"] = item.get("hash_verify_status") or ""
+        item["hash_verify_at"] = item.get("hash_verify_at") or ""
         item["normalized_file_path"] = item.get("normalized_file_path") or normalize_file_path(item.get("file_path"))
         item["is_important"] = bool(item.get("is_important"))
         item["important_note"] = item.get("important_note") or ""

@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import zipfile
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
+from posixpath import normpath
 from typing import Any
 
 
@@ -36,6 +38,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "recording_quality": {
         "min_valid_duration_seconds": 3,
         "warn_short_video": True,
+    },
+    "hash_check": {
+        "enabled": True,
+        "algorithm": "SHA256",
+        "auto_generate_after_recording": True,
     },
     "disk_space": {
         "enabled": True,
@@ -139,6 +146,7 @@ EXPORTABLE_CONFIG_KEYS = {
     "watermark_margin",
     "scanner_guard",
     "recording_quality",
+    "hash_check",
     "disk_space",
     "preview",
     "voice_prompt",
@@ -205,40 +213,56 @@ class ConfigManager:
 
     def export_config(self, export_path: str | Path) -> dict[str, Any]:
         export_path = Path(export_path)
-        if export_path.suffix.lower() != ".json":
-            export_path = export_path.with_suffix(".json")
+        if export_path.suffix.lower() != ".zip":
+            export_path = export_path.with_suffix(".zip")
         export_path.parent.mkdir(parents=True, exist_ok=True)
 
         settings = self._exportable_settings()
-        voice_result = self._export_voice_files(export_path, settings)
+        voice_result = self._collect_voice_files(settings)
+        export_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         payload = {
             "app": CONFIG_EXPORT_APP,
             "config_version": CONFIG_EXPORT_VERSION,
-            "export_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "export_time": export_time,
             "settings": settings,
             "voice_files": {
-                "folder": voice_result["folder_name"],
+                "folder": "voice",
                 "files": voice_result["files"],
                 "warnings": voice_result["warnings"],
             },
             "security_note": "网盘 Secret 和授权 Token 已排除，导入后需要重新授权。",
         }
+        manifest = {
+            "app": CONFIG_EXPORT_APP,
+            "export_time": export_time,
+            "config_version": CONFIG_EXPORT_VERSION,
+            "contains_voice_files": bool(voice_result["files"]),
+            "sensitive_fields_excluded": True,
+        }
 
-        with export_path.open("w", encoding="utf-8") as file:
-            json.dump(payload, file, ensure_ascii=False, indent=2)
+        with zipfile.ZipFile(export_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("config.json", json.dumps(payload, ensure_ascii=False, indent=2))
+            archive.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+            for event_key, source in voice_result["sources"].items():
+                archive.write(source, voice_result["files"][event_key])
 
         return {
             "path": str(export_path),
-            "voice_folder": voice_result["folder"],
+            "voice_folder": "voice" if voice_result["files"] else "",
             "voice_files": voice_result["files"],
             "warnings": voice_result["warnings"],
             "excluded_sensitive_fields": sorted(NETDISK_EXPORT_SECRET_KEYS),
+            "archive": True,
         }
 
     def import_config(self, import_path: str | Path) -> dict[str, Any]:
         import_path = Path(import_path)
-        with import_path.open("r", encoding="utf-8") as file:
-            payload = json.load(file)
+        is_zip_import = import_path.suffix.lower() == ".zip"
+        if is_zip_import:
+            payload = self._read_zip_config(import_path)
+        else:
+            with import_path.open("r", encoding="utf-8") as file:
+                payload = json.load(file)
 
         if not isinstance(payload, dict):
             raise ValueError("配置文件格式不正确")
@@ -256,7 +280,11 @@ class ConfigManager:
         warnings: list[str] = []
         try:
             imported = self._sanitize_import_settings(settings)
-            voice_result = self._import_voice_files(import_path, payload, imported)
+            if is_zip_import:
+                voice_result = self._import_voice_files_from_zip(import_path, payload, imported)
+            else:
+                voice_result = self._import_voice_files(import_path, payload, imported)
+                warnings.append("已导入旧版 JSON 配置，建议后续使用新版 zip 格式导出配置。")
             warnings.extend(voice_result["warnings"])
 
             merged = deepcopy(self.config)
@@ -274,6 +302,7 @@ class ConfigManager:
             "voice_files": voice_result["files"],
             "warnings": warnings,
             "requires_netdisk_reauth": "netdisk_sync" in imported,
+            "legacy_json": not is_zip_import,
         }
 
     def backup_current_config(self) -> Path:
@@ -303,12 +332,12 @@ class ConfigManager:
                 voice_config["custom_files"] = {key: "" for key in custom_files}
         return settings
 
-    def _export_voice_files(self, export_path: Path, settings: dict[str, Any]) -> dict[str, Any]:
+    def _collect_voice_files(self, settings: dict[str, Any]) -> dict[str, Any]:
         source_voice = self.config.get("voice_prompt", {})
         source_files = source_voice.get("custom_files", {}) if isinstance(source_voice, dict) else {}
         source_files = source_files if isinstance(source_files, dict) else {}
-        voice_folder = export_path.with_name(f"{export_path.stem}_voice")
         copied: dict[str, str] = {}
+        sources: dict[str, Path] = {}
         warnings: list[str] = []
 
         for event_key, path_text in source_files.items():
@@ -318,11 +347,13 @@ class ConfigManager:
             if not source.exists() or not source.is_file():
                 warnings.append(f"{event_key}: 自定义语音文件不存在，已跳过")
                 continue
-            voice_folder.mkdir(parents=True, exist_ok=True)
+            if source.stat().st_size <= 0:
+                warnings.append(f"{event_key}: 自定义语音文件为空，已跳过")
+                continue
             target_name = f"{event_key}{source.suffix.lower()}"
-            target = voice_folder / target_name
-            shutil.copy2(source, target)
-            copied[str(event_key)] = target_name
+            zip_name = f"voice/{target_name}"
+            copied[str(event_key)] = zip_name
+            sources[str(event_key)] = source
 
         voice_settings = settings.get("voice_prompt")
         if isinstance(voice_settings, dict):
@@ -330,11 +361,80 @@ class ConfigManager:
             if isinstance(existing, dict):
                 voice_settings["custom_files"] = {key: copied.get(str(key), "") for key in existing}
         return {
-            "folder": str(voice_folder) if copied else "",
-            "folder_name": voice_folder.name if copied else "",
             "files": copied,
+            "sources": sources,
             "warnings": warnings,
         }
+
+    def _read_zip_config(self, import_path: Path) -> dict[str, Any]:
+        try:
+            with zipfile.ZipFile(import_path, "r") as archive:
+                if "config.json" not in archive.namelist():
+                    raise ValueError("配置压缩包缺少 config.json")
+                raw = archive.read("config.json")
+        except zipfile.BadZipFile as exc:
+            raise ValueError("配置压缩包格式不正确") from exc
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("配置压缩包中的 config.json 格式不正确") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("配置压缩包中的 config.json 格式不正确")
+        return payload
+
+    def _import_voice_files_from_zip(self, import_path: Path, payload: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+        voice_settings = settings.get("voice_prompt")
+        if not isinstance(voice_settings, dict):
+            return {"files": {}, "warnings": []}
+
+        custom_files = voice_settings.get("custom_files")
+        if not isinstance(custom_files, dict):
+            return {"files": {}, "warnings": []}
+
+        target_dir = self._config_path_to_path(
+            str(voice_settings.get("custom_voice_dir") or DEFAULT_CONFIG["voice_prompt"]["custom_voice_dir"])
+        ) or self.resolve_path("voice")
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        copied: dict[str, str] = {}
+        warnings: list[str] = []
+        try:
+            with zipfile.ZipFile(import_path, "r") as archive:
+                archive_names = set(archive.namelist())
+                for event_key, file_name in list(custom_files.items()):
+                    zip_name = self._safe_zip_member_name(str(file_name or ""))
+                    if not zip_name:
+                        custom_files[event_key] = ""
+                        continue
+                    if not zip_name.startswith("voice/"):
+                        zip_name = f"voice/{Path(zip_name).name}"
+                    if zip_name not in archive_names:
+                        custom_files[event_key] = ""
+                        warnings.append(f"{event_key}: 导入包中未找到语音文件 {zip_name}")
+                        continue
+                    target = target_dir / Path(zip_name).name
+                    with archive.open(zip_name, "r") as source, target.open("wb") as output:
+                        shutil.copyfileobj(source, output)
+                    custom_files[event_key] = str(target)
+                    copied[str(event_key)] = str(target)
+        except zipfile.BadZipFile as exc:
+            raise ValueError("配置压缩包格式不正确") from exc
+
+        voice_settings["custom_voice_dir"] = str(target_dir)
+        voice_settings["custom_files"] = custom_files
+        return {"files": copied, "warnings": warnings}
+
+    @staticmethod
+    def _safe_zip_member_name(value: str) -> str:
+        raw = str(value or "").replace("\\", "/").strip()
+        if not raw:
+            return ""
+        if raw.startswith("/") or ":" in raw:
+            return ""
+        normalized = normpath(raw).replace("\\", "/")
+        if normalized in {"", ".", ".."} or normalized.startswith("../"):
+            return ""
+        return normalized
 
     def _import_voice_files(self, import_path: Path, payload: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
         voice_settings = settings.get("voice_prompt")

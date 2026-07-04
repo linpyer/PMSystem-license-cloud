@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,7 @@ from app.core.database import (
     UPLOAD_PENDING,
     UPLOAD_UPLOADING,
 )
+from app.core.file_hash import calculate_file_hash, normalize_hash_algorithm
 from app.core.netdisk_sync import NetdiskUploadWorker, normalize_netdisk_config
 from app.core.video_player import open_folder, open_video, reveal_in_file_manager
 from app.ui.toast import show_toast
@@ -263,14 +265,49 @@ class VideoQueryLoadWorker(QThread):
             self.failed.emit(self.request_id, str(exc))
 
 
+class VideoHashWorker(QThread):
+    succeeded = Signal(str, str, float)
+    failed = Signal(str)
+
+    def __init__(self, file_path: str, algorithm: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.file_path = file_path
+        self.algorithm = normalize_hash_algorithm(algorithm)
+
+    def run(self) -> None:  # type: ignore[override]
+        start_time = time.perf_counter()
+        try:
+            file_hash = calculate_file_hash(self.file_path, self.algorithm)
+            self.succeeded.emit(file_hash, self.algorithm, time.perf_counter() - start_time)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class RecordDetailDialog(QDialog):
-    def __init__(self, record: dict[str, Any], duplicates: list[dict[str, Any]], parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        record: dict[str, Any],
+        duplicates: list[dict[str, Any]],
+        parent: QWidget | None = None,
+        database: DatabaseManager | None = None,
+        config: dict[str, Any] | None = None,
+        logger: logging.Logger | None = None,
+        notice_callback=None,
+        record_updated_callback=None,
+    ) -> None:
         super().__init__(parent)
         self.record = dict(record)
         self.duplicates = [dict(item) for item in duplicates]
+        self.database = database
+        self.config = config or {}
+        self.logger = logger or logging.getLogger(__name__)
+        self.notice_callback = notice_callback
+        self.record_updated_callback = record_updated_callback
+        self.hash_worker: VideoHashWorker | None = None
+        self._hash_worker_mode = ""
         self.setWindowTitle("单号详情")
-        self.resize(820, 620)
-        self.setMinimumSize(720, 520)
+        self.resize(1040, 740)
+        self.setMinimumSize(900, 560)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -325,6 +362,8 @@ class RecordDetailDialog(QDialog):
         remark_box.setMaximumHeight(120)
         layout.addWidget(remark_box)
 
+        self._build_hash_section(layout)
+
         duplicate_label = QLabel("重复录制记录")
         duplicate_label.setObjectName("detailSectionTitle")
         duplicate_label.setStyleSheet("font-weight: 700; color: #334155;")
@@ -334,7 +373,23 @@ class RecordDetailDialog(QDialog):
         duplicate_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         duplicate_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         duplicate_table.verticalHeader().setVisible(False)
-        duplicate_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        duplicate_header = duplicate_table.horizontalHeader()
+        duplicate_header.setStretchLastSection(False)
+        duplicate_header.setMinimumSectionSize(64)
+        duplicate_header.setSectionResizeMode(0, QHeaderView.Fixed)
+        duplicate_header.setSectionResizeMode(1, QHeaderView.Fixed)
+        duplicate_header.setSectionResizeMode(2, QHeaderView.Fixed)
+        duplicate_header.setSectionResizeMode(3, QHeaderView.Fixed)
+        duplicate_header.setSectionResizeMode(4, QHeaderView.Fixed)
+        duplicate_header.setSectionResizeMode(5, QHeaderView.Fixed)
+        duplicate_header.setSectionResizeMode(6, QHeaderView.Stretch)
+        duplicate_table.setColumnWidth(0, 176)
+        duplicate_table.setColumnWidth(1, 78)
+        duplicate_table.setColumnWidth(2, 104)
+        duplicate_table.setColumnWidth(3, 104)
+        duplicate_table.setColumnWidth(4, 104)
+        duplicate_table.setColumnWidth(5, 104)
+        duplicate_table.setColumnWidth(6, 120)
         duplicate_table.setAlternatingRowColors(True)
         current_id = self._record_id(self.record)
         for row_index, item in enumerate(self.duplicates or [self.record]):
@@ -352,6 +407,8 @@ class RecordDetailDialog(QDialog):
                 cell = QTableWidgetItem(value)
                 cell.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 cell.setTextAlignment(Qt.AlignCenter)
+                if column == 0:
+                    cell.setToolTip(value)
                 if column == 4:
                     cell.setForeground(QColor(self._file_status_color(value)))
                 elif column == 5:
@@ -398,6 +455,271 @@ class RecordDetailDialog(QDialog):
         grid.addWidget(name, row, 0, Qt.AlignTop)
         grid.addLayout(row_layout, row, 1)
         return row + 1
+
+    def _build_hash_section(self, layout: QVBoxLayout) -> None:
+        hash_label = QLabel("视频哈希")
+        hash_label.setObjectName("detailSectionTitle")
+        hash_label.setStyleSheet("font-weight: 700; color: #334155;")
+        layout.addWidget(hash_label)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+
+        self.hash_enabled_value = QLabel()
+        self.hash_algorithm_value = QLabel()
+        self.hash_generated_value = QLabel()
+        self.hash_verify_value = QLabel()
+        for label in (
+            self.hash_enabled_value,
+            self.hash_algorithm_value,
+            self.hash_generated_value,
+            self.hash_verify_value,
+        ):
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        row = 0
+        row = self._add_hash_label_row(grid, row, "哈希校验", self.hash_enabled_value)
+        row = self._add_hash_label_row(grid, row, "哈希算法", self.hash_algorithm_value)
+
+        hash_name = QLabel("视频哈希：")
+        hash_name.setStyleSheet("color: #64748b;")
+        self.hash_value_edit = QLineEdit()
+        self.hash_value_edit.setReadOnly(True)
+        self.hash_value_edit.setPlaceholderText("暂未生成")
+        self.hash_copy_button = QPushButton("复制")
+        self.hash_copy_button.setObjectName("secondaryButton")
+        self.hash_copy_button.setFixedWidth(58)
+        self.hash_copy_button.clicked.connect(self._copy_hash_value)
+        hash_row = QHBoxLayout()
+        hash_row.setContentsMargins(0, 0, 0, 0)
+        hash_row.setSpacing(8)
+        hash_row.addWidget(self.hash_value_edit, 1)
+        hash_row.addWidget(self.hash_copy_button)
+        grid.addWidget(hash_name, row, 0, Qt.AlignTop)
+        grid.addLayout(hash_row, row, 1)
+        row += 1
+
+        row = self._add_hash_label_row(grid, row, "生成时间", self.hash_generated_value)
+        row = self._add_hash_label_row(grid, row, "校验状态", self.hash_verify_value)
+        layout.addLayout(grid)
+
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(8)
+        self.hash_status_label = QLabel("")
+        self.hash_status_label.setStyleSheet("color: #64748b;")
+        self.hash_generate_button = QPushButton("生成校验码")
+        self.hash_generate_button.setObjectName("secondaryButton")
+        self.hash_generate_button.clicked.connect(self._start_hash_generation)
+        self.hash_verify_button = QPushButton("校验文件")
+        self.hash_verify_button.setObjectName("secondaryButton")
+        self.hash_verify_button.clicked.connect(self._start_hash_verify)
+        action_row.addWidget(self.hash_status_label, 1)
+        action_row.addWidget(self.hash_generate_button)
+        action_row.addWidget(self.hash_verify_button)
+        layout.addLayout(action_row)
+        self._refresh_hash_section()
+
+    def _add_hash_label_row(self, grid: QGridLayout, row: int, label: str, value_widget: QLabel) -> int:
+        name = QLabel(f"{label}：")
+        name.setStyleSheet("color: #64748b;")
+        value_widget.setStyleSheet("color: #0f172a;")
+        grid.addWidget(name, row, 0, Qt.AlignTop)
+        grid.addWidget(value_widget, row, 1)
+        return row + 1
+
+    def _current_hash_config(self) -> tuple[bool, str]:
+        hash_config = self.config.get("hash_check", {})
+        if not isinstance(hash_config, dict):
+            hash_config = {}
+        enabled = bool(hash_config.get("enabled", True))
+        algorithm = normalize_hash_algorithm(str(hash_config.get("algorithm") or "SHA256"))
+        return enabled, algorithm
+
+    def _refresh_hash_section(self) -> None:
+        enabled, configured_algorithm = self._current_hash_config()
+        hash_value = self._text(self.record.get("file_hash"), "")
+        algorithm = self._text(self.record.get("hash_algorithm"), configured_algorithm)
+        generated_at = self._text(self.record.get("hash_generated_at"), "暂无")
+        verify_status = self._text(self.record.get("hash_verify_status"), "未校验")
+        verify_at = self._text(self.record.get("hash_verify_at"), "")
+
+        self.hash_enabled_value.setText("已开启" if enabled else "已关闭")
+        self.hash_algorithm_value.setText(algorithm or configured_algorithm)
+        self.hash_value_edit.setText(hash_value or ("暂未生成" if enabled else "哈希校验未开启"))
+        self.hash_copy_button.setEnabled(bool(hash_value))
+        self.hash_generated_value.setText(generated_at)
+        verify_text = verify_status
+        if verify_at:
+            verify_text = f"{verify_status}（{verify_at}）"
+        self.hash_verify_value.setText(verify_text)
+        verify_color = "#dc2626" if verify_status in {"不一致", "文件不存在"} else "#047857" if verify_status == "通过" else "#0f172a"
+        self.hash_verify_value.setStyleSheet(f"color: {verify_color}; font-weight: 700;" if verify_status != "未校验" else "color: #0f172a;")
+        self.hash_generate_button.setText("重新生成校验码" if hash_value else "生成校验码")
+        self.hash_status_label.setText("" if enabled else "哈希校验未开启，可手动生成或校验。")
+
+    def _copy_hash_value(self) -> None:
+        hash_value = self._text(self.record.get("file_hash"), "")
+        if not hash_value:
+            self._notice("当前视频尚未生成校验码", "warning")
+            return
+        QApplication.clipboard().setText(hash_value)
+        self._notice("视频哈希已复制", "success")
+
+    def _record_file_path(self) -> Path:
+        return Path(str(self.record.get("file_path") or ""))
+
+    def _start_hash_generation(self) -> None:
+        if self.hash_worker is not None and self.hash_worker.isRunning():
+            return
+        if self.database is None:
+            self._notice("无法生成校验码：数据库未初始化", "error")
+            return
+        record_id = self._record_id(self.record)
+        if record_id <= 0:
+            self._notice("无法生成校验码：未找到视频记录", "error")
+            return
+        path = self._record_file_path()
+        if not path.exists() or not path.is_file():
+            self._notice("视频文件不存在，无法生成校验码", "error")
+            return
+        try:
+            if path.stat().st_size <= 0:
+                self._notice("视频文件大小为 0，无法生成校验码", "error")
+                return
+        except OSError as exc:
+            self._notice(f"无法读取视频文件：{exc}", "error")
+            return
+
+        if self._text(self.record.get("file_hash"), ""):
+            box = QMessageBox(self)
+            box.setWindowTitle("重新生成校验码")
+            box.setText("重新生成校验码会覆盖当前哈希记录，是否继续？")
+            cancel = box.addButton("取消", QMessageBox.RejectRole)
+            confirm = box.addButton("继续生成", QMessageBox.AcceptRole)
+            box.setDefaultButton(cancel)
+            box.exec()
+            if box.clickedButton() is not confirm:
+                return
+
+        _enabled, algorithm = self._current_hash_config()
+        self._begin_hash_worker("generate", path, algorithm)
+
+    def _start_hash_verify(self) -> None:
+        if self.hash_worker is not None and self.hash_worker.isRunning():
+            return
+        if self.database is None:
+            self._notice("无法校验文件：数据库未初始化", "error")
+            return
+        record_id = self._record_id(self.record)
+        stored_hash = self._text(self.record.get("file_hash"), "")
+        if record_id <= 0:
+            self._notice("无法校验文件：未找到视频记录", "error")
+            return
+        if not stored_hash:
+            self._notice("当前视频尚未生成校验码", "warning")
+            return
+        path = self._record_file_path()
+        if not path.exists() or not path.is_file():
+            self.database.update_video_hash_verify_status(record_id, "文件不存在")
+            self._reload_current_record()
+            self._refresh_hash_section()
+            self._notice("视频文件不存在，无法校验", "error")
+            return
+        algorithm = normalize_hash_algorithm(str(self.record.get("hash_algorithm") or self._current_hash_config()[1]))
+        self._begin_hash_worker("verify", path, algorithm)
+
+    def _begin_hash_worker(self, mode: str, path: Path, algorithm: str) -> None:
+        self._hash_worker_mode = mode
+        self._set_hash_buttons_enabled(False)
+        self.hash_status_label.setText("正在生成视频校验码..." if mode == "generate" else "正在校验视频文件...")
+        self.hash_worker = VideoHashWorker(str(path), algorithm, self)
+        self.hash_worker.succeeded.connect(self._on_hash_worker_succeeded)
+        self.hash_worker.failed.connect(self._on_hash_worker_failed)
+        self.hash_worker.finished.connect(self._finish_hash_worker)
+        self.hash_worker.start()
+
+    def _on_hash_worker_succeeded(self, file_hash: str, algorithm: str, cost_time: float) -> None:
+        if self.database is None:
+            return
+        record_id = self._record_id(self.record)
+        try:
+            if self._hash_worker_mode == "verify":
+                stored_hash = self._text(self.record.get("file_hash"), "")
+                status = "通过" if stored_hash.lower() == file_hash.lower() else "不一致"
+                self.database.update_video_hash_verify_status(record_id, status)
+                self.logger.info(
+                    "手动校验视频哈希：record_id=%s, result=%s, cost=%.2fs, hash_prefix=%s",
+                    record_id,
+                    status,
+                    cost_time,
+                    file_hash[:12],
+                )
+                if status == "通过":
+                    self._notice("文件校验通过，视频未发生变化", "success")
+                else:
+                    self._notice("文件校验不一致，视频可能被修改", "error")
+            else:
+                updated_rows = self.database.update_video_hash(record_id, file_hash, algorithm)
+                if updated_rows != 1:
+                    self._notice("校验码生成失败：未找到视频记录", "error")
+                    return
+                self.logger.info(
+                    "手动生成视频哈希：record_id=%s, algorithm=%s, cost=%.2fs, hash_prefix=%s",
+                    record_id,
+                    algorithm,
+                    cost_time,
+                    file_hash[:12],
+                )
+                self._notice("视频校验码已生成", "success")
+            self._reload_current_record()
+            self._refresh_hash_section()
+            if self.record_updated_callback:
+                self.record_updated_callback()
+        except Exception as exc:
+            self.logger.exception("视频哈希结果写入失败：record_id=%s, mode=%s", record_id, self._hash_worker_mode)
+            self._notice(f"视频哈希写入失败：{exc}", "error")
+
+    def _on_hash_worker_failed(self, error: str) -> None:
+        self.logger.warning("视频哈希计算失败：record_id=%s, error=%s", self._record_id(self.record), error)
+        self._notice(f"视频校验码处理失败：{error}", "error")
+
+    def _finish_hash_worker(self) -> None:
+        self._set_hash_buttons_enabled(True)
+        if self.hash_worker is not None:
+            self.hash_worker.deleteLater()
+        self.hash_worker = None
+        self._hash_worker_mode = ""
+
+    def _set_hash_buttons_enabled(self, enabled: bool) -> None:
+        self.hash_generate_button.setEnabled(enabled)
+        self.hash_verify_button.setEnabled(enabled)
+        self.hash_copy_button.setEnabled(enabled and bool(self._text(self.record.get("file_hash"), "")))
+
+    def _reload_current_record(self) -> None:
+        if self.database is None:
+            return
+        record_id = self._record_id(self.record)
+        latest = self.database.get_video_by_id(record_id) if record_id else None
+        if latest:
+            self.record = latest
+            for index, item in enumerate(self.duplicates):
+                if self._record_id(item) == record_id:
+                    self.duplicates[index] = dict(latest)
+                    break
+
+    def _notice(self, message: str, level: str = "info") -> None:
+        if self.notice_callback:
+            try:
+                self.notice_callback(message, level)
+                return
+            except Exception:
+                self.logger.exception("详情弹窗提示失败：%s", message)
+        if level == "error":
+            QMessageBox.warning(self, "提示", message)
+        else:
+            QMessageBox.information(self, "提示", message)
 
     def _status_badge(self, text: str, color: str) -> QLabel:
         badge = QLabel(text)
@@ -468,6 +790,7 @@ class DuplicateRecordsDialog(QDialog):
         self.logger = logger
         self.records: list[dict[str, Any]] = []
         self.checkboxes: dict[int, QCheckBox] = {}
+        self.select_all_checkbox: QCheckBox | None = None
         self._all_checked = False
         self.setWindowTitle("重复单号记录")
         self.resize(980, 640)
@@ -480,19 +803,35 @@ class DuplicateRecordsDialog(QDialog):
         layout.setContentsMargins(18, 18, 18, 14)
         layout.setSpacing(12)
 
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(12)
+        title_block = QVBoxLayout()
+        title_block.setSpacing(4)
         title = QLabel("重复单号记录")
         title.setStyleSheet("font-size: 20px; font-weight: 700; color: #0f172a;")
-        layout.addWidget(title)
+        title_block.addWidget(title)
 
         self.subtitle_label = QLabel("")
         self.subtitle_label.setStyleSheet("color: #475569; font-size: 13px;")
-        layout.addWidget(self.subtitle_label)
+        title_block.addWidget(self.subtitle_label)
+        header_layout.addLayout(title_block, 1)
 
-        self.table = QTableWidget(0, 10)
-        self.table.setHorizontalHeaderLabels(["☐", "序号", "录制时间", "类型", "视频大小", "视频时长", "文件状态", "上传状态", "备注", "操作"])
+        self.batch_delete_button = QPushButton("批量删除")
+        self.batch_delete_button.setObjectName("primaryButton")
+        self.batch_delete_button.setFixedSize(108, 36)
+        self.batch_delete_button.setCursor(Qt.PointingHandCursor)
+        self.batch_delete_button.setEnabled(False)
+        self.batch_delete_button.clicked.connect(self._delete_selected_records)
+        header_layout.addWidget(self.batch_delete_button, 0, Qt.AlignRight | Qt.AlignBottom)
+        layout.addLayout(header_layout)
+
+        self.table = QTableWidget(0, 9)
+        self.table.setHorizontalHeaderLabels(["", "序号", "录制时间", "类型", "视频大小", "视频时长", "文件状态", "上传状态", "操作"])
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setDefaultSectionSize(50)
+        self.table.verticalHeader().setMinimumSectionSize(46)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
         header.sectionClicked.connect(self._on_header_clicked)
@@ -504,14 +843,14 @@ class DuplicateRecordsDialog(QDialog):
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(6, QHeaderView.Fixed)
         header.setSectionResizeMode(7, QHeaderView.Fixed)
-        header.setSectionResizeMode(8, QHeaderView.Stretch)
-        header.setSectionResizeMode(9, QHeaderView.Fixed)
+        header.setSectionResizeMode(8, QHeaderView.Fixed)
         self.table.setColumnWidth(0, 46)
         self.table.setColumnWidth(1, 96)
-        self.table.setColumnWidth(3, 70)
-        self.table.setColumnWidth(6, 92)
-        self.table.setColumnWidth(7, 92)
-        self.table.setColumnWidth(9, 76)
+        self.table.setColumnWidth(3, 76)
+        self.table.setColumnWidth(6, 98)
+        self.table.setColumnWidth(7, 98)
+        self.table.setColumnWidth(8, 128)
+        self._setup_select_all_checkbox(header)
         layout.addWidget(self.table, 1)
 
         footer = QHBoxLayout()
@@ -519,15 +858,6 @@ class DuplicateRecordsDialog(QDialog):
         self.selected_label.setStyleSheet("color: #64748b;")
         footer.addWidget(self.selected_label)
         footer.addStretch(1)
-        self.batch_delete_button = QPushButton("批量删除")
-        self.batch_delete_button.setObjectName("tableDangerButton")
-        self.batch_delete_button.setEnabled(False)
-        self.batch_delete_button.clicked.connect(self._delete_selected_records)
-        footer.addWidget(self.batch_delete_button)
-        close_button = QPushButton("关闭")
-        close_button.setObjectName("secondaryButton")
-        close_button.clicked.connect(self.accept)
-        footer.addWidget(close_button)
         layout.addLayout(footer)
 
     def reload_records(self) -> None:
@@ -539,20 +869,26 @@ class DuplicateRecordsDialog(QDialog):
         try:
             for row_index, record in enumerate(self.records):
                 self.table.insertRow(row_index)
+                self.table.setRowHeight(row_index, 50)
                 self._populate_row(row_index, record)
         finally:
             self.table.setUpdatesEnabled(True)
         self._all_checked = False
-        self.table.horizontalHeaderItem(0).setText("☐")
+        self._sync_select_all_checkbox(0)
+        QTimer.singleShot(0, self._position_select_all_checkbox)
         self._update_selected_count()
 
     def _populate_row(self, row: int, record: dict[str, Any]) -> None:
         record_id = self._record_id(record)
         checkbox = QCheckBox()
         checkbox.setCursor(Qt.PointingHandCursor)
-        checkbox.stateChanged.connect(self._update_selected_count)
+        checkbox.setFixedSize(18, 18)
+        checkbox.stateChanged.connect(lambda _state: self._update_selected_count())
+        checkbox.setStyleSheet(self._checkbox_style())
         self.checkboxes[record_id] = checkbox
         checkbox_container = QWidget()
+        checkbox_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        checkbox_container.setStyleSheet("background: transparent;")
         checkbox_layout = QHBoxLayout(checkbox_container)
         checkbox_layout.setContentsMargins(0, 0, 0, 0)
         checkbox_layout.setAlignment(Qt.AlignCenter)
@@ -571,12 +907,11 @@ class DuplicateRecordsDialog(QDialog):
             self._text(record.get("duration_text"), "-"),
             self._text(record.get("status"), NORMAL_STATUS),
             self._text(record.get("upload_status"), UPLOAD_PENDING),
-            self._text(record.get("remark"), "点击添加备注"),
         ]
         for column_offset, value in enumerate(values, start=1):
             cell = QTableWidgetItem(value)
             cell.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            cell.setTextAlignment(Qt.AlignCenter if column_offset != 8 else Qt.AlignLeft | Qt.AlignVCenter)
+            cell.setTextAlignment(Qt.AlignCenter)
             if column_offset == 1 and record_id == self.current_record_id:
                 cell.setForeground(QColor("#0f766e"))
             elif column_offset == 6:
@@ -586,44 +921,117 @@ class DuplicateRecordsDialog(QDialog):
                 upload_error = str(record.get("upload_error") or "").strip()
                 if upload_error:
                     cell.setToolTip(upload_error)
-            elif column_offset == 8:
-                remark = str(record.get("remark") or "").strip()
-                if remark:
-                    cell.setToolTip(remark)
             self.table.setItem(row, column_offset, cell)
 
+        path = Path(str(record.get("file_path") or ""))
+        open_button = QPushButton("打开")
+        open_button.setObjectName("tableUploadButton")
+        open_button.setFixedSize(48, 28)
+        open_button.setCursor(Qt.PointingHandCursor)
+        open_button.setEnabled(path.exists())
+        open_button.setToolTip("打开视频" if path.exists() else "视频文件不存在")
+        open_button.clicked.connect(lambda _checked=False, rid=record_id: self._open_record_video(rid))
         delete_button = QPushButton("删除")
         delete_button.setObjectName("tableDangerButton")
-        delete_button.setFixedSize(50, 26)
+        delete_button.setFixedSize(48, 28)
         delete_button.clicked.connect(lambda _checked=False, rid=record_id: self._delete_single_record(rid))
         delete_container = QWidget()
         delete_layout = QHBoxLayout(delete_container)
-        delete_layout.setContentsMargins(0, 0, 0, 0)
+        delete_layout.setContentsMargins(4, 4, 4, 4)
+        delete_layout.setSpacing(6)
         delete_layout.setAlignment(Qt.AlignCenter)
+        delete_layout.addWidget(open_button)
         delete_layout.addWidget(delete_button)
-        self.table.setCellWidget(row, 9, delete_container)
+        self.table.setCellWidget(row, 8, delete_container)
+
+    def _setup_select_all_checkbox(self, header: QHeaderView) -> None:
+        self.select_all_checkbox = QCheckBox(header)
+        self.select_all_checkbox.setCursor(Qt.PointingHandCursor)
+        self.select_all_checkbox.setFixedSize(18, 18)
+        self.select_all_checkbox.setStyleSheet(self._checkbox_style())
+        self.select_all_checkbox.stateChanged.connect(self._on_select_all_checkbox_changed)
+        header.sectionResized.connect(lambda *_args: self._position_select_all_checkbox())
+        header.geometriesChanged.connect(self._position_select_all_checkbox)
+        QTimer.singleShot(0, self._position_select_all_checkbox)
+
+    def _position_select_all_checkbox(self) -> None:
+        if self.select_all_checkbox is None:
+            return
+        header = self.table.horizontalHeader()
+        section_x = header.sectionViewportPosition(0)
+        section_width = header.sectionSize(0)
+        x = section_x + max(0, (section_width - self.select_all_checkbox.width()) // 2)
+        y = max(0, (header.height() - self.select_all_checkbox.height()) // 2)
+        self.select_all_checkbox.move(x, y)
+        self.select_all_checkbox.raise_()
+
+    def _on_select_all_checkbox_changed(self, state: int) -> None:
+        self._set_all_checked(state == Qt.CheckState.Checked.value)
+        self._update_selected_count()
 
     def _on_header_clicked(self, section: int) -> None:
         if section != 0:
             return
-        self._all_checked = not self._all_checked
-        for checkbox in self.checkboxes.values():
-            checkbox.setChecked(self._all_checked)
-        self.table.horizontalHeaderItem(0).setText("☑" if self._all_checked else "☐")
+        selected = len(self._selected_records())
+        self._set_all_checked(selected < len(self.checkboxes))
         self._update_selected_count()
+
+    def _set_all_checked(self, checked: bool) -> None:
+        self._all_checked = bool(checked)
+        for checkbox in self.checkboxes.values():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(self._all_checked)
+            checkbox.blockSignals(False)
+        self._sync_select_all_checkbox(len(self.checkboxes) if self._all_checked else 0)
 
     def _update_selected_count(self) -> None:
         selected = len(self._selected_records())
         self.selected_label.setText(f"已选择 {selected} 条")
         self.batch_delete_button.setEnabled(selected > 0)
-        if selected != len(self.checkboxes):
+        total = len(self.checkboxes)
+        if selected == total and total > 0:
+            self._all_checked = True
+        else:
             self._all_checked = False
-            if self.table.horizontalHeaderItem(0):
-                self.table.horizontalHeaderItem(0).setText("☐")
+        self._sync_select_all_checkbox(selected)
+
+    def _sync_select_all_checkbox(self, selected: int) -> None:
+        if self.select_all_checkbox is None:
+            return
+        total = len(self.checkboxes)
+        self.select_all_checkbox.blockSignals(True)
+        self.select_all_checkbox.setChecked(total > 0 and selected == total)
+        self.select_all_checkbox.blockSignals(False)
+
+    @staticmethod
+    def _checkbox_style() -> str:
+        return (
+            "QCheckBox { background: transparent; padding: 0; margin: 0; }"
+            "QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #CBD5E1; "
+            "border-radius: 3px; background: #FFFFFF; }"
+            "QCheckBox::indicator:checked { background: #0F766E; border-color: #0F766E; }"
+        )
 
     def _selected_records(self) -> list[dict[str, Any]]:
         selected_ids = {record_id for record_id, checkbox in self.checkboxes.items() if checkbox.isChecked()}
         return [record for record in self.records if self._record_id(record) in selected_ids]
+
+    def _open_record_video(self, record_id: int) -> None:
+        record = self._record_by_id(record_id)
+        if not record:
+            self._notice("记录不存在，列表已刷新", "warning")
+            self.reload_records()
+            return
+        path = Path(str(record.get("file_path") or ""))
+        if not path.exists():
+            self._notice("视频文件不存在", "warning")
+            return
+        try:
+            open_video(path)
+            self.logger.info("重复单号记录弹窗打开视频：id=%s, path=%s", record_id, path)
+        except Exception as exc:
+            self.logger.exception("重复单号记录弹窗打开视频失败：id=%s, path=%s", record_id, path)
+            self._notice(f"打开视频失败：{exc}", "error")
 
     def _delete_single_record(self, record_id: int) -> None:
         record = self._record_by_id(record_id)
@@ -767,12 +1175,17 @@ class DuplicateRecordsDialog(QDialog):
 
 
 class NetdiskHistoryDialog(QDialog):
-    STATUS_OPTIONS = ("全部", UPLOAD_DONE, UPLOAD_FAILED, UPLOAD_UPLOADING, UPLOAD_PENDING)
+    STATUS_OPTIONS = ("全部", UPLOAD_DONE, UPLOAD_FAILED)
 
     def __init__(self, database: DatabaseManager, logger: logging.Logger, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.database = database
         self.logger = logger
+        self.current_page = 1
+        self.page_size = 20
+        self.total_count = 0
+        self.total_pages = 1
+        self._last_filter_key: tuple[str, str] | None = None
         self.setWindowTitle("网盘同步记录")
         self.resize(980, 620)
         self.setMinimumSize(860, 520)
@@ -804,47 +1217,90 @@ class NetdiskHistoryDialog(QDialog):
         filter_layout.addWidget(self.refresh_button)
         layout.addLayout(filter_layout)
 
-        self.table = QTableWidget(0, 7)
-        self.table.setHorizontalHeaderLabels(["上传时间", "单号", "文件名", "上传状态", "失败原因", "远程路径", "重试次数"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["上传时间", "单号", "上传状态", "失败原因", "远程路径", "重试次数"])
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.Fixed)
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
         header.setSectionResizeMode(3, QHeaderView.Fixed)
         header.setSectionResizeMode(4, QHeaderView.Stretch)
-        header.setSectionResizeMode(5, QHeaderView.Stretch)
-        header.setSectionResizeMode(6, QHeaderView.Fixed)
-        self.table.setColumnWidth(3, 86)
-        self.table.setColumnWidth(6, 70)
+        header.setSectionResizeMode(5, QHeaderView.Fixed)
+        self.table.setColumnWidth(0, 160)
+        self.table.setColumnWidth(1, 170)
+        self.table.setColumnWidth(2, 86)
+        self.table.setColumnWidth(3, 220)
+        self.table.setColumnWidth(5, 70)
         layout.addWidget(self.table, 1)
 
-        self.hint_label = QLabel("双击远程路径可复制。")
+        self.hint_label = QLabel("右键单号或远程路径可复制。")
         self.hint_label.setStyleSheet("color: #64748b; font-size: 12px;")
         layout.addWidget(self.hint_label)
 
-        footer = QHBoxLayout()
-        footer.addStretch(1)
-        close_button = QPushButton("关闭")
-        close_button.setObjectName("secondaryButton")
-        close_button.clicked.connect(self.accept)
-        footer.addWidget(close_button)
-        layout.addLayout(footer)
+        pagination = QHBoxLayout()
+        pagination.setSpacing(8)
+        self.history_total_label = QLabel("共 0 条")
+        pagination.addWidget(self.history_total_label)
+        pagination.addStretch(1)
+        pagination.addWidget(QLabel("每页："))
+        self.page_size_combo = QComboBox()
+        self.page_size_combo.addItems(["10", "20", "50", "100"])
+        self.page_size_combo.setCurrentText(str(self.page_size))
+        self.page_size_combo.setFixedWidth(76)
+        pagination.addWidget(self.page_size_combo)
+        self.prev_page_button = QPushButton("<")
+        self.prev_page_button.setObjectName("paginationButton")
+        self.prev_page_button.setFixedWidth(34)
+        self.next_page_button = QPushButton(">")
+        self.next_page_button.setObjectName("paginationButton")
+        self.next_page_button.setFixedWidth(34)
+        self.page_info_label = QLabel("第 1 / 1 页")
+        self.jump_page_input = QLineEdit()
+        self.jump_page_input.setFixedWidth(56)
+        self.jump_page_input.setValidator(QIntValidator(1, 999999, self))
+        self.jump_page_input.setAlignment(Qt.AlignCenter)
+        self.jump_page_button = QPushButton("跳转")
+        self.jump_page_button.setObjectName("secondaryButton")
+        pagination.addWidget(self.prev_page_button)
+        pagination.addWidget(self.page_info_label)
+        pagination.addWidget(self.next_page_button)
+        pagination.addWidget(QLabel("跳至"))
+        pagination.addWidget(self.jump_page_input)
+        pagination.addWidget(self.jump_page_button)
+        layout.addLayout(pagination)
 
-        self.status_combo.currentIndexChanged.connect(lambda _index: self.reload_records())
-        self.order_search_input.returnPressed.connect(self.reload_records)
-        self.refresh_button.clicked.connect(self.reload_records)
-        self.table.cellDoubleClicked.connect(self._copy_remote_path)
+        self.status_combo.currentIndexChanged.connect(lambda _index: self._on_filter_changed())
+        self.order_search_input.returnPressed.connect(self._on_filter_changed)
+        self.refresh_button.clicked.connect(lambda: self.reload_records(reset_page=False))
+        self.page_size_combo.currentTextChanged.connect(self._on_page_size_changed)
+        self.prev_page_button.clicked.connect(lambda: self._go_to_page(self.current_page - 1))
+        self.next_page_button.clicked.connect(lambda: self._go_to_page(self.current_page + 1))
+        self.jump_page_button.clicked.connect(self._jump_to_page)
+        self.jump_page_input.returnPressed.connect(self._jump_to_page)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
+        self.table.cellDoubleClicked.connect(self._copy_cell_from_double_click)
 
-    def reload_records(self) -> None:
+    def reload_records(self, reset_page: bool = False) -> None:
+        if reset_page:
+            self.current_page = 1
         status = self.status_combo.currentText().strip()
         status_filter = None if status == "全部" else status
         keyword = self.order_search_input.text().strip()
-        rows = self.database.query_upload_history(status_filter, keyword)
+        filter_key = (status_filter or "", keyword)
+        if self._last_filter_key is not None and self._last_filter_key != filter_key:
+            self.current_page = 1
+        self._last_filter_key = filter_key
+        self.total_count = self.database.count_upload_history(status_filter, keyword)
+        self.total_pages = max(1, (self.total_count + self.page_size - 1) // self.page_size)
+        self.current_page = max(1, min(self.current_page, self.total_pages))
+        offset = (self.current_page - 1) * self.page_size
+        rows = self.database.query_upload_history(status_filter, keyword, limit=self.page_size, offset=offset)
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(0)
         try:
@@ -853,17 +1309,18 @@ class NetdiskHistoryDialog(QDialog):
                 self._populate_row(row_index, record)
         finally:
             self.table.setUpdatesEnabled(True)
-        self.hint_label.setText(f"共 {len(rows)} 条记录。双击远程路径可复制。")
+        self._update_pagination_controls()
+        self.hint_label.setText("右键单号或远程路径可复制。")
 
     def _populate_row(self, row: int, record: dict[str, Any]) -> None:
-        upload_status = str(record.get("upload_status") or UPLOAD_PENDING)
+        upload_status = str(record.get("upload_status") or "")
         upload_time = str(record.get("upload_time") or "").strip() or "暂无"
         upload_error = str(record.get("upload_error") or "").strip()
         remote_path = str(record.get("upload_remote_path") or "").strip()
+        order_no = str(record.get("order_no") or "").strip()
         values = [
             upload_time,
-            str(record.get("order_no") or ""),
-            str(record.get("file_name") or ""),
+            order_no,
             upload_status,
             upload_error if upload_status == UPLOAD_FAILED and upload_error else "-",
             remote_path if remote_path else "-",
@@ -872,27 +1329,90 @@ class NetdiskHistoryDialog(QDialog):
         for column, value in enumerate(values):
             item = QTableWidgetItem(value)
             item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            item.setTextAlignment(Qt.AlignCenter if column in {0, 1, 3, 6} else Qt.AlignLeft | Qt.AlignVCenter)
-            if column == 3:
+            item.setTextAlignment(Qt.AlignCenter if column in {0, 1, 2, 5} else Qt.AlignLeft | Qt.AlignVCenter)
+            if column == 1 and order_no:
+                item.setToolTip(order_no)
+                item.setData(Qt.UserRole, order_no)
+            if column == 2:
                 item.setForeground(QColor(RecordDetailDialog._upload_status_color(upload_status)))
-            if column == 4 and upload_error:
+            if column == 3 and upload_error:
                 item.setToolTip(upload_error)
-            if column == 5 and remote_path:
+            if column == 4 and remote_path:
                 item.setToolTip(remote_path)
                 item.setData(Qt.UserRole, remote_path)
             self.table.setItem(row, column, item)
 
-    def _copy_remote_path(self, row: int, column: int) -> None:
-        if column != 5:
+    def _on_filter_changed(self) -> None:
+        self.reload_records(reset_page=True)
+
+    def _on_page_size_changed(self, text: str) -> None:
+        try:
+            self.page_size = max(1, int(text))
+        except ValueError:
+            self.page_size = 20
+        self.reload_records(reset_page=True)
+
+    def _go_to_page(self, page: int) -> None:
+        target = max(1, min(int(page or 1), self.total_pages))
+        if target == self.current_page:
+            return
+        self.current_page = target
+        self.reload_records(reset_page=False)
+
+    def _jump_to_page(self) -> None:
+        try:
+            page = int(self.jump_page_input.text().strip() or self.current_page)
+        except ValueError:
+            page = self.current_page
+        self._go_to_page(page)
+
+    def _update_pagination_controls(self) -> None:
+        self.history_total_label.setText(f"共 {self.total_count} 条")
+        self.page_info_label.setText(f"第 {self.current_page} / {self.total_pages} 页")
+        self.jump_page_input.setText(str(self.current_page))
+        self.jump_page_input.setValidator(QIntValidator(1, max(1, self.total_pages), self))
+        self.prev_page_button.setEnabled(self.current_page > 1)
+        self.next_page_button.setEnabled(self.current_page < self.total_pages)
+
+    def _show_context_menu(self, position: QPoint) -> None:
+        index = self.table.indexAt(position)
+        if not index.isValid() or index.column() not in {1, 4}:
+            return
+        menu = QMenu(self)
+        copy_label = "复制单号" if index.column() == 1 else "复制远程路径"
+        copy_action = menu.addAction(copy_label)
+        item = self.table.item(index.row(), index.column())
+        text = str(item.data(Qt.UserRole) or "").strip() if item else ""
+        copy_action.setEnabled(bool(text))
+        selected = menu.exec(self.table.viewport().mapToGlobal(position))
+        if selected is copy_action:
+            self._copy_history_cell(index.row(), index.column())
+
+    def _copy_cell_from_double_click(self, row: int, column: int) -> None:
+        if column in {1, 4}:
+            self._copy_history_cell(row, column)
+
+    def _copy_history_cell(self, row: int, column: int) -> None:
+        if column not in {1, 4}:
             return
         item = self.table.item(row, column)
         if item is None:
             return
-        remote_path = str(item.data(Qt.UserRole) or "").strip()
-        if not remote_path:
+        text = str(item.data(Qt.UserRole) or "").strip()
+        if not text:
+            self._show_copy_notice("暂无可复制内容", "warning")
             return
-        QApplication.clipboard().setText(remote_path)
-        self.hint_label.setText("远程路径已复制。")
+        QApplication.clipboard().setText(text)
+        self._show_copy_notice("单号已复制" if column == 1 else "远程路径已复制", "success")
+
+    def _show_copy_notice(self, message: str, level: str = "success") -> None:
+        self.hint_label.setText(message)
+        parent = self.parent()
+        if hasattr(parent, "_show_notice"):
+            try:
+                parent._show_notice(message, level)
+            except Exception:
+                self.logger.exception("同步记录复制提示失败：message=%s", message)
 
 
 class QueryTab(QWidget):
@@ -1529,38 +2049,13 @@ class QueryTab(QWidget):
 
     def _set_order_no_item(self, row: int, entry: dict[str, Any], path: Path) -> None:
         order_no = str(entry.get("order_no") or "-")
+        self.table.removeCellWidget(row, 1)
         item = QTableWidgetItem(order_no)
         item.setData(Qt.UserRole, str(path))
         item.setData(self.COPY_TEXT_ROLE, order_no)
         item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         item.setTextAlignment(Qt.AlignCenter)
-        tooltip = ""
-        if self._is_important_entry(entry):
-            tooltip = self._important_tooltip(entry)
-            item.setToolTip(tooltip)
         self.table.setItem(row, 1, item)
-
-        if not self._is_important_entry(entry):
-            return
-
-        container = QWidget()
-        container.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(4)
-        layout.setAlignment(Qt.AlignCenter)
-
-        icon = QLabel("❗")
-        icon.setAlignment(Qt.AlignCenter)
-        icon.setToolTip(tooltip)
-        icon.setStyleSheet("color: #DC2626; font-size: 14px; font-weight: 800;")
-        text = QLabel(order_no)
-        text.setAlignment(Qt.AlignCenter)
-        text.setToolTip(tooltip)
-        text.setStyleSheet("color: #0f172a;")
-        layout.addWidget(icon, 0, Qt.AlignCenter)
-        layout.addWidget(text, 0, Qt.AlignCenter)
-        self.table.setCellWidget(row, 1, container)
 
     def _set_two_line_item(
         self,
@@ -1624,20 +2119,44 @@ class QueryTab(QWidget):
         self.table.setCellWidget(row, self.RECORD_TYPE_COLUMN, container)
 
     def _set_remark_item(self, row: int, entry: dict[str, Any], path: Path) -> None:
-        remark = str(entry.get("remark") or "")
-        display_text = remark if remark else "点击添加备注"
+        display_text, tooltip, remark, important = self._remark_display_parts(entry)
         item = QTableWidgetItem(display_text)
         item.setData(Qt.UserRole, str(path))
         item.setData(self.COPY_TEXT_ROLE, remark)
         item.setData(self.RECORD_ID_ROLE, self._record_id_from_entry(entry))
-        item.setToolTip(remark or "点击添加备注")
+        item.setToolTip(tooltip)
         item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
         item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        if not remark:
+        if important:
+            item.setForeground(QColor("#DC2626"))
+        elif not remark:
             item.setForeground(QColor("#64748b"))
         else:
             item.setForeground(QColor("#1f2937"))
         self.table.setItem(row, self.REMARK_COLUMN, item)
+
+    def _remark_display_parts(self, entry: dict[str, Any]) -> tuple[str, str, str, bool]:
+        remark = str(entry.get("remark") or "").strip()
+        important = self._is_important_entry(entry)
+        important_note = str(entry.get("important_note") or "").strip()
+        if important and remark:
+            display_text = f"❗ 重要｜{remark}"
+        elif important:
+            display_text = "❗ 重要"
+        elif remark:
+            display_text = remark
+        else:
+            display_text = "点击添加备注"
+
+        tooltip_parts: list[str] = []
+        if important:
+            tooltip_parts.append("重要或有争议的单号")
+            if important_note:
+                tooltip_parts.append(f"重要原因：{important_note}")
+        if remark:
+            tooltip_parts.append(f"备注：{remark}" if important else remark)
+        tooltip = "\n".join(tooltip_parts) if tooltip_parts else "点击添加备注"
+        return display_text, tooltip, remark, important
 
     @staticmethod
     def _record_id_from_entry(entry: dict[str, Any]) -> int:
@@ -1659,7 +2178,7 @@ class QueryTab(QWidget):
     def _important_tooltip(cls, entry: dict[str, Any]) -> str:
         note = str(entry.get("important_note") or "").strip()
         if note:
-            return f"重要或有争议的单号\n备注：{note}"
+            return f"重要或有争议的单号\n重要原因：{note}"
         return "重要或有争议的单号"
 
     def _set_scene_video_cell(self, row: int, entry: dict[str, Any], path: Path) -> None:
@@ -1770,6 +2289,9 @@ class QueryTab(QWidget):
         validation_error = str(entry.get("validation_error") or "").strip()
         if validation_error:
             tooltip_parts.append(f"校验错误：{validation_error}")
+        hash_verify_status = str(entry.get("hash_verify_status") or "").strip()
+        if hash_verify_status == "不一致":
+            tooltip_parts.append("哈希校验不一致")
 
         layout.addWidget(status_line, 0, Qt.AlignCenter)
 
@@ -1803,19 +2325,6 @@ class QueryTab(QWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(6)
         layout.setAlignment(Qt.AlignCenter)
-
-        important = self._is_important_entry(entry)
-        important_button = QPushButton("★" if important else "☆")
-        important_button.setFixedSize(30, 26)
-        important_button.setCursor(Qt.PointingHandCursor)
-        important_button.setToolTip("取消重要标记" if important else "标记为重要视频")
-        important_button.setStyleSheet(
-            "QPushButton { color: #DC2626; font-weight: 800; border: 1px solid #FCA5A5; "
-            "background: #FFF1F2; border-radius: 4px; }"
-            "QPushButton:hover { background: #FEE2E2; }"
-        )
-        important_button.clicked.connect(lambda _checked=False, row_entry=dict(entry): self._toggle_important(row_entry))
-        layout.addWidget(important_button)
 
         if self._should_show_upload_action(entry, path):
             upload_status = str(entry.get("upload_status") or UPLOAD_PENDING)
@@ -1863,7 +2372,7 @@ class QueryTab(QWidget):
             self.upload_status_filter = "全部"
             self._sync_upload_status_filter_buttons()
         self.table.setColumnWidth(self.STATUS_COLUMN, 170 if enabled else 152)
-        self.table.setColumnWidth(self.ACTION_COLUMN, 158 if enabled else 112)
+        self.table.setColumnWidth(self.ACTION_COLUMN, 124 if enabled else 112)
         if not enabled and not self.is_netdisk_syncing():
             self._hide_netdisk_progress()
 
@@ -2271,7 +2780,16 @@ class QueryTab(QWidget):
             duplicates = self.database.get_videos_by_order_no(order_no, self.video_dir) if order_no else [record]
             if not duplicates:
                 duplicates = [record]
-            dialog = RecordDetailDialog(record, duplicates, self)
+            dialog = RecordDetailDialog(
+                record,
+                duplicates,
+                self,
+                database=self.database,
+                config=self.config_manager.config,
+                logger=self.logger,
+                notice_callback=self._show_notice,
+                record_updated_callback=lambda: self.mark_dirty(),
+            )
             dialog.exec()
         except Exception as exc:
             self.logger.exception("打开单号详情失败：id=%s, path=%s", record_id or "-", path)
@@ -2570,29 +3088,60 @@ class QueryTab(QWidget):
         current_text = ""
         if current_item is not None:
             current_text = str(current_item.data(self.COPY_TEXT_ROLE) or "")
-        current_text = self._latest_remark_text(record_id, path, current_text)
+        latest_record = self._video_record_for_remark(record_id, path) or {}
+        if latest_record:
+            current_text = str(latest_record.get("remark") or "")
+        current_important = self._is_important_entry(latest_record)
+        current_important_note = str(latest_record.get("important_note") or "").strip()
+        target_record_id = record_id or self._record_id_from_entry(latest_record)
 
         dialog = QDialog(self)
         dialog.setWindowTitle("编辑备注")
-        dialog.resize(460, 300)
+        dialog.resize(520, 430)
         layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("备注内容："))
         editor = QTextEdit()
         editor.setPlainText(current_text)
         editor.setPlaceholderText("请输入备注，最多 500 字。")
         layout.addWidget(editor)
 
+        important_checkbox = QCheckBox("标记为重要视频")
+        important_checkbox.setChecked(current_important)
+        layout.addWidget(important_checkbox)
+
+        important_note_label = QLabel("重要原因：")
+        important_note_input = QLineEdit()
+        important_note_input.setText(current_important_note)
+        important_note_input.setPlaceholderText("例如：售后争议、客户反馈、待核实")
+        layout.addWidget(important_note_label)
+        layout.addWidget(important_note_input)
+
+        def sync_important_note_visible() -> None:
+            visible = important_checkbox.isChecked()
+            important_note_label.setVisible(visible)
+            important_note_input.setVisible(visible)
+
+        important_checkbox.toggled.connect(sync_important_note_visible)
+        sync_important_note_visible()
+
         def save_remark() -> None:
             remark = editor.toPlainText().strip()
+            important_checked = important_checkbox.isChecked()
+            important_note = important_note_input.text().strip() if important_checked else ""
             if len(remark) > 500:
                 self._show_notice("备注最多支持 500 字。", "warning")
+                return
+            if len(important_note) > 500:
+                self._show_notice("重要原因最多支持 500 字。", "warning")
                 return
 
             updated_rows = 0
             log_target = ""
+            resolved_record_id = target_record_id
             try:
-                if record_id:
-                    updated_rows = self.database.update_video_remark(record_id, remark)
-                    log_target = f"id={record_id}"
+                if resolved_record_id:
+                    updated_rows = self.database.update_video_remark(resolved_record_id, remark)
+                    log_target = f"id={resolved_record_id}"
                 else:
                     path_text = str(path).strip()
                     if not path_text or path_text == ".":
@@ -2612,33 +3161,83 @@ class QueryTab(QWidget):
                     self._show_notice("备注保存失败：未找到对应记录", "error")
                     return
 
-                saved_record = self._video_record_for_remark(record_id, path)
+                if not resolved_record_id:
+                    resolved_record = self._video_record_for_remark(0, path)
+                    resolved_record_id = self._record_id_from_entry(resolved_record or {})
+                if not resolved_record_id:
+                    self.logger.warning("重要标记保存失败：未找到对应记录 id，row=%s, path=%s", row, path)
+                    self._show_notice("重要标记保存失败：未找到对应记录", "error")
+                    return
+
+                importance_rows = self.database.update_video_importance(resolved_record_id, important_checked, important_note)
+                if importance_rows != 1:
+                    self.logger.warning(
+                        "重要标记保存失败：未找到对应记录，db=%s, id=%s, rowcount=%s, important=%s, note_len=%s",
+                        self.database.db_path,
+                        resolved_record_id,
+                        importance_rows,
+                        important_checked,
+                        len(important_note),
+                    )
+                    self._show_notice("重要标记保存失败：未找到对应记录", "error")
+                    return
+
+                saved_record = self._video_record_for_remark(resolved_record_id, path)
                 saved_remark = str(saved_record.get("remark") or "") if saved_record else ""
+                saved_important = self._is_important_entry(saved_record or {})
+                saved_note = str((saved_record or {}).get("important_note") or "").strip()
                 self.logger.info(
-                    "备注保存回读：db=%s, %s, rowcount=%s, saved_remark_len=%s, saved_empty=%s",
+                    "备注保存回读：db=%s, %s, rowcount=%s, important_rowcount=%s, saved_remark_len=%s, saved_empty=%s, saved_important=%s, saved_note_len=%s",
                     self.database.db_path,
                     log_target,
                     updated_rows,
+                    importance_rows,
                     len(saved_remark),
                     not bool(saved_remark),
+                    saved_important,
+                    len(saved_note),
                 )
-                if saved_remark != remark:
+                if (
+                    saved_remark != remark
+                    or saved_important != important_checked
+                    or (important_checked and saved_note != important_note)
+                    or (not important_checked and saved_note)
+                ):
                     self.logger.error(
-                        "备注保存异常：数据库回读不一致，db=%s, %s, input_len=%s, saved_len=%s",
+                        "备注保存异常：数据库回读不一致，db=%s, %s, input_len=%s, saved_len=%s, input_important=%s, saved_important=%s, input_note_len=%s, saved_note_len=%s",
                         self.database.db_path,
                         log_target,
                         len(remark),
                         len(saved_remark),
+                        important_checked,
+                        saved_important,
+                        len(important_note),
+                        len(saved_note),
                     )
                     self._show_notice("备注保存异常：数据库回读不一致", "error")
                     return
 
-                self.logger.info("修改备注成功：%s, remark_len=%s", log_target, len(remark))
-                self._update_remark_cell(row, saved_remark)
+                self.logger.info(
+                    "修改备注和重要标记成功：%s, remark_len=%s, important=%s, note_len=%s",
+                    log_target,
+                    len(remark),
+                    important_checked,
+                    len(important_note),
+                )
+                self._update_remark_cell(row, saved_record or {"remark": saved_remark})
+                if saved_record:
+                    self._set_order_no_item(row, saved_record, path)
                 self._show_notice("备注已保存", "success")
                 dialog.accept()
             except Exception:
-                self.logger.exception("修改备注失败：id=%s, path=%s, remark_len=%s", record_id or "-", path, len(remark))
+                self.logger.exception(
+                    "修改备注失败：id=%s, path=%s, remark_len=%s, important=%s, note_len=%s",
+                    record_id or "-",
+                    path,
+                    len(remark),
+                    important_checked,
+                    len(important_note),
+                )
                 self._show_notice("备注保存失败，请查看日志", "error")
 
         button_row = QHBoxLayout()
@@ -2689,16 +3288,26 @@ class QueryTab(QWidget):
             record = self.database.get_video_by_path(path)
         return record
 
-    def _update_remark_cell(self, row: int, remark: str) -> None:
+    def _update_remark_cell(self, row: int, entry: dict[str, Any] | str) -> None:
         item = self.table.item(row, self.REMARK_COLUMN)
         if item is None:
             return
-        remark = str(remark or "")
-        display_text = remark if remark else "点击添加备注"
+        if isinstance(entry, dict):
+            display_text, tooltip, remark, important = self._remark_display_parts(entry)
+        else:
+            remark = str(entry or "")
+            display_text, tooltip, remark, important = self._remark_display_parts({"remark": remark})
         item.setText(display_text)
         item.setData(self.COPY_TEXT_ROLE, remark)
-        item.setToolTip(remark or "点击添加备注")
-        item.setForeground(QColor("#1f2937" if remark else "#64748b"))
+        item.setToolTip(tooltip)
+        if isinstance(entry, dict):
+            item.setData(self.RECORD_ID_ROLE, self._record_id_from_entry(entry))
+        if important:
+            item.setForeground(QColor("#DC2626"))
+        elif remark:
+            item.setForeground(QColor("#1f2937"))
+        else:
+            item.setForeground(QColor("#64748b"))
 
     def _set_type_filter(self, record_type: str) -> None:
         self.type_filter = record_type if record_type in {"全部", "发货", "退货"} else "全部"

@@ -16,6 +16,7 @@ from PySide6.QtCore import QThread, Signal
 from app.core.camera import apply_capture_settings, get_capture_size, list_camera_devices, open_camera
 from app.core.database import DatabaseManager
 from app.core.disk_space_checker import DiskSpaceChecker
+from app.core.file_hash import calculate_file_hash, normalize_hash_algorithm
 from app.core.video_checker import VideoChecker
 from app.utils.filename import unique_temp_recording_path, unique_video_path
 from app.utils.time_utils import format_datetime
@@ -30,11 +31,12 @@ CAMERA_RECOVER_SECONDS = 1.0
 FRAME_FREEZE_SECONDS = 6.0
 FRAME_FREEZE_DIFF_THRESHOLD = 1.2
 IVCAM_WAIT_MATCH_LIMIT = 3
+IVCAM_PLACEHOLDER_MATCH_LIMIT = 2
 DISK_WARNING_GB = 2.0
 DISK_CRITICAL_GB = 0.5
 DISK_CHECK_INTERVAL_SECONDS = 6.0
-FILE_GROWTH_CHECK_INTERVAL_SECONDS = 4.0
-FILE_STALL_LIMIT = 2
+FILE_GROWTH_CHECK_INTERVAL_SECONDS = 5.0
+FILE_STALL_LIMIT = 3
 
 
 class WatermarkRenderer:
@@ -282,6 +284,7 @@ class RecorderThread(QThread):
         self._camera_fail_count = 0
         self._last_frame_ok_at = time.perf_counter()
         self._last_camera_issue_log_at = 0.0
+        self._last_freeze_warning_log_at = 0.0
         self._camera_available = False
         self._camera_last_error = "摄像头尚未就绪"
         self._camera_unhealthy_since = time.perf_counter()
@@ -295,6 +298,7 @@ class RecorderThread(QThread):
         self._last_disk_check_at = 0.0
         self._last_file_growth_check_at = 0.0
         self._last_recording_file_size = 0
+        self._last_file_growth_frame_count = 0
         self._file_stall_count = 0
         self._freeze_sample_at = 0.0
         self._freeze_started_at = 0.0
@@ -302,6 +306,9 @@ class RecorderThread(QThread):
         self._ivcam_camera = False
         self._ivcam_wait_matches = 0
         self._ivcam_waiting = False
+        self._ivcam_placeholder_type = ""
+        self._ivcam_placeholder_message = ""
+        self._ivcam_placeholder_metrics: dict[str, float] = {}
         self._frame_frozen = False
         self._recording_error_reason: str | None = None
 
@@ -328,10 +335,12 @@ class RecorderThread(QThread):
         capture_ok = self._capture is not None and self._capture.isOpened()
         reason = str(self._camera_last_error or "").strip()
         is_healthy = bool(capture_ok and self._camera_available and not self._camera_confirmed_error)
+        error_type = ""
 
         if not capture_ok:
             reason = reason or "摄像头不可用"
         elif self._camera_confirmed_error:
+            error_type = self._ivcam_placeholder_type or ("ivcam_waiting" if self._ivcam_waiting else "camera_lost")
             reason = reason or "摄像头连接异常，请检查 iVCam 或摄像头"
         elif not self._camera_available:
             reason = reason or "摄像头画面尚未就绪"
@@ -340,20 +349,19 @@ class RecorderThread(QThread):
             reason = "摄像头连接异常，请检查 iVCam 或摄像头"
         elif self._ivcam_waiting:
             is_healthy = False
-            reason = "摄像头连接异常，请检查 iVCam"
-        elif self._frame_frozen:
-            is_healthy = False
-            reason = "摄像头画面异常，可能已冻结，请检查 iVCam 连接"
+            error_type = self._ivcam_placeholder_type or "ivcam_waiting"
+            reason = self._ivcam_placeholder_message or "摄像头连接异常，请检查 iVCam"
 
         return {
             "is_healthy": is_healthy,
             "is_available": bool(capture_ok and self._camera_available),
             "is_error": bool(self._camera_confirmed_error),
-            "error_type": "camera" if self._camera_confirmed_error else "",
+            "error_type": error_type if self._camera_confirmed_error or self._ivcam_waiting else "",
             "error_message": reason if self._camera_confirmed_error else "",
             "last_frame_elapsed": elapsed,
             "last_error": reason,
             "is_ivcam_waiting": self._ivcam_waiting,
+            "is_ivcam_placeholder": self._ivcam_placeholder_type == "ivcam_placeholder",
             "is_frozen": self._frame_frozen,
             "camera_fail_count": self._camera_fail_count,
             "consecutive_fail_count": self._camera_fail_count,
@@ -406,7 +414,7 @@ class RecorderThread(QThread):
         return False
 
     def _confirm_camera_recovered(self, *, force: bool = False) -> None:
-        was_error = self._camera_confirmed_error or not self._camera_available or self._frame_frozen
+        was_error = self._camera_confirmed_error or not self._camera_available
         self._camera_confirmed_error = False
         self._camera_available = True
         self._camera_last_error = ""
@@ -414,6 +422,11 @@ class RecorderThread(QThread):
         self._camera_pending_error_since = 0.0
         self._camera_pending_recover_since = 0.0
         self._frame_frozen = False
+        self._ivcam_waiting = False
+        self._ivcam_wait_matches = 0
+        self._ivcam_placeholder_type = ""
+        self._ivcam_placeholder_message = ""
+        self._ivcam_placeholder_metrics = {}
         if was_error or force:
             self.logger.info("摄像头状态确认恢复")
             self._emit_camera_status(True, "摄像头已恢复", force=True)
@@ -574,18 +587,20 @@ class RecorderThread(QThread):
         was_unhealthy = self._camera_confirmed_error or self._camera_fail_count > 0 or self._ivcam_waiting or not self._camera_available
         self._last_frame_ok_at = now_perf
         if self._check_ivcam_waiting_frame(frame):
-            self._confirm_camera_error("摄像头连接异常，请检查 iVCam")
+            self._confirm_camera_error(self._ivcam_placeholder_message or "摄像头连接异常，请检查 iVCam")
             if self._recording:
                 self._trigger_recording_error(self._camera_last_error)
             return
-        self._ivcam_waiting = False
-        if self._check_frame_freeze(frame):
+        if self._ivcam_wait_matches > 0:
+            self._camera_available = False
+            self._camera_last_error = self._ivcam_placeholder_message or "摄像头连接异常，请检查 iVCam"
             return
+        self._ivcam_waiting = False
+        self._check_frame_freeze(frame)
 
         self._camera_fail_count = 0
         self._camera_success_count += 1
         self._camera_pending_error_since = 0.0
-        self._frame_frozen = False
         if self._camera_pending_recover_since <= 0:
             self._camera_pending_recover_since = now_perf
         stable_for = now_perf - self._camera_pending_recover_since
@@ -601,7 +616,7 @@ class RecorderThread(QThread):
     def _check_frame_freeze(self, frame: np.ndarray) -> bool:
         now_perf = time.perf_counter()
         if now_perf - self._freeze_sample_at < 1.0:
-            return self._frame_frozen
+            return False
         self._freeze_sample_at = now_perf
         try:
             sample = cv2.resize(frame, (32, 18), interpolation=cv2.INTER_AREA)
@@ -618,50 +633,95 @@ class RecorderThread(QThread):
             frozen_for = now_perf - self._freeze_started_at
             if frozen_for >= FRAME_FREEZE_SECONDS:
                 self._frame_frozen = True
-                reason = "摄像头画面异常，可能已冻结，请检查 iVCam 连接"
-                self.logger.error("摄像头画面疑似冻结：diff=%.3f, frozen_for=%.2f秒", diff, frozen_for)
-                self._confirm_camera_error(reason)
-                if self._recording:
-                    self._trigger_recording_error(reason)
-                return True
+                if now_perf - self._last_freeze_warning_log_at >= 30.0:
+                    self.logger.warning(
+                        "摄像头画面长时间变化很小，仅记录为疑似静止画面，不触发异常：diff=%.3f, frozen_for=%.2f秒, recording=%s, iVCam=%s",
+                        diff,
+                        frozen_for,
+                        self._recording,
+                        self._ivcam_camera,
+                    )
+                    self._last_freeze_warning_log_at = now_perf
         else:
             self._last_freeze_sample = gray
             self._freeze_started_at = now_perf
             self._frame_frozen = False
-        return self._frame_frozen
+        return False
 
     def _check_ivcam_waiting_frame(self, frame: np.ndarray) -> bool:
         if not self._ivcam_camera:
             self._ivcam_waiting = False
+            self._ivcam_wait_matches = 0
+            self._ivcam_placeholder_type = ""
+            self._ivcam_placeholder_message = ""
+            self._ivcam_placeholder_metrics = {}
             return False
         was_waiting = self._ivcam_waiting
-        if self._looks_like_ivcam_waiting_frame(frame):
+        placeholder_type, message, metrics = self._detect_ivcam_placeholder_frame(frame)
+        if placeholder_type:
+            self._ivcam_placeholder_type = placeholder_type
+            self._ivcam_placeholder_message = message
+            self._ivcam_placeholder_metrics = metrics
             self._ivcam_wait_matches += 1
         else:
             self._ivcam_wait_matches = 0
-            self._ivcam_waiting = False
-        if self._ivcam_wait_matches >= IVCAM_WAIT_MATCH_LIMIT:
+            if not self._camera_confirmed_error:
+                self._ivcam_waiting = False
+                self._ivcam_placeholder_type = ""
+                self._ivcam_placeholder_message = ""
+                self._ivcam_placeholder_metrics = {}
+        match_limit = IVCAM_PLACEHOLDER_MATCH_LIMIT if placeholder_type == "ivcam_placeholder" else IVCAM_WAIT_MATCH_LIMIT
+        if placeholder_type and self._ivcam_wait_matches >= match_limit:
             self._ivcam_waiting = True
             if not was_waiting:
-                self.logger.error("检测到 iVCam 等待连接画面：matches=%s", self._ivcam_wait_matches)
+                self.logger.error(
+                    "检测到 iVCam 异常占位画面：type=%s, matches=%s, brightness=%.2f, blue_score=%.4f, light_text_score=%.4f, recording=%s",
+                    placeholder_type,
+                    self._ivcam_wait_matches,
+                    metrics.get("brightness", 0.0),
+                    metrics.get("blue_score", 0.0),
+                    metrics.get("light_text_score", 0.0),
+                    self._recording,
+                )
             return True
         return False
 
-    @staticmethod
-    def _looks_like_ivcam_waiting_frame(frame: np.ndarray) -> bool:
+    def _detect_ivcam_placeholder_frame(self, frame: np.ndarray) -> tuple[str, str, dict[str, float]]:
         try:
             small = cv2.resize(frame, (160, 90), interpolation=cv2.INTER_AREA)
             hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
             bgr = small.astype(np.float32)
-            brightness = float(np.mean(bgr))
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            brightness = float(np.mean(gray))
             channel_gap = float(np.mean(np.max(bgr, axis=2) - np.min(bgr, axis=2)))
-            blue_mask = cv2.inRange(hsv, (85, 40, 80), (135, 255, 255))
+            blue_mask = cv2.inRange(hsv, (85, 35, 45), (135, 255, 255))
             blue_ratio = float(np.count_nonzero(blue_mask)) / float(blue_mask.size)
             center = blue_mask[18:72, 35:125]
             center_blue_ratio = float(np.count_nonzero(center)) / float(center.size)
-            return brightness >= 145 and channel_gap <= 38 and blue_ratio >= 0.005 and center_blue_ratio >= 0.012
+            light_text_mask = cv2.inRange(hsv, (0, 0, 95), (179, 70, 245))
+            lower_center = light_text_mask[44:78, 28:132]
+            light_text_ratio = float(np.count_nonzero(lower_center)) / float(lower_center.size)
+            dark_ratio = float(np.count_nonzero(gray < 55)) / float(gray.size)
+            metrics = {
+                "brightness": brightness,
+                "blue_score": center_blue_ratio,
+                "blue_ratio": blue_ratio,
+                "light_text_score": light_text_ratio,
+                "dark_ratio": dark_ratio,
+                "channel_gap": channel_gap,
+            }
+            if (
+                brightness <= 45
+                and dark_ratio >= 0.72
+                and center_blue_ratio >= 0.006
+                and light_text_ratio >= 0.006
+            ):
+                return "ivcam_placeholder", "iVCam 未启动或未连接，请检查手机端 iVCam", metrics
+            if brightness >= 145 and channel_gap <= 38 and blue_ratio >= 0.005 and center_blue_ratio >= 0.012:
+                return "ivcam_waiting", "摄像头连接异常，请检查 iVCam", metrics
         except Exception:
-            return False
+            self.logger.debug("iVCam 占位画面检测失败", exc_info=True)
+        return "", "", {}
 
     def _check_recording_runtime_health(self) -> None:
         if not self._recording:
@@ -689,17 +749,25 @@ class RecorderThread(QThread):
             self._trigger_recording_error(f"视频写入失败，请检查保存目录或磁盘空间：{exc}")
             return
         self.logger.info(
-            "录制保护文件增长检查：path=%s, size=%s, last_size=%s, stall_count=%s",
+            "录制保护文件增长检查：path=%s, size=%s, last_size=%s, frames=%s, last_frames=%s, stall_count=%s",
             self._temp_path,
             current_size,
             self._last_recording_file_size,
+            self._frames_enqueued,
+            self._last_file_growth_frame_count,
             self._file_stall_count,
         )
-        if self._frames_enqueued > max(5, self._effective_recording_fps) and current_size <= self._last_recording_file_size:
+        frames_increased = self._frames_enqueued > self._last_file_growth_frame_count
+        if (
+            self._frames_enqueued > max(5, self._effective_recording_fps)
+            and current_size <= self._last_recording_file_size
+            and not frames_increased
+        ):
             self._file_stall_count += 1
         else:
             self._file_stall_count = 0
         self._last_recording_file_size = current_size
+        self._last_file_growth_frame_count = self._frames_enqueued
         if self._file_stall_count >= FILE_STALL_LIMIT:
             self._trigger_recording_error("视频写入失败，请检查保存目录或磁盘空间")
 
@@ -958,12 +1026,17 @@ class RecorderThread(QThread):
         self._last_disk_check_at = time.perf_counter()
         self._last_file_growth_check_at = time.perf_counter()
         self._last_recording_file_size = 0
+        self._last_file_growth_frame_count = 0
         self._file_stall_count = 0
         self._freeze_sample_at = 0.0
         self._freeze_started_at = time.perf_counter()
         self._last_freeze_sample = None
+        self._last_freeze_warning_log_at = 0.0
         self._ivcam_wait_matches = 0
         self._ivcam_waiting = False
+        self._ivcam_placeholder_type = ""
+        self._ivcam_placeholder_message = ""
+        self._ivcam_placeholder_metrics = {}
         self._frame_frozen = False
         self._reset_performance_window()
         self.logger.info("录制保护监控启动：单号=%s, iVCam=%s, free=%.2fGB", order_id, self._ivcam_camera, disk_result.free_gb)
@@ -1102,6 +1175,7 @@ class RecorderThread(QThread):
             self.logger.error("异常视频已写入 SQLite：file=%s, reason=%s", final_path, abnormal_reason)
             self.warning_message.emit(warning)
             self.message.emit(warning)
+            self._schedule_video_hash_generation(final_path)
             self._check_disk_space_notice()
             return
         if not check_result.exists:
@@ -1125,7 +1199,75 @@ class RecorderThread(QThread):
 
         if not validation_warning:
             self._warn_short_video(check_result.duration_seconds)
+        self._schedule_video_hash_generation(final_path)
         self._check_disk_space_notice()
+
+    def _hash_check_config(self) -> tuple[bool, str, bool]:
+        hash_config = self.config.get("hash_check", {})
+        if not isinstance(hash_config, dict):
+            hash_config = {}
+        enabled = bool(hash_config.get("enabled", True))
+        auto_generate = bool(hash_config.get("auto_generate_after_recording", True))
+        algorithm = normalize_hash_algorithm(str(hash_config.get("algorithm") or "SHA256"))
+        return enabled, algorithm, auto_generate
+
+    def _schedule_video_hash_generation(self, final_path: Path) -> None:
+        enabled, algorithm, auto_generate = self._hash_check_config()
+        self.logger.info("视频哈希校验配置：enabled=%s, algorithm=%s, auto=%s", enabled, algorithm, auto_generate)
+        if not enabled or not auto_generate:
+            return
+        try:
+            if not final_path.exists() or not final_path.is_file():
+                self.logger.warning("跳过视频哈希生成：文件不存在，file=%s", final_path)
+                return
+            if final_path.stat().st_size <= 0:
+                self.logger.warning("跳过视频哈希生成：文件大小为 0，file=%s", final_path)
+                return
+        except OSError as exc:
+            self.logger.warning("跳过视频哈希生成：无法读取文件状态，file=%s, error=%s", final_path, exc)
+            return
+
+        worker = threading.Thread(
+            target=self._generate_video_hash_worker,
+            args=(str(final_path), algorithm),
+            name="VideoHashWorker",
+            daemon=True,
+        )
+        worker.start()
+
+    def _generate_video_hash_worker(self, file_path: str, algorithm: str) -> None:
+        start_time = time.perf_counter()
+        database: DatabaseManager | None = None
+        record_id = 0
+        try:
+            path = Path(file_path)
+            database = DatabaseManager(self.base_dir / "pm_system.db", self.logger)
+            record = database.get_video_by_path(path)
+            if record:
+                record_id = int(record.get("id") or 0)
+            self.logger.info("开始生成视频哈希：record_id=%s, file=%s, algorithm=%s", record_id or "-", path, algorithm)
+            self.message.emit("正在生成视频校验码...")
+            file_hash = calculate_file_hash(path, algorithm)
+            affected = database.update_video_hash_by_path(path, file_hash, algorithm)
+            cost_time = time.perf_counter() - start_time
+            if affected == 1:
+                self.logger.info(
+                    "视频哈希生成成功：record_id=%s, algorithm=%s, cost=%.2fs, hash_prefix=%s",
+                    record_id or "-",
+                    algorithm,
+                    cost_time,
+                    file_hash[:12],
+                )
+                self.message.emit("视频校验码已生成")
+            else:
+                self.logger.warning("视频哈希生成完成但未命中 SQLite 记录：record_id=%s, file=%s", record_id or "-", path)
+                self.warning_message.emit("视频校验码生成失败：未找到视频记录")
+        except Exception as exc:
+            self.logger.exception("视频哈希生成失败：record_id=%s, file=%s", record_id or "-", file_path)
+            self.warning_message.emit(f"视频校验码生成失败：{exc}")
+        finally:
+            if database is not None:
+                database.close()
 
     def _open_camera(self) -> None:
         self._release_camera()
@@ -1176,10 +1318,14 @@ class RecorderThread(QThread):
         self._last_frame_ok_at = time.perf_counter()
         self._ivcam_wait_matches = 0
         self._ivcam_waiting = False
+        self._ivcam_placeholder_type = ""
+        self._ivcam_placeholder_message = ""
+        self._ivcam_placeholder_metrics = {}
         self._frame_frozen = False
         self._freeze_sample_at = 0.0
         self._freeze_started_at = time.perf_counter()
         self._last_freeze_sample = None
+        self._last_freeze_warning_log_at = 0.0
         self.logger.info(
             "摄像头打开：%s, index=%s, 分辨率=%sx%s, 摄像头实际FPS=%s, 配置目标FPS=%s, iVCam=%s",
             camera_name,

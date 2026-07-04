@@ -330,6 +330,72 @@ class SettingsDialog(QDialog):
         )
         layout.addLayout(form)
 
+        hash_checkmark_path = resource_path("app/assets/checkmark.svg").as_posix()
+        hash_frame = QFrame()
+        hash_frame.setObjectName("hashCheckPanel")
+        hash_frame.setStyleSheet(
+            """
+            QFrame#hashCheckPanel {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+            }
+            QLabel#hashCheckTitle {
+                color: #0f172a;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QLabel#hashCheckHint {
+                color: #64748b;
+                font-size: 12px;
+            }
+            QCheckBox {
+                color: #1f2937;
+                font-size: 14px;
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid #cbd5e1;
+                background: #ffffff;
+            }
+            QCheckBox::indicator:checked {
+                border-color: #0f766e;
+                background: #0f766e;
+                image: url("%s");
+            }
+            """
+            % hash_checkmark_path
+        )
+        hash_layout = QVBoxLayout(hash_frame)
+        hash_layout.setContentsMargins(12, 10, 12, 10)
+        hash_layout.setSpacing(8)
+
+        hash_title = QLabel("证据校验 / 文件校验")
+        hash_title.setObjectName("hashCheckTitle")
+        hash_layout.addWidget(hash_title)
+
+        self.hash_check_enabled = QCheckBox("开启视频哈希校验")
+        hash_layout.addWidget(self.hash_check_enabled)
+
+        hash_hint = QLabel("录制完成后自动生成 SHA256，用于校验视频文件是否被修改。大文件可能会增加少量后台处理时间。")
+        hash_hint.setObjectName("hashCheckHint")
+        hash_hint.setWordWrap(True)
+        hash_layout.addWidget(hash_hint)
+
+        hash_algorithm_row = QHBoxLayout()
+        hash_algorithm_row.setContentsMargins(0, 0, 0, 0)
+        hash_algorithm_row.setSpacing(8)
+        hash_algorithm_row.addWidget(QLabel("哈希算法："))
+        self.hash_algorithm_combo = QComboBox()
+        self.hash_algorithm_combo.addItem("SHA256", "SHA256")
+        hash_algorithm_row.addWidget(self.hash_algorithm_combo)
+        hash_algorithm_row.addStretch(1)
+        hash_layout.addLayout(hash_algorithm_row)
+        layout.addWidget(hash_frame)
+
         action_layout = QHBoxLayout()
         action_layout.addStretch(1)
         self.apply_basic_config_button = QPushButton("保存并应用配置")
@@ -727,18 +793,18 @@ class SettingsDialog(QDialog):
         return widget
 
     def _export_config(self) -> None:
-        default_name = f"PMSystem_Config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        default_name = f"PMSystem_Config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         selected, _ = QFileDialog.getSaveFileName(
             self,
             "导出配置",
             str(Path.home() / default_name),
-            "JSON 配置文件 (*.json)",
+            "ZIP 配置包 (*.zip)",
         )
         if not selected:
             return
         export_path = Path(selected)
-        if export_path.suffix.lower() != ".json":
-            export_path = export_path.with_suffix(".json")
+        if export_path.suffix.lower() != ".zip":
+            export_path = export_path.with_suffix(".zip")
 
         try:
             result = self.config_manager.export_config(export_path)
@@ -751,13 +817,13 @@ class SettingsDialog(QDialog):
                 result.get("excluded_sensitive_fields"),
                 len(warnings),
             )
-            detail = "出于安全考虑，已排除网盘 Secret 和授权 Token，导入后需要重新授权。"
+            detail = f"配置已导出：{result.get('path')}\n出于安全考虑，已排除网盘 Secret 和授权 Token，导入后需要重新授权。"
             if voice_count:
-                detail += f"\n已导出自定义语音文件 {voice_count} 个。"
+                detail += f"\n已打包自定义语音文件 {voice_count} 个。"
             if warnings:
                 detail += "\n部分语音文件未导出，请查看日志。"
             self._set_status("配置已导出", "success")
-            QMessageBox.information(self, "导出配置", f"配置已导出\n\n{detail}")
+            QMessageBox.information(self, "导出配置", detail)
         except Exception as exc:
             self.logger.exception("配置导出失败：path=%s", export_path)
             self._set_status(f"配置导出失败：{exc}", "error")
@@ -771,7 +837,7 @@ class SettingsDialog(QDialog):
             self,
             "导入配置",
             "",
-            "JSON 配置文件 (*.json)",
+            "配置文件 (*.zip *.json);;ZIP 配置包 (*.zip);;旧版 JSON 配置 (*.json)",
         )
         if not selected:
             return
@@ -810,6 +876,8 @@ class SettingsDialog(QDialog):
             detail = f"已备份原配置：{result.get('backup_path')}"
             if result.get("requires_netdisk_reauth"):
                 detail += "\n网盘授权信息未导入，请重新授权。"
+            if result.get("legacy_json"):
+                detail += "\n已导入旧版 JSON 配置，建议后续使用新版 zip 格式导出配置。"
             if warnings:
                 detail += "\n部分自定义语音文件未恢复，请查看日志。"
             self._set_status("配置已导入，部分设置重启后生效", "success")
@@ -836,6 +904,11 @@ class SettingsDialog(QDialog):
         self._select_combo_data(self.recording_long_edge_combo, max_long_edge, DEFAULT_LONG_EDGE)
         self.font_size_spin.setValue(int(self.config_manager.config.get("watermark_font_size", 28) or 28))
         self.margin_spin.setValue(int(self.config_manager.config.get("watermark_margin", 16) or 16))
+        hash_config = self.config_manager.config.get("hash_check", {})
+        if not isinstance(hash_config, dict):
+            hash_config = {}
+        self.hash_check_enabled.setChecked(bool(hash_config.get("enabled", True)))
+        self._select_combo_data(self.hash_algorithm_combo, str(hash_config.get("algorithm") or "SHA256").upper(), "SHA256")
 
     def _set_basic_config_enabled(self, enabled: bool) -> None:
         for widget in (
@@ -845,6 +918,8 @@ class SettingsDialog(QDialog):
             self.recording_long_edge_combo,
             self.font_size_spin,
             self.margin_spin,
+            self.hash_check_enabled,
+            self.hash_algorithm_combo,
             self.apply_basic_config_button,
         ):
             widget.setEnabled(enabled)
@@ -865,6 +940,11 @@ class SettingsDialog(QDialog):
                 "recording_max_long_edge": int(self.recording_long_edge_combo.currentData() or 0),
                 "watermark_font_size": self.font_size_spin.value(),
                 "watermark_margin": self.margin_spin.value(),
+                "hash_check": {
+                    "enabled": self.hash_check_enabled.isChecked(),
+                    "algorithm": str(self.hash_algorithm_combo.currentData() or "SHA256").upper(),
+                    "auto_generate_after_recording": True,
+                },
             }
             updated_config = self.config_manager.update(values)
             self.basic_config_saved.emit(updated_config)
