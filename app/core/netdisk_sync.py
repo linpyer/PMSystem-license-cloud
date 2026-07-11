@@ -880,9 +880,13 @@ class NetdiskUploadWorker(QThread):
         self.retry_failed = bool(retry_failed)
         self.logger = logger
         self._stop_requested = False
+        self._stop_after_current = False
 
     def stop(self) -> None:
         self._stop_requested = True
+
+    def stop_after_current(self) -> None:
+        self._stop_after_current = True
 
     def run(self) -> None:  # type: ignore[override]
         database = DatabaseManager(self.database_path, self.logger)
@@ -892,7 +896,7 @@ class NetdiskUploadWorker(QThread):
         try:
             total = len(self.entries)
             for index, entry in enumerate(self.entries, start=1):
-                if self._stop_requested:
+                if self._stop_requested or self._stop_after_current:
                     break
                 file_path = Path(str(entry.get("file_path") or ""))
                 self.progress_changed.emit(index - 1, total, file_path.name, success_count, fail_count)
@@ -906,6 +910,8 @@ class NetdiskUploadWorker(QThread):
                     self.upload_failed.emit(str(file_path), message)
                     fail_count += 1
                     self.progress_changed.emit(index, total, file_path.name, success_count, fail_count)
+                    if self._stop_after_current:
+                        break
                     continue
 
                 try:
@@ -917,6 +923,8 @@ class NetdiskUploadWorker(QThread):
                     self.upload_failed.emit(str(file_path), message)
                     fail_count += 1
                     self.progress_changed.emit(index, total, file_path.name, success_count, fail_count)
+                    if self._stop_after_current:
+                        break
                     continue
                 if file_size <= 0:
                     message = "本地视频文件大小为 0，无法上传"
@@ -925,6 +933,8 @@ class NetdiskUploadWorker(QThread):
                     self.upload_failed.emit(str(file_path), message)
                     fail_count += 1
                     self.progress_changed.emit(index, total, file_path.name, success_count, fail_count)
+                    if self._stop_after_current:
+                        break
                     continue
 
                 remote_path = build_remote_video_path(
@@ -975,6 +985,10 @@ class NetdiskUploadWorker(QThread):
                     self.upload_failed.emit(str(file_path), error_text)
                     fail_count += 1
                     self.progress_changed.emit(index, total, file_path.name, success_count, fail_count)
+                if self._stop_after_current:
+                    if self.logger:
+                        self.logger.info("网盘上传收到安全停止请求，当前文件处理完成后停止剩余队列")
+                    break
                 time.sleep(0.05)
         finally:
             database.close()

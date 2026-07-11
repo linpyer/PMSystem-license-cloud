@@ -18,17 +18,7 @@ echo [2/2] Building Windows executable with PyInstaller...
 "%PYTHON%" -m PyInstaller ^
     --noconfirm ^
     --clean ^
-    --windowed ^
-    --onedir ^
-    --name "电商打包发货监控溯源系统" ^
-    --icon "app\assets\logo.ico" ^
-    --add-data "app\assets;app\assets" ^
-    --hidden-import sqlite3 ^
-    --hidden-import requests ^
-    --hidden-import pyttsx3 ^
-    --hidden-import pyttsx3.drivers ^
-    --hidden-import pyttsx3.drivers.sapi5 ^
-    main.py
+    "PMSystem.spec"
 
 if errorlevel 1 (
     echo PyInstaller build failed.

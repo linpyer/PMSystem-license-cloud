@@ -4,6 +4,7 @@ from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QDialog, QTabWidget, QTextBrowser, QToolButton, QVBoxLayout
 
+from app.ui.dialog_utils import DialogSizeManager
 from app.utils.runtime_paths import resource_path
 
 
@@ -98,6 +99,7 @@ HELP_TABS: list[tuple[str, str]] = [
         <h1>视频查询</h1>
         <ol>
         <li>支持按单号、日期、类型、上传状态查询。</li>
+        <li>视频存储目录是录制保存和视频查询共用的全局目录，可在“设置 → 基础配置”中修改。</li>
         <li>支持分页查看。</li>
         <li>双击记录可查看单号详情。</li>
         <li>大小/时长列中，时长过短会用红色提示。</li>
@@ -124,9 +126,26 @@ HELP_TABS: list[tuple[str, str]] = [
         <h1>备注与重要标记</h1>
         <ol>
         <li>点击备注列可添加或编辑备注。</li>
-        <li>在备注弹窗中可勾选“标记为重要视频”。</li>
-        <li>重要视频适合用于售后争议、客户反馈、待核实等场景。</li>
-        <li>重要视频删除时会额外提醒，防止误删。</li>
+        <li>在备注弹窗中可勾选“标记为重要”。</li>
+        <li>重要原因支持售后争议、商家自行拦截、平台拦截退回、用户拒收和其他。</li>
+        <li>选择“其他”时可填写补充原因。</li>
+        <li>已标记为重要的记录删除时会额外提醒，防止误删。</li>
+        </ol>
+        """,
+    ),
+    (
+        "统计",
+        """
+        <h1>打包发货统计</h1>
+        <ol>
+        <li>点击右上角统计按钮，可查看打包发货统计。</li>
+        <li>所有统计均按录制时间 recorded_at 计算。</li>
+        <li>统计页展示发货单数、退货单数和重要单数，三项数据均按单号去重。</li>
+        <li>双击数据卡片可查看对应视频明细，明细页顶部会同时显示单号数量和视频记录数量。</li>
+        <li>明细页支持双击单号复制，也支持打开和定位视频。</li>
+        <li>明细页为只读列表，不支持删除或修改。</li>
+        <li>统计支持今天、昨天、最近7天、本月、全部和自定义日期。</li>
+        <li>对比分析支持今天 vs 昨天、本月 vs 上月、自定义区间对比。</li>
         </ol>
         """,
     ),
@@ -140,6 +159,10 @@ HELP_TABS: list[tuple[str, str]] = [
         <li>支持查看同步记录。</li>
         <li>同步记录中可查看上传时间、单号、状态、失败原因、远程路径和重试次数。</li>
         <li>上传失败的记录会保留失败原因，方便排查。</li>
+        <li>开启自动同步后，系统会在最后一次录制结束并持续空闲指定时间后，自动上传未上传视频。</li>
+        <li>倒计时期间再次录制会重新计时；同步过程中再次开始录制，系统会在当前文件完成后暂停，待录制结束并重新倒计时后继续。</li>
+        <li>点击“停止同步”可取消倒计时或安全停止当前同步任务。</li>
+        <li>自动同步只处理“未上传”记录，不自动重试“上传失败”记录。</li>
         </ol>
         """,
     ),
@@ -150,7 +173,7 @@ HELP_TABS: list[tuple[str, str]] = [
         <ol>
         <li>可导出配置为一个 zip 文件。</li>
         <li>可导入配置，方便换电脑或重装软件。</li>
-        <li>导出配置包含保存目录、基础配置、语音配置、网盘基础配置等。</li>
+        <li>导出配置包含视频存储目录、基础配置、语音配置、网盘基础配置等。</li>
         <li>出于安全考虑，不导出网盘 Secret 和授权 Token，导入后需要重新授权。</li>
         </ol>
         """,
@@ -178,7 +201,7 @@ HELP_TABS: list[tuple[str, str]] = [
         <p>说明本地视频文件可能被移动或删除，可从列表中移除该记录。</p>
 
         <p class="question">问题 3：上传失败怎么办？</p>
-        <p>可点击“重试上传失败”，或查看“同步记录”中的失败原因。</p>
+        <p>可在“同步记录”中点击“重试上传失败”，并查看具体失败原因。</p>
 
         <p class="question">问题 4：为什么有重复第 N 次？</p>
         <p>表示同一单号存在多条录制记录，可点击标签查看并清理。</p>
@@ -195,8 +218,7 @@ class HelpDialog(QDialog):
         self.setObjectName("helpDialog")
         self.setWindowTitle("使用说明")
         self.setWindowModality(Qt.NonModal)
-        self.resize(760, 580)
-        self.setMinimumSize(660, 480)
+        DialogSizeManager.apply(self, "help", parent, "medium", (660, 480))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -249,5 +271,6 @@ class HelpDialog(QDialog):
         QTimer.singleShot(0, self._style_tab_scroll_buttons)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        DialogSizeManager.remember(self, "help")
         self.closed.emit()
         super().closeEvent(event)

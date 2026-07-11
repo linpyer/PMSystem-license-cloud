@@ -1,6 +1,6 @@
 #define MyAppName "电商打包发货监控溯源系统"
 #define MyAppVersion "1.0.3"
-#define MyAppPublisher "PM System"
+#define MyAppPublisher "JsonLin"
 #define MyAppExeName "电商打包发货监控溯源系统.exe"
 
 [Setup]
@@ -17,7 +17,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=output
 OutputBaseFilename=PMSystem_Setup_v1.0.3
-SetupIconFile=..\app\assets\logo.ico
+SetupIconFile=..\app\assets\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma
 SolidCompression=yes

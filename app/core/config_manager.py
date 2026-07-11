@@ -12,6 +12,7 @@ from typing import Any
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
+    "video_root_dir": "videos",
     "video_save_dir": "videos",
     "camera_index": 0,
     "camera_name": "",
@@ -103,6 +104,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "last_auth_time": "",
         "debug": False,
     },
+    "cloud_sync": {
+        "auto_sync_enabled": False,
+        "auto_sync_trigger": "after_last_recording",
+        "auto_sync_delay_minutes": 10,
+    },
     "recent": {
         "last_video_dir": "videos",
         "last_resolution": "original",
@@ -132,7 +138,7 @@ NETDISK_EXPORT_SECRET_KEYS = {
     "last_auth_time",
 }
 EXPORTABLE_CONFIG_KEYS = {
-    "video_save_dir",
+    "video_root_dir",
     "camera_index",
     "camera_name",
     "resolution",
@@ -151,7 +157,27 @@ EXPORTABLE_CONFIG_KEYS = {
     "preview",
     "voice_prompt",
     "netdisk_sync",
+    "cloud_sync",
 }
+
+
+AUTO_SYNC_DELAY_OPTIONS = (1, 5, 10, 15, 30, 60)
+
+
+def normalize_cloud_sync_config(raw: dict[str, Any] | None) -> dict[str, Any]:
+    config = deepcopy(DEFAULT_CONFIG["cloud_sync"])
+    if isinstance(raw, dict):
+        config.update(raw)
+    config["auto_sync_enabled"] = bool(config.get("auto_sync_enabled", False))
+    config["auto_sync_trigger"] = "after_last_recording"
+    try:
+        delay = int(config.get("auto_sync_delay_minutes") or 10)
+    except (TypeError, ValueError):
+        delay = 10
+    if delay not in AUTO_SYNC_DELAY_OPTIONS:
+        delay = 10
+    config["auto_sync_delay_minutes"] = delay
+    return config
 
 
 class ConfigManager:
@@ -163,6 +189,7 @@ class ConfigManager:
     def load(self) -> dict[str, Any]:
         if not self.config_path.exists():
             self.config = deepcopy(DEFAULT_CONFIG)
+            self._normalize_video_root_dir_config(self.config)
             self.save()
             return self.config
 
@@ -170,11 +197,13 @@ class ConfigManager:
             with self.config_path.open("r", encoding="utf-8") as file:
                 loaded = json.load(file)
             self.config = self._merge_defaults(loaded, DEFAULT_CONFIG)
+            migrated = self._normalize_video_root_dir_config(self.config, loaded)
         except (OSError, json.JSONDecodeError):
             self.config = deepcopy(DEFAULT_CONFIG)
+            self._normalize_video_root_dir_config(self.config)
             self.save()
         else:
-            if self._normalize_legacy_display_text():
+            if migrated or self._normalize_legacy_display_text():
                 self.save()
 
         return self.config
@@ -182,6 +211,7 @@ class ConfigManager:
     def save(self, config: dict[str, Any] | None = None) -> None:
         if config is not None:
             self.config = self._merge_defaults(config, DEFAULT_CONFIG)
+        self._normalize_video_root_dir_config(self.config)
         self._normalize_legacy_display_text()
 
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,21 +219,48 @@ class ConfigManager:
             json.dump(self.config, file, ensure_ascii=False, indent=2)
 
     def update(self, values: dict[str, Any]) -> dict[str, Any]:
-        self.config.update(values)
+        normalized_values = dict(values)
+        if "video_root_dir" in normalized_values or "video_save_dir" in normalized_values:
+            raw_dir = normalized_values.get("video_root_dir") or normalized_values.get("video_save_dir")
+            normalized_dir = self.normalize_video_root_dir_value(raw_dir)
+            normalized_values["video_root_dir"] = normalized_dir
+            normalized_values["video_save_dir"] = normalized_dir
+        self.config.update(normalized_values)
+        self._normalize_video_root_dir_config(self.config)
         recent = self.config.setdefault("recent", {})
-        if "video_save_dir" in values:
-            recent["last_video_dir"] = values["video_save_dir"]
-        if "resolution" in values:
-            recent["last_resolution"] = values["resolution"]
-        if "camera_index" in values:
-            recent["last_camera_index"] = values["camera_index"]
-        if "camera_name" in values:
-            recent["last_camera_name"] = values["camera_name"]
+        if "video_root_dir" in normalized_values:
+            recent["last_video_dir"] = normalized_values["video_root_dir"]
+        if "resolution" in normalized_values:
+            recent["last_resolution"] = normalized_values["resolution"]
+        if "camera_index" in normalized_values:
+            recent["last_camera_index"] = normalized_values["camera_index"]
+        if "camera_name" in normalized_values:
+            recent["last_camera_name"] = normalized_values["camera_name"]
         self.save()
         return self.config
 
     def get_video_dir(self) -> Path:
-        return self.resolve_path(str(self.config.get("video_save_dir", "videos")))
+        return self.resolve_path(str(self.config.get("video_root_dir") or self.config.get("video_save_dir") or "videos"))
+
+    def normalize_video_root_dir_value(self, value: Any) -> str:
+        path_value = str(value or "videos").strip() or "videos"
+        return str(self.resolve_path(path_value))
+
+    def ensure_video_root_dir_writable(self, value: Any) -> Path:
+        video_dir = self.resolve_path(str(value or "videos").strip() or "videos")
+        video_dir.mkdir(parents=True, exist_ok=True)
+        if not video_dir.is_dir():
+            raise ValueError("视频存储目录不是文件夹")
+        test_file = video_dir / ".pm_system_write_test"
+        try:
+            test_file.write_text("ok", encoding="utf-8")
+        finally:
+            try:
+                if test_file.exists():
+                    test_file.unlink()
+            except OSError:
+                pass
+        return video_dir.resolve()
 
     def resolve_path(self, path_value: str) -> Path:
         path = Path(path_value).expanduser()
@@ -481,6 +538,15 @@ class ConfigManager:
             for key, value in settings.items()
             if key in EXPORTABLE_CONFIG_KEYS
         }
+        if "video_root_dir" not in imported and "video_save_dir" in settings:
+            imported["video_root_dir"] = settings.get("video_save_dir")
+        query_settings = settings.get("query")
+        if "video_root_dir" not in imported and isinstance(query_settings, dict):
+            last_query_dir = str(query_settings.get("last_query_dir") or "").strip()
+            if last_query_dir:
+                imported["video_root_dir"] = last_query_dir
+        if "video_root_dir" in imported:
+            imported["video_root_dir"] = self.normalize_video_root_dir_value(imported.get("video_root_dir"))
         if "netdisk_sync" in imported and isinstance(imported["netdisk_sync"], dict):
             imported["netdisk_sync"] = self._sanitize_netdisk_import(imported["netdisk_sync"])
         if "voice_prompt" in imported and isinstance(imported["voice_prompt"], dict):
@@ -500,10 +566,52 @@ class ConfigManager:
         return sanitized
 
     def _ensure_imported_video_dir(self, config: dict[str, Any]) -> None:
-        if "video_save_dir" not in config:
+        if "video_root_dir" not in config and "video_save_dir" not in config:
             return
-        video_dir = self.resolve_path(str(config.get("video_save_dir") or "videos"))
+        self._normalize_video_root_dir_config(config)
+        video_dir = self.resolve_path(str(config.get("video_root_dir") or "videos"))
         video_dir.mkdir(parents=True, exist_ok=True)
+
+    def _normalize_video_root_dir_config(self, config: dict[str, Any], raw_config: dict[str, Any] | None = None) -> bool:
+        raw_config = raw_config if isinstance(raw_config, dict) else config
+        raw_root = raw_config.get("video_root_dir") if "video_root_dir" in raw_config else config.get("video_root_dir")
+        before_root = str(raw_root or "").strip()
+        candidates: list[Any] = []
+        if before_root:
+            candidates.append(before_root)
+        if not before_root:
+            candidates.append(raw_config.get("video_save_dir"))
+            raw_query = raw_config.get("query")
+            if isinstance(raw_query, dict):
+                candidates.append(raw_query.get("last_query_dir"))
+        candidates.append(config.get("video_save_dir"))
+        query_config = config.get("query")
+        if isinstance(query_config, dict):
+            candidates.append(query_config.get("last_query_dir"))
+        candidates.append("videos")
+
+        selected = "videos"
+        for candidate in candidates:
+            candidate_text = str(candidate or "").strip()
+            if candidate_text:
+                selected = candidate_text
+                break
+        normalized = self.normalize_video_root_dir_value(selected)
+        changed = (
+            str(config.get("video_root_dir") or "") != normalized
+            or str(config.get("video_save_dir") or "") != normalized
+        )
+        config["video_root_dir"] = normalized
+        config["video_save_dir"] = normalized
+        recent = config.setdefault("recent", {})
+        if isinstance(recent, dict):
+            if str(recent.get("last_video_dir") or "") != normalized:
+                recent["last_video_dir"] = normalized
+                changed = True
+        else:
+            config["recent"] = {"last_video_dir": normalized}
+            changed = True
+        return changed
 
     def _config_path_to_path(self, value: str) -> Path | None:
         value = str(value or "").strip()

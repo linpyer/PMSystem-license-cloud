@@ -12,6 +12,12 @@ from typing import Any
 import cv2
 
 from app.core.file_indexer import VIDEO_EXTENSIONS
+from app.core.important_reasons import (
+    DEFAULT_IMPORTANT_REASON_TYPE,
+    IMPORTANT_REASON_OPTIONS,
+    important_note_from_reason,
+    normalize_important_reason_type,
+)
 from app.core.video_checker import VideoChecker
 from app.utils.file_utils import human_file_size
 from app.utils.filename import tracking_number_from_video_name
@@ -106,6 +112,8 @@ class DatabaseManager:
                         remark TEXT DEFAULT '',
                         is_important INTEGER DEFAULT 0,
                         important_note TEXT DEFAULT '',
+                        important_reason_type TEXT DEFAULT '',
+                        important_reason_custom TEXT DEFAULT '',
                         important_at TEXT,
                         status TEXT DEFAULT '正常',
                         recorded_at TEXT,
@@ -142,7 +150,14 @@ class DatabaseManager:
                 self._sync_normalized_file_paths(connection)
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_videos_normalized_file_path ON videos(normalized_file_path)")
                 connection.execute("CREATE INDEX IF NOT EXISTS idx_videos_upload_status ON videos(upload_status)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_videos_type_time ON videos(record_type, recorded_at)")
+                connection.execute("CREATE INDEX IF NOT EXISTS idx_videos_upload_time ON videos(upload_status, recorded_at)")
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_videos_important_reason_time "
+                    "ON videos(is_important, important_reason_type, recorded_at)"
+                )
                 connection.commit()
+                self._log_video_query_plans(connection)
                 if self.logger:
                     self.logger.info("创建 videos 表和索引成功")
             except Exception:
@@ -174,6 +189,8 @@ class DatabaseManager:
             "normalized_file_path": "TEXT",
             "is_important": "INTEGER DEFAULT 0",
             "important_note": "TEXT DEFAULT ''",
+            "important_reason_type": "TEXT DEFAULT ''",
+            "important_reason_custom": "TEXT DEFAULT ''",
             "important_at": "TEXT",
         }
         for column, definition in required_columns.items():
@@ -363,6 +380,69 @@ class DatabaseManager:
             self.logger.info("修改发货/退货类型成功：%s -> %s", file_path, record_type)
         return ok
 
+    def update_video_record_type(self, record_id: int, record_type: str) -> int:
+        record_type = self.normalize_record_type(record_type)
+        now_text = format_datetime()
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE videos
+                    SET record_type = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (record_type, now_text, int(record_id)),
+                )
+                connection.commit()
+                if self.logger:
+                    self.logger.info(
+                        "修改发货/退货类型提交：db=%s, id=%s, record_type=%s, affected=%s",
+                        self.db_path,
+                        record_id,
+                        record_type,
+                        cursor.rowcount,
+                    )
+                return int(cursor.rowcount)
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception(
+                        "修改发货/退货类型失败并 rollback：db=%s, id=%s, record_type=%s",
+                        self.db_path,
+                        record_id,
+                        record_type,
+                    )
+                raise
+
+    def _log_video_query_plans(self, connection: sqlite3.Connection) -> None:
+        if not self.logger or not self.logger.isEnabledFor(logging.DEBUG):
+            return
+        plans = {
+            "date_range": ("SELECT COUNT(*) FROM videos WHERE recorded_at >= ? AND recorded_at <= ?", ["2000-01-01", "2099-12-31"]),
+            "type_time": (
+                "SELECT * FROM videos WHERE record_type = ? AND recorded_at >= ? AND recorded_at <= ? ORDER BY recorded_at DESC LIMIT 20",
+                ["发货", "2000-01-01", "2099-12-31"],
+            ),
+            "upload_time": (
+                "SELECT * FROM videos WHERE upload_status = ? AND recorded_at >= ? AND recorded_at <= ? ORDER BY recorded_at DESC LIMIT 20",
+                [UPLOAD_PENDING, "2000-01-01", "2099-12-31"],
+            ),
+            "important_reason": (
+                "SELECT * FROM videos WHERE is_important = 1 AND important_reason_type = ? AND recorded_at >= ? AND recorded_at <= ? ORDER BY recorded_at DESC LIMIT 20",
+                ["after_sale_dispute", "2000-01-01", "2099-12-31"],
+            ),
+            "normalized_path": ("SELECT * FROM videos WHERE normalized_file_path = ? LIMIT 1", [""]),
+        }
+        for name, (sql, params) in plans.items():
+            try:
+                rows = connection.execute(f"EXPLAIN QUERY PLAN {sql}", params).fetchall()
+                detail = " | ".join(str(dict(row)) for row in rows)
+                self.logger.debug("video_query_plan %s: %s", name, detail)
+            except Exception:
+                self.logger.debug("video_query_plan %s failed", name, exc_info=True)
+
     def update_remark(self, file_path: str | Path, remark: str) -> bool:
         return self.update_video_remark_by_path(file_path, remark) == 1
 
@@ -430,8 +510,28 @@ class DatabaseManager:
                     self.logger.exception("修改备注失败并 rollback：db=%s, id=%s, remark_len=%s", self.db_path, record_id, len(remark))
                 raise
 
-    def update_video_importance(self, record_id: int, is_important: bool, note: str = "") -> int:
+    def update_video_importance(
+        self,
+        record_id: int,
+        is_important: bool,
+        note: str = "",
+        reason_type: str = "",
+        reason_custom: str = "",
+    ) -> int:
         note = str(note or "").strip()[:500]
+        raw_reason_type = str(reason_type or "").strip()
+        if is_important:
+            if raw_reason_type:
+                reason_type = normalize_important_reason_type(raw_reason_type, True) or DEFAULT_IMPORTANT_REASON_TYPE
+            elif note:
+                reason_type = "other"
+            else:
+                reason_type = DEFAULT_IMPORTANT_REASON_TYPE
+        else:
+            reason_type = ""
+        reason_custom = str(reason_custom or "").strip()[:500] if reason_type == "other" else ""
+        if is_important and not note:
+            note = important_note_from_reason(reason_type, reason_custom)[:500]
         now_text = format_datetime()
         with self._lock:
             connection = self.get_connection()
@@ -442,11 +542,13 @@ class DatabaseManager:
                         UPDATE videos
                         SET is_important = 1,
                             important_note = ?,
+                            important_reason_type = ?,
+                            important_reason_custom = ?,
                             important_at = ?,
                             updated_at = ?
                         WHERE id = ?
                         """,
-                        (note, now_text, now_text, int(record_id)),
+                        (note, reason_type, reason_custom, now_text, now_text, int(record_id)),
                     )
                 else:
                     cursor = connection.execute(
@@ -454,6 +556,8 @@ class DatabaseManager:
                         UPDATE videos
                         SET is_important = 0,
                             important_note = '',
+                            important_reason_type = '',
+                            important_reason_custom = '',
                             important_at = '',
                             updated_at = ?
                         WHERE id = ?
@@ -480,6 +584,80 @@ class DatabaseManager:
                         record_id,
                         bool(is_important),
                         len(note),
+                    )
+                raise
+
+    def update_video_detail_fields(
+        self,
+        record_id: int,
+        record_type: str,
+        remark: str,
+        is_important: bool,
+        reason_type: str = "",
+        reason_custom: str = "",
+    ) -> int:
+        record_type = self.normalize_record_type(record_type)
+        remark = str(remark or "")[:500]
+        raw_reason_type = str(reason_type or "").strip()
+        if is_important:
+            reason_type = normalize_important_reason_type(raw_reason_type, True) or DEFAULT_IMPORTANT_REASON_TYPE
+        else:
+            reason_type = ""
+        reason_custom = str(reason_custom or "").strip()[:500] if reason_type == "other" else ""
+        important_note = important_note_from_reason(reason_type, reason_custom)[:500] if is_important else ""
+        important_at = format_datetime() if is_important else ""
+        now_text = format_datetime()
+        with self._lock:
+            connection = self.get_connection()
+            try:
+                cursor = connection.execute(
+                    """
+                    UPDATE videos
+                    SET record_type = ?,
+                        remark = ?,
+                        is_important = ?,
+                        important_note = ?,
+                        important_reason_type = ?,
+                        important_reason_custom = ?,
+                        important_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        record_type,
+                        remark,
+                        1 if is_important else 0,
+                        important_note,
+                        reason_type,
+                        reason_custom,
+                        important_at,
+                        now_text,
+                        int(record_id),
+                    ),
+                )
+                connection.commit()
+                if self.logger:
+                    self.logger.info(
+                        "详情页保存修改提交：db=%s, id=%s, affected=%s, record_type=%s, remark_len=%s, important=%s, reason_type=%s",
+                        self.db_path,
+                        record_id,
+                        cursor.rowcount,
+                        record_type,
+                        len(remark),
+                        bool(is_important),
+                        reason_type,
+                    )
+                return int(cursor.rowcount)
+            except Exception:
+                connection.rollback()
+                if self.logger:
+                    self.logger.exception(
+                        "详情页保存修改失败并 rollback：db=%s, id=%s, record_type=%s, remark_len=%s, important=%s",
+                        self.db_path,
+                        record_id,
+                        record_type,
+                        len(remark),
+                        bool(is_important),
                     )
                 raise
 
@@ -1002,6 +1180,8 @@ class DatabaseManager:
         for field in (
             "is_important",
             "important_note",
+            "important_reason_type",
+            "important_reason_custom",
             "important_at",
             "file_hash",
             "hash_algorithm",
@@ -1255,6 +1435,208 @@ class DatabaseManager:
                 self.logger.exception("统计视频列表总数失败：filters=%s", filters)
             return 0
 
+    def get_packaging_stats(self, start_date: date | str | None = None, end_date: date | str | None = None) -> dict[str, Any]:
+        conditions, params = self._stats_recorded_at_conditions(start_date, end_date)
+        where_sql = " AND ".join(conditions)
+        stats = {
+            "ship_orders": 0,
+            "return_orders": 0,
+            "important_orders": 0,
+            "important_reasons": {
+                "after_sale_dispute": 0,
+                "merchant_intercept": 0,
+                "platform_intercept_back": 0,
+                "user_rejected": 0,
+                "other": 0,
+            },
+        }
+        try:
+            connection = self.get_connection()
+            row = connection.execute(
+                f"""
+                SELECT
+                    COUNT(DISTINCT CASE WHEN record_type = ? AND order_no IS NOT NULL AND order_no <> '' THEN order_no END) AS ship_orders,
+                    COUNT(DISTINCT CASE WHEN record_type = ? AND order_no IS NOT NULL AND order_no <> '' THEN order_no END) AS return_orders,
+                    COUNT(DISTINCT CASE WHEN is_important = 1 AND order_no IS NOT NULL AND order_no <> '' THEN order_no END) AS important_orders
+                FROM videos
+                WHERE {where_sql}
+                """,
+                ["发货", "退货"] + params,
+            ).fetchone()
+            if row:
+                stats["ship_orders"] = int(row["ship_orders"] or 0)
+                stats["return_orders"] = int(row["return_orders"] or 0)
+                stats["important_orders"] = int(row["important_orders"] or 0)
+
+            reason_rows = connection.execute(
+                f"""
+                WITH important_records AS (
+                    SELECT
+                        id,
+                        order_no,
+                        CASE
+                            WHEN important_reason_type IN (?, ?, ?, ?, ?) THEN important_reason_type
+                            ELSE 'other'
+                        END AS reason_type,
+                        COALESCE(NULLIF(important_at, ''), '') AS important_at_sort,
+                        COALESCE(NULLIF(recorded_at, ''), '') AS recorded_at_sort
+                    FROM videos
+                    WHERE is_important = 1
+                      AND order_no IS NOT NULL
+                      AND order_no <> ''
+                      AND {where_sql}
+                ),
+                representative AS (
+                    SELECT item.*
+                    FROM important_records item
+                    WHERE item.id = (
+                        SELECT picked.id
+                        FROM important_records picked
+                        WHERE picked.order_no = item.order_no
+                        ORDER BY
+                            CASE WHEN picked.important_at_sort = '' THEN 1 ELSE 0 END,
+                            picked.important_at_sort DESC,
+                            CASE WHEN picked.recorded_at_sort = '' THEN 1 ELSE 0 END,
+                            picked.recorded_at_sort DESC,
+                            picked.id DESC
+                        LIMIT 1
+                    )
+                )
+                SELECT reason_type, COUNT(DISTINCT order_no) AS total
+                FROM representative
+                GROUP BY reason_type
+                """,
+                [reason_key for reason_key, _reason_label in IMPORTANT_REASON_OPTIONS] + params,
+            ).fetchall()
+            for reason_row in reason_rows:
+                reason_type = normalize_important_reason_type(reason_row["reason_type"], True) or "other"
+                stats["important_reasons"][reason_type] = int(reason_row["total"] or 0)
+
+            if self.logger:
+                self.logger.info(
+                    "打包发货统计查询成功：start=%s, end=%s, stats=%s",
+                    start_date or "<全部>",
+                    end_date or "<全部>",
+                    stats,
+                )
+            return stats
+        except Exception:
+            if self.logger:
+                self.logger.exception("打包发货统计查询失败：start=%s, end=%s", start_date or "<全部>", end_date or "<全部>")
+            return stats
+
+    def get_packaging_compare_stats(
+        self,
+        range_a: tuple[date | str | None, date | str | None],
+        range_b: tuple[date | str | None, date | str | None],
+    ) -> dict[str, Any]:
+        stats_a = self.get_packaging_stats(range_a[0], range_a[1])
+        stats_b = self.get_packaging_stats(range_b[0], range_b[1])
+        diff = {
+            key: int(stats_a.get(key, 0)) - int(stats_b.get(key, 0))
+            for key in ("ship_orders", "return_orders", "important_orders")
+        }
+        return {"range_a": stats_a, "range_b": stats_b, "diff": diff}
+
+    def count_packaging_stat_detail(
+        self,
+        metric_key: str,
+        start_date: date | str | None = None,
+        end_date: date | str | None = None,
+    ) -> dict[str, int]:
+        conditions, params = self._packaging_stat_detail_conditions(metric_key, start_date, end_date)
+        sql = f"""
+            SELECT
+                COUNT(*) AS record_count,
+                COUNT(DISTINCT CASE WHEN order_no IS NOT NULL AND order_no <> '' THEN order_no END) AS order_count
+            FROM videos
+            WHERE {' AND '.join(conditions)}
+        """
+        try:
+            row = self.get_connection().execute(sql, params).fetchone()
+            return {
+                "record_count": int(row["record_count"] or 0) if row else 0,
+                "order_count": int(row["order_count"] or 0) if row else 0,
+            }
+        except Exception:
+            if self.logger:
+                self.logger.exception(
+                    "统计明细数量查询失败：metric=%s, start=%s, end=%s",
+                    metric_key,
+                    start_date or "<全部>",
+                    end_date or "<全部>",
+                )
+            return {"record_count": 0, "order_count": 0}
+
+    def query_packaging_stat_detail(
+        self,
+        metric_key: str,
+        start_date: date | str | None = None,
+        end_date: date | str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        conditions, params = self._packaging_stat_detail_conditions(metric_key, start_date, end_date)
+        safe_limit = max(1, min(int(limit or 20), 5000))
+        safe_offset = max(0, int(offset or 0))
+        params.extend([safe_limit, safe_offset])
+        sql = f"""
+            SELECT *
+            FROM videos
+            WHERE {' AND '.join(conditions)}
+            ORDER BY
+                COALESCE(NULLIF(recorded_at, ''), NULLIF(created_time, ''), printf('%012d', id)) DESC,
+                id DESC
+            LIMIT ? OFFSET ?
+        """
+        try:
+            return [self._row_to_item(row) for row in self.get_connection().execute(sql, params).fetchall()]
+        except Exception:
+            if self.logger:
+                self.logger.exception(
+                    "统计明细分页查询失败：metric=%s, start=%s, end=%s, limit=%s, offset=%s",
+                    metric_key,
+                    start_date or "<全部>",
+                    end_date or "<全部>",
+                    safe_limit,
+                    safe_offset,
+                )
+            return []
+
+    def _packaging_stat_detail_conditions(
+        self,
+        metric_key: str,
+        start_date: date | str | None,
+        end_date: date | str | None,
+    ) -> tuple[list[str], list[Any]]:
+        conditions, params = self._stats_recorded_at_conditions(start_date, end_date)
+        if metric_key == "ship_orders":
+            conditions.append("record_type = ?")
+            params.append("发货")
+        elif metric_key == "return_orders":
+            conditions.append("record_type = ?")
+            params.append("退货")
+        elif metric_key == "important_orders":
+            conditions.append("COALESCE(is_important, 0) = 1")
+        else:
+            raise ValueError(f"未知统计明细类型：{metric_key}")
+        return conditions, params
+
+    def _stats_recorded_at_conditions(self, start_date: date | str | None, end_date: date | str | None) -> tuple[list[str], list[Any]]:
+        conditions = ["1=1"]
+        params: list[Any] = []
+        if start_date is not None:
+            conditions.append("recorded_at IS NOT NULL")
+            conditions.append("recorded_at <> ''")
+            conditions.append("recorded_at >= ?")
+            params.append(self._date_start_text(start_date))
+        if end_date is not None:
+            conditions.append("recorded_at IS NOT NULL")
+            conditions.append("recorded_at <> ''")
+            conditions.append("recorded_at <= ?")
+            params.append(self._date_end_text(end_date))
+        return conditions, params
+
     def rebuild_from_video_directory(self, video_dir: str | Path) -> list[dict[str, Any]]:
         return self.refresh_video_directory(video_dir)
 
@@ -1495,6 +1877,29 @@ class DatabaseManager:
             conditions.append("COALESCE(upload_status, ?) = ?")
             params.extend([UPLOAD_PENDING, upload_status])
 
+        remark_filter = str(filters.get("remark_filter") or "").strip()
+        if remark_filter == "有备注":
+            conditions.append("TRIM(COALESCE(remark, '')) <> ''")
+        elif remark_filter == "无备注":
+            conditions.append("TRIM(COALESCE(remark, '')) = ''")
+
+        important_filter = str(filters.get("important_filter") or "").strip()
+        if important_filter == "已标记":
+            conditions.append("COALESCE(is_important, 0) = 1")
+        elif important_filter == "未标记":
+            conditions.append("COALESCE(is_important, 0) = 0")
+
+        important_reason = str(filters.get("important_reason") or "").strip()
+        if important_reason and important_reason != "全部":
+            reason_type = normalize_important_reason_type(important_reason, True) or important_reason
+            conditions.append("COALESCE(is_important, 0) = 1")
+            if reason_type == "other":
+                conditions.append("(important_reason_type = ? OR important_reason_type IS NULL OR TRIM(important_reason_type) = '')")
+                params.append("other")
+            else:
+                conditions.append("important_reason_type = ?")
+                params.append(reason_type)
+
         local_status = str(filters.get("status") or "").strip()
         if local_status:
             conditions.append("status = ?")
@@ -1677,6 +2082,8 @@ class DatabaseManager:
         item["normalized_file_path"] = item.get("normalized_file_path") or normalize_file_path(item.get("file_path"))
         item["is_important"] = bool(item.get("is_important"))
         item["important_note"] = item.get("important_note") or ""
+        item["important_reason_type"] = item.get("important_reason_type") or ""
+        item["important_reason_custom"] = item.get("important_reason_custom") or ""
         item["important_at"] = item.get("important_at") or ""
         return item
 

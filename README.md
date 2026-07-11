@@ -14,9 +14,8 @@ packing-monitor/
   logs/
   app/
     assets/
-      logo.svg
-      logo.png
-      logo.ico
+      app_icon.png
+      app_icon.ico
     ui/
       help_dialog.py
       main_window.py
@@ -73,9 +72,8 @@ packing-monitor/
 
 程序图标资源位于 `app/assets/`：
 
-- `logo.svg`：原创 SVG 源文件。
-- `logo.png`：界面展示和备用位图。
-- `logo.ico`：Windows 窗口图标、任务栏图标和 PyInstaller 打包图标。
+- `app_icon.png`：正式应用图标 PNG 原图。
+- `app_icon.ico`：Windows 窗口图标、任务栏图标、PyInstaller 打包图标和安装包图标。
 
 图标使用监控镜头、包裹和条形码元素，适合仓库打包监控类工具软件。资源为项目内原创文件，不依赖第三方版权图片，也不需要联网下载。
 
@@ -221,7 +219,7 @@ python -m compileall main.py app
 `build.bat` 内部使用的 PyInstaller 关键参数包括：
 
 ```powershell
-python -m PyInstaller --noconfirm --clean --windowed --onedir --name "电商打包发货监控溯源系统" --icon "app\assets\logo.ico" --add-data "app\assets;app\assets" --hidden-import sqlite3 --hidden-import requests --hidden-import pyttsx3 --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5 main.py
+python -m PyInstaller --noconfirm --clean --windowed --onedir --name "电商打包发货监控溯源系统" --icon "app\assets\app_icon.ico" --add-data "app\assets;app\assets" --hidden-import sqlite3 --hidden-import requests --hidden-import pyttsx3 --hidden-import pyttsx3.drivers --hidden-import pyttsx3.drivers.sapi5 main.py
 ```
 
 打包完成后，程序位于：

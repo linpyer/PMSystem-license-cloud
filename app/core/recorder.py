@@ -22,16 +22,18 @@ from app.utils.filename import unique_temp_recording_path, unique_video_path
 from app.utils.time_utils import format_datetime
 
 
-CAMERA_FAIL_LIMIT_IDLE = 5
-CAMERA_FAIL_LIMIT_RECORDING = 3
-CAMERA_FAIL_SECONDS_IDLE = 1.5
-CAMERA_FAIL_SECONDS_RECORDING = 1.0
-CAMERA_RECOVER_SUCCESS_LIMIT = 6
+CAMERA_FAIL_LIMIT_IDLE = 8
+CAMERA_FAIL_LIMIT_RECORDING = 5
+CAMERA_FAIL_SECONDS_IDLE = 2.0
+CAMERA_FAIL_SECONDS_RECORDING = 1.5
+CAMERA_RECOVER_SUCCESS_LIMIT = 8
 CAMERA_RECOVER_SECONDS = 1.0
 FRAME_FREEZE_SECONDS = 6.0
 FRAME_FREEZE_DIFF_THRESHOLD = 1.2
-IVCAM_WAIT_MATCH_LIMIT = 3
-IVCAM_PLACEHOLDER_MATCH_LIMIT = 2
+IVCAM_WAIT_MATCH_LIMIT = 5
+IVCAM_PLACEHOLDER_MATCH_LIMIT = 5
+IVCAM_PLACEHOLDER_MIN_SECONDS = 1.5
+IVCAM_PLACEHOLDER_CHECK_INTERVAL = 0.35
 DISK_WARNING_GB = 2.0
 DISK_CRITICAL_GB = 0.5
 DISK_CHECK_INTERVAL_SECONDS = 6.0
@@ -309,6 +311,12 @@ class RecorderThread(QThread):
         self._ivcam_placeholder_type = ""
         self._ivcam_placeholder_message = ""
         self._ivcam_placeholder_metrics: dict[str, float] = {}
+        self._ivcam_placeholder_first_match_at = 0.0
+        self._ivcam_placeholder_last_check_at = 0.0
+        self._ivcam_placeholder_last_log_at = 0.0
+        self._camera_state = "normal"
+        self._camera_error_started_at = 0.0
+        self._camera_recover_started_at = 0.0
         self._frame_frozen = False
         self._recording_error_reason: str | None = None
 
@@ -352,22 +360,27 @@ class RecorderThread(QThread):
             error_type = self._ivcam_placeholder_type or "ivcam_waiting"
             reason = self._ivcam_placeholder_message or "摄像头连接异常，请检查 iVCam"
 
+        confirmed_ivcam_waiting = bool(self._camera_confirmed_error and self._ivcam_waiting)
+        confirmed_ivcam_placeholder = bool(
+            self._camera_confirmed_error and self._ivcam_placeholder_type == "ivcam_placeholder"
+        )
         return {
             "is_healthy": is_healthy,
             "is_available": bool(capture_ok and self._camera_available),
             "is_error": bool(self._camera_confirmed_error),
-            "error_type": error_type if self._camera_confirmed_error or self._ivcam_waiting else "",
+            "error_type": error_type if self._camera_confirmed_error else "",
             "error_message": reason if self._camera_confirmed_error else "",
             "last_frame_elapsed": elapsed,
             "last_error": reason,
-            "is_ivcam_waiting": self._ivcam_waiting,
-            "is_ivcam_placeholder": self._ivcam_placeholder_type == "ivcam_placeholder",
+            "is_ivcam_waiting": confirmed_ivcam_waiting,
+            "is_ivcam_placeholder": confirmed_ivcam_placeholder,
             "is_frozen": self._frame_frozen,
             "camera_fail_count": self._camera_fail_count,
             "consecutive_fail_count": self._camera_fail_count,
             "consecutive_success_count": self._camera_success_count,
             "pending_error_since": self._camera_pending_error_since,
             "pending_recover_since": self._camera_pending_recover_since,
+            "placeholder_hit_count": self._ivcam_wait_matches,
         }
 
     def _emit_camera_status(self, available: bool, message: str, *, force: bool = False) -> None:
@@ -385,6 +398,38 @@ class RecorderThread(QThread):
         self._last_camera_status_at = now_perf
         self.camera_status_changed.emit(available, message)
 
+    def _set_camera_state(self, state: str, *, error_type: str = "", reason: str = "") -> None:
+        state = str(state or "normal").strip()
+        if state == self._camera_state:
+            return
+        now_perf = time.perf_counter()
+        old_state = self._camera_state
+        error_duration = now_perf - self._camera_error_started_at if self._camera_error_started_at > 0 else 0.0
+        recover_duration = now_perf - self._camera_recover_started_at if self._camera_recover_started_at > 0 else 0.0
+        if state == "error":
+            self._camera_error_started_at = now_perf
+            self._camera_recover_started_at = 0.0
+            error_duration = 0.0
+        elif state == "recovering":
+            self._camera_recover_started_at = now_perf
+            recover_duration = 0.0
+        elif state == "normal":
+            self._camera_error_started_at = 0.0
+            self._camera_recover_started_at = 0.0
+        self._camera_state = state
+        self.logger.info(
+            "camera_state: %s -> %s error_type=%s hit_count=%s normal_frame_count=%s "
+            "error_duration=%.2f recover_duration=%.2f reason=%s",
+            old_state,
+            state,
+            error_type or self._ivcam_placeholder_type or "",
+            self._ivcam_wait_matches,
+            self._camera_success_count,
+            error_duration,
+            recover_duration,
+            reason or self._camera_last_error or "",
+        )
+
     def _camera_fail_limit(self) -> int:
         return CAMERA_FAIL_LIMIT_RECORDING if self._recording else CAMERA_FAIL_LIMIT_IDLE
 
@@ -395,6 +440,7 @@ class RecorderThread(QThread):
         reason = str(reason or "摄像头连接异常，请检查 iVCam 或摄像头").strip()
         was_error = self._camera_confirmed_error
         now_perf = time.perf_counter()
+        error_type = self._ivcam_placeholder_type or ("ivcam_waiting" if self._ivcam_waiting else "read_failed")
         self._camera_confirmed_error = True
         self._camera_available = False
         self._camera_last_error = reason
@@ -402,8 +448,19 @@ class RecorderThread(QThread):
         self._camera_pending_recover_since = 0.0
         if self._camera_unhealthy_since <= 0:
             self._camera_unhealthy_since = now_perf
+        self._set_camera_state("error", error_type=error_type, reason=reason)
         if not was_error or force:
-            self.logger.error("摄像头状态确认异常：%s", reason)
+            elapsed = now_perf - self._last_frame_ok_at
+            self.logger.error(
+                "camera_state=error reason=%s error_type=%s fail_count=%s placeholder_hit_count=%s "
+                "last_valid_elapsed=%.2f recording=%s",
+                reason,
+                error_type,
+                self._camera_fail_count,
+                self._ivcam_wait_matches,
+                elapsed,
+                self._recording,
+            )
             self._emit_camera_status(False, reason, force=True)
 
     def _maybe_confirm_camera_error(self, reason: str) -> bool:
@@ -427,8 +484,16 @@ class RecorderThread(QThread):
         self._ivcam_placeholder_type = ""
         self._ivcam_placeholder_message = ""
         self._ivcam_placeholder_metrics = {}
+        self._ivcam_placeholder_first_match_at = 0.0
+        self._ivcam_placeholder_last_check_at = 0.0
+        self._ivcam_placeholder_last_log_at = 0.0
         if was_error or force:
-            self.logger.info("摄像头状态确认恢复")
+            self._set_camera_state("normal", error_type="recovered", reason="摄像头已恢复")
+            self.logger.info(
+                "camera_state=healthy reason=recovered success_count=%s recording=%s",
+                self._camera_success_count,
+                self._recording,
+            )
             self._emit_camera_status(True, "摄像头已恢复", force=True)
 
     def update_config(self, config: dict[str, Any]) -> None:
@@ -456,6 +521,10 @@ class RecorderThread(QThread):
             self._perf_capture_count += 1
             self._perf_capture_time_sum += capture_elapsed
             if not ok or frame is None:
+                self._handle_camera_read_failure()
+                time.sleep(0.3)
+                continue
+            if not self.is_valid_camera_frame(frame):
                 self._handle_camera_read_failure()
                 time.sleep(0.3)
                 continue
@@ -543,6 +612,7 @@ class RecorderThread(QThread):
         self._camera_last_error = "摄像头连接异常，请检查 iVCam 或摄像头"
         if self._camera_pending_error_since <= 0:
             self._camera_pending_error_since = now_perf
+            self._set_camera_state("suspected_error", error_type="capture_unavailable", reason=self._camera_last_error)
         if self._camera_unhealthy_since <= 0:
             self._camera_unhealthy_since = now_perf
         if now_perf - self._last_camera_issue_log_at >= 1.0:
@@ -567,6 +637,7 @@ class RecorderThread(QThread):
         self._camera_last_error = "摄像头读取失败，请检查 iVCam 或摄像头"
         if self._camera_pending_error_since <= 0:
             self._camera_pending_error_since = now_perf
+            self._set_camera_state("suspected_error", error_type="read_failed", reason=self._camera_last_error)
         if self._camera_unhealthy_since <= 0:
             self._camera_unhealthy_since = now_perf
         if now_perf - self._last_camera_issue_log_at >= 1.0:
@@ -584,6 +655,7 @@ class RecorderThread(QThread):
 
     def _handle_camera_frame_ok(self, frame: np.ndarray) -> None:
         now_perf = time.perf_counter()
+        was_confirmed_error = self._camera_confirmed_error
         was_unhealthy = self._camera_confirmed_error or self._camera_fail_count > 0 or self._ivcam_waiting or not self._camera_available
         self._last_frame_ok_at = now_perf
         if self._check_ivcam_waiting_frame(frame):
@@ -591,11 +663,8 @@ class RecorderThread(QThread):
             if self._recording:
                 self._trigger_recording_error(self._camera_last_error)
             return
-        if self._ivcam_wait_matches > 0:
-            self._camera_available = False
-            self._camera_last_error = self._ivcam_placeholder_message or "摄像头连接异常，请检查 iVCam"
-            return
-        self._ivcam_waiting = False
+        if not self._camera_confirmed_error:
+            self._ivcam_waiting = False
         self._check_frame_freeze(frame)
 
         self._camera_fail_count = 0
@@ -603,9 +672,21 @@ class RecorderThread(QThread):
         self._camera_pending_error_since = 0.0
         if self._camera_pending_recover_since <= 0:
             self._camera_pending_recover_since = now_perf
+            if was_confirmed_error:
+                self._set_camera_state(
+                    "recovering",
+                    error_type=self._ivcam_placeholder_type or "camera_recovering",
+                    reason="检测到正常帧，等待稳定恢复",
+                )
         stable_for = now_perf - self._camera_pending_recover_since
         if was_unhealthy:
+            if self._camera_confirmed_error:
+                if self._camera_success_count >= CAMERA_RECOVER_SUCCESS_LIMIT and stable_for >= CAMERA_RECOVER_SECONDS:
+                    self._confirm_camera_recovered()
+                return
             if self._camera_success_count >= CAMERA_RECOVER_SUCCESS_LIMIT or stable_for >= CAMERA_RECOVER_SECONDS:
+                if self._camera_state != "normal":
+                    self._set_camera_state("normal", error_type="recovered", reason="摄像头状态恢复")
                 self._confirm_camera_recovered()
             return
 
@@ -655,32 +736,83 @@ class RecorderThread(QThread):
             self._ivcam_placeholder_type = ""
             self._ivcam_placeholder_message = ""
             self._ivcam_placeholder_metrics = {}
+            self._ivcam_placeholder_first_match_at = 0.0
             return False
+        now_perf = time.perf_counter()
+        if now_perf - self._ivcam_placeholder_last_check_at < IVCAM_PLACEHOLDER_CHECK_INTERVAL:
+            if self._camera_confirmed_error and self._ivcam_waiting:
+                return True
+            return False
+        self._ivcam_placeholder_last_check_at = now_perf
         was_waiting = self._ivcam_waiting
         placeholder_type, message, metrics = self._detect_ivcam_placeholder_frame(frame)
         if placeholder_type:
+            if self._ivcam_wait_matches <= 0 or placeholder_type != self._ivcam_placeholder_type:
+                self._ivcam_wait_matches = 0
+                self._ivcam_placeholder_first_match_at = now_perf
             self._ivcam_placeholder_type = placeholder_type
             self._ivcam_placeholder_message = message
             self._ivcam_placeholder_metrics = metrics
             self._ivcam_wait_matches += 1
+            if now_perf - self._ivcam_placeholder_last_log_at >= 2.0:
+                self.logger.info(
+                    "iVCam 占位画面待确认：type=%s, score=%.2f, matches=%s, duration=%.2f秒, "
+                    "light_bg=%s, blue_circle=%s, blue_area=%.4f, blue_bbox=(%.2f,%.2f,%.2f,%.2f), "
+                    "text_score=%.4f, computer_score=%.4f, recording=%s",
+                    placeholder_type,
+                    metrics.get("placeholder_score", 0.0),
+                    self._ivcam_wait_matches,
+                    now_perf - self._ivcam_placeholder_first_match_at,
+                    bool(metrics.get("light_background", 0.0)),
+                    bool(metrics.get("blue_circle_detected", 0.0)),
+                    metrics.get("blue_component_area_ratio", 0.0),
+                    metrics.get("blue_bbox_x", 0.0),
+                    metrics.get("blue_bbox_y", 0.0),
+                    metrics.get("blue_bbox_w", 0.0),
+                    metrics.get("blue_bbox_h", 0.0),
+                    metrics.get("text_region_score", 0.0),
+                    metrics.get("computer_line_score", 0.0),
+                    self._recording,
+                )
+                self._ivcam_placeholder_last_log_at = now_perf
+            if self._camera_confirmed_error:
+                self._ivcam_waiting = True
+                self._camera_success_count = 0
+                self._camera_pending_recover_since = 0.0
+                self._set_camera_state("error", error_type=placeholder_type, reason=message)
+                return True
         else:
             self._ivcam_wait_matches = 0
-            if not self._camera_confirmed_error:
+            self._ivcam_placeholder_first_match_at = 0.0
+            if self._camera_confirmed_error and self._ivcam_waiting:
+                self._ivcam_waiting = False
+            elif not self._camera_confirmed_error:
                 self._ivcam_waiting = False
                 self._ivcam_placeholder_type = ""
                 self._ivcam_placeholder_message = ""
                 self._ivcam_placeholder_metrics = {}
         match_limit = IVCAM_PLACEHOLDER_MATCH_LIMIT if placeholder_type == "ivcam_placeholder" else IVCAM_WAIT_MATCH_LIMIT
-        if placeholder_type and self._ivcam_wait_matches >= match_limit:
+        matched_for = now_perf - self._ivcam_placeholder_first_match_at if self._ivcam_placeholder_first_match_at > 0 else 0.0
+        if placeholder_type and self._ivcam_wait_matches >= match_limit and matched_for >= IVCAM_PLACEHOLDER_MIN_SECONDS:
             self._ivcam_waiting = True
             if not was_waiting:
                 self.logger.error(
-                    "检测到 iVCam 异常占位画面：type=%s, matches=%s, brightness=%.2f, blue_score=%.4f, light_text_score=%.4f, recording=%s",
+                    "检测到 iVCam 异常占位画面：type=%s, score=%.2f, matches=%s, duration=%.2f秒, "
+                    "light_bg=%s, blue_circle=%s, blue_area=%.4f, blue_bbox=(%.2f,%.2f,%.2f,%.2f), "
+                    "text_score=%.4f, computer_score=%.4f, recording=%s",
                     placeholder_type,
+                    metrics.get("placeholder_score", 0.0),
                     self._ivcam_wait_matches,
-                    metrics.get("brightness", 0.0),
-                    metrics.get("blue_score", 0.0),
-                    metrics.get("light_text_score", 0.0),
+                    matched_for,
+                    bool(metrics.get("light_background", 0.0)),
+                    bool(metrics.get("blue_circle_detected", 0.0)),
+                    metrics.get("blue_component_area_ratio", 0.0),
+                    metrics.get("blue_bbox_x", 0.0),
+                    metrics.get("blue_bbox_y", 0.0),
+                    metrics.get("blue_bbox_w", 0.0),
+                    metrics.get("blue_bbox_h", 0.0),
+                    metrics.get("text_region_score", 0.0),
+                    metrics.get("computer_line_score", 0.0),
                     self._recording,
                 )
             return True
@@ -688,40 +820,159 @@ class RecorderThread(QThread):
 
     def _detect_ivcam_placeholder_frame(self, frame: np.ndarray) -> tuple[str, str, dict[str, float]]:
         try:
+            if not self.is_valid_camera_frame(frame):
+                return "", "", {}
             small = cv2.resize(frame, (160, 90), interpolation=cv2.INTER_AREA)
             hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
             bgr = small.astype(np.float32)
             gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
             brightness = float(np.mean(gray))
+            gray_std = float(np.std(gray))
+            edges = cv2.Canny(gray, 70, 150)
+            edge_ratio = float(np.count_nonzero(edges)) / float(edges.size)
             channel_gap = float(np.mean(np.max(bgr, axis=2) - np.min(bgr, axis=2)))
             blue_mask = cv2.inRange(hsv, (85, 35, 45), (135, 255, 255))
+            blue_count = int(np.count_nonzero(blue_mask))
             blue_ratio = float(np.count_nonzero(blue_mask)) / float(blue_mask.size)
             center = blue_mask[18:72, 35:125]
             center_blue_ratio = float(np.count_nonzero(center)) / float(center.size)
+            left_visual_roi = blue_mask[8:70, 8:90]
+            left_blue_ratio = float(np.count_nonzero(left_visual_roi)) / float(left_visual_roi.size)
             light_text_mask = cv2.inRange(hsv, (0, 0, 95), (179, 70, 245))
             lower_center = light_text_mask[44:78, 28:132]
             light_text_ratio = float(np.count_nonzero(lower_center)) / float(lower_center.size)
             dark_ratio = float(np.count_nonzero(gray < 55)) / float(gray.size)
+            light_bg_ratio = float(np.count_nonzero(gray > 178)) / float(gray.size)
+            light_clean_mask = cv2.inRange(hsv, (0, 0, 190), (179, 80, 255))
+            light_clean_ratio = float(np.count_nonzero(light_clean_mask)) / float(light_clean_mask.size)
+            right_line_roi = edges[12:55, 88:150]
+            computer_line_score = float(np.count_nonzero(right_line_roi)) / float(right_line_roi.size)
+            text_edge_roi = edges[50:80, 38:140]
+            text_region_score = float(np.count_nonzero(text_edge_roi)) / float(text_edge_roi.size)
+            if blue_count > 0:
+                blue_y, blue_x = np.nonzero(blue_mask)
+                blue_cx = float(np.mean(blue_x)) / float(blue_mask.shape[1])
+                blue_cy = float(np.mean(blue_y)) / float(blue_mask.shape[0])
+            else:
+                blue_cx = -1.0
+                blue_cy = -1.0
+            blue_near_center = 0.24 <= blue_cx <= 0.70 and 0.22 <= blue_cy <= 0.68
+            blue_component_detected = False
+            blue_component_area_ratio = 0.0
+            blue_bbox_x = blue_bbox_y = blue_bbox_w = blue_bbox_h = 0.0
+            blue_component_aspect = 0.0
+            blue_component_fill = 0.0
+            if blue_count > 0:
+                component_count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(blue_mask, 8)
+                largest_area = 0
+                largest_bbox = (0, 0, 0, 0)
+                for index in range(1, component_count):
+                    x, y, width, height, area = stats[index]
+                    if int(area) > int(largest_area):
+                        largest_area = int(area)
+                        largest_bbox = (int(x), int(y), int(width), int(height))
+                if largest_area > 0:
+                    width_s = float(blue_mask.shape[1])
+                    height_s = float(blue_mask.shape[0])
+                    x, y, width, height = largest_bbox
+                    blue_component_area_ratio = float(largest_area) / float(blue_mask.size)
+                    blue_bbox_x = float(x) / width_s
+                    blue_bbox_y = float(y) / height_s
+                    blue_bbox_w = float(width) / width_s
+                    blue_bbox_h = float(height) / height_s
+                    blue_component_aspect = float(width) / float(max(1, height))
+                    blue_component_fill = float(largest_area) / float(max(1, width * height))
+                    blue_component_detected = (
+                        0.012 <= blue_component_area_ratio <= 0.24
+                        and 0.04 <= blue_bbox_x <= 0.55
+                        and 0.08 <= blue_bbox_y <= 0.72
+                        and 0.16 <= blue_bbox_w <= 0.58
+                        and 0.20 <= blue_bbox_h <= 0.78
+                        and 0.65 <= blue_component_aspect <= 1.45
+                        and blue_component_fill >= 0.20
+                        and left_blue_ratio >= 0.06
+                    )
+            light_background = brightness >= 175 and light_bg_ratio >= 0.62 and light_clean_ratio >= 0.42
+            waiting_score = 0.0
+            if light_background:
+                waiting_score += 0.25
+            if blue_component_detected:
+                waiting_score += 0.45
+            if computer_line_score >= 0.018:
+                waiting_score += 0.15
+            if text_region_score >= 0.018:
+                waiting_score += 0.15
             metrics = {
                 "brightness": brightness,
                 "blue_score": center_blue_ratio,
                 "blue_ratio": blue_ratio,
+                "left_blue_ratio": left_blue_ratio,
                 "light_text_score": light_text_ratio,
                 "dark_ratio": dark_ratio,
+                "light_bg_ratio": light_bg_ratio,
+                "light_clean_ratio": light_clean_ratio,
                 "channel_gap": channel_gap,
+                "edge_ratio": edge_ratio,
+                "gray_std": gray_std,
+                "blue_cx": blue_cx,
+                "blue_cy": blue_cy,
+                "blue_circle_detected": 1.0 if blue_component_detected else 0.0,
+                "blue_component_area_ratio": blue_component_area_ratio,
+                "blue_component_aspect": blue_component_aspect,
+                "blue_component_fill": blue_component_fill,
+                "blue_bbox_x": blue_bbox_x,
+                "blue_bbox_y": blue_bbox_y,
+                "blue_bbox_w": blue_bbox_w,
+                "blue_bbox_h": blue_bbox_h,
+                "light_background": 1.0 if light_background else 0.0,
+                "text_region_score": text_region_score,
+                "computer_line_score": computer_line_score,
+                "placeholder_score": waiting_score,
             }
+            if self._looks_like_real_camera_frame(edge_ratio=edge_ratio, gray_std=gray_std):
+                metrics["real_frame_score"] = 1.0
+                return "", "", metrics
+            metrics["real_frame_score"] = 0.0
             if (
-                brightness <= 45
-                and dark_ratio >= 0.72
-                and center_blue_ratio >= 0.006
-                and light_text_ratio >= 0.006
+                brightness <= 35
+                and dark_ratio >= 0.82
+                and blue_near_center
+                and 0.003 <= blue_ratio <= 0.045
+                and 0.012 <= center_blue_ratio <= 0.11
+                and 0.004 <= light_text_ratio <= 0.075
+                and edge_ratio <= 0.075
+                and gray_std <= 62
             ):
                 return "ivcam_placeholder", "iVCam 未启动或未连接，请检查手机端 iVCam", metrics
-            if brightness >= 145 and channel_gap <= 38 and blue_ratio >= 0.005 and center_blue_ratio >= 0.012:
-                return "ivcam_waiting", "摄像头连接异常，请检查 iVCam", metrics
+            if (
+                brightness >= 165
+                and light_background
+                and blue_component_detected
+                and waiting_score >= 0.82
+                and (computer_line_score >= 0.010 or text_region_score >= 0.010)
+                and 0.03 <= blue_ratio <= 0.24
+                and edge_ratio <= 0.090
+                and gray_std <= 70
+            ):
+                return "ivcam_waiting_connection", "摄像头连接异常，请检查 iVCam", metrics
         except Exception:
             self.logger.debug("iVCam 占位画面检测失败", exc_info=True)
         return "", "", {}
+
+    @staticmethod
+    def is_valid_camera_frame(frame: np.ndarray | None) -> bool:
+        if frame is None or not hasattr(frame, "shape"):
+            return False
+        if len(frame.shape) < 2:
+            return False
+        height = int(frame.shape[0] or 0)
+        width = int(frame.shape[1] or 0)
+        return width > 0 and height > 0
+
+    @staticmethod
+    def _looks_like_real_camera_frame(*, edge_ratio: float, gray_std: float) -> bool:
+        # 只作为保护信号使用：条码、面单、纸箱纹理明显时，不把画面内容反推成摄像头异常。
+        return edge_ratio >= 0.095 or (edge_ratio >= 0.065 and gray_std >= 44)
 
     def _check_recording_runtime_health(self) -> None:
         if not self._recording:
@@ -746,7 +997,7 @@ class RecorderThread(QThread):
         try:
             current_size = int(self._temp_path.stat().st_size)
         except OSError as exc:
-            self._trigger_recording_error(f"视频写入失败，请检查保存目录或磁盘空间：{exc}")
+            self._trigger_recording_error(f"视频写入失败，请检查视频存储目录或磁盘空间：{exc}")
             return
         self.logger.info(
             "录制保护文件增长检查：path=%s, size=%s, last_size=%s, frames=%s, last_frames=%s, stall_count=%s",
@@ -769,7 +1020,7 @@ class RecorderThread(QThread):
         self._last_recording_file_size = current_size
         self._last_file_growth_frame_count = self._frames_enqueued
         if self._file_stall_count >= FILE_STALL_LIMIT:
-            self._trigger_recording_error("视频写入失败，请检查保存目录或磁盘空间")
+            self._trigger_recording_error("视频写入失败，请检查视频存储目录或磁盘空间")
 
     def _trigger_recording_error(self, reason: str) -> None:
         reason = str(reason or "录制异常").strip()
@@ -989,8 +1240,8 @@ class RecorderThread(QThread):
         try:
             temp_path = unique_temp_recording_path(video_dir, order_id, extension, recording_started_at)
         except OSError as exc:
-            self.logger.exception("创建视频日期保存目录失败：base_dir=%s, order_id=%s", video_dir, order_id)
-            self.message.emit(f"无法创建视频保存目录：{exc}")
+            self.logger.exception("创建视频日期存储目录失败：base_dir=%s, order_id=%s", video_dir, order_id)
+            self.message.emit(f"无法创建视频存储目录：{exc}")
             return
 
         self._check_disk_space_notice()
@@ -1037,6 +1288,9 @@ class RecorderThread(QThread):
         self._ivcam_placeholder_type = ""
         self._ivcam_placeholder_message = ""
         self._ivcam_placeholder_metrics = {}
+        self._ivcam_placeholder_first_match_at = 0.0
+        self._ivcam_placeholder_last_check_at = 0.0
+        self._ivcam_placeholder_last_log_at = 0.0
         self._frame_frozen = False
         self._reset_performance_window()
         self.logger.info("录制保护监控启动：单号=%s, iVCam=%s, free=%.2fGB", order_id, self._ivcam_camera, disk_result.free_gb)
@@ -1125,8 +1379,8 @@ class RecorderThread(QThread):
         try:
             final_path = unique_video_path(self._video_dir(), order_id, extension, started_at)
         except OSError as exc:
-            self.logger.exception("创建视频日期保存目录失败：order_id=%s", order_id)
-            self.message.emit(f"无法创建视频保存目录：{exc}")
+            self.logger.exception("创建视频日期存储目录失败：order_id=%s", order_id)
+            self.message.emit(f"无法创建视频存储目录：{exc}")
             return
 
         try:
@@ -1321,6 +1575,9 @@ class RecorderThread(QThread):
         self._ivcam_placeholder_type = ""
         self._ivcam_placeholder_message = ""
         self._ivcam_placeholder_metrics = {}
+        self._ivcam_placeholder_first_match_at = 0.0
+        self._ivcam_placeholder_last_check_at = 0.0
+        self._ivcam_placeholder_last_log_at = 0.0
         self._frame_frozen = False
         self._freeze_sample_at = 0.0
         self._freeze_started_at = time.perf_counter()
@@ -1459,7 +1716,7 @@ class RecorderThread(QThread):
         return {"disk_space": disk_config}
 
     def _video_dir(self) -> Path:
-        path_value = str(self.config.get("video_save_dir", "videos"))
+        path_value = str(self.config.get("video_root_dir") or self.config.get("video_save_dir") or "videos")
         path = Path(path_value).expanduser()
         if path.is_absolute():
             return path

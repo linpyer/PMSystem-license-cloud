@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 
 from app.core.camera import list_camera_devices
 from app.core.changelog import CHANGELOG_ENTRIES
-from app.core.config_manager import ConfigManager
+from app.core.config_manager import AUTO_SYNC_DELAY_OPTIONS, ConfigManager, normalize_cloud_sync_config
 from app.core.netdisk_sync import (
     BaiduNetdiskClient,
     NetdiskError,
@@ -43,6 +43,7 @@ from app.core.netdisk_sync import (
     normalize_netdisk_config,
     normalize_remote_root,
 )
+from app.core.video_player import open_folder
 from app.core.voice_prompt import (
     DEFAULT_SYSTEM_TEXT,
     DEFAULT_VOICE_PROMPT_CONFIG,
@@ -62,6 +63,7 @@ from app.ui.monitor_tab import (
     WATERMARK_MARGIN_HELP_TEXT,
 )
 from app.ui.toast import show_toast
+from app.ui.dialog_utils import DialogSizeManager, install_no_wheel_on_children
 from app.utils.runtime_paths import resource_path
 
 
@@ -88,6 +90,7 @@ class SettingsDialog(QDialog):
         logger: logging.Logger,
         voice_prompt: VoicePrompt,
         is_recording_callback=None,
+        is_syncing_callback=None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -95,17 +98,19 @@ class SettingsDialog(QDialog):
         self.logger = logger
         self.voice_prompt = voice_prompt
         self.is_recording_callback = is_recording_callback or (lambda: False)
+        self.is_syncing_callback = is_syncing_callback or (lambda: False)
         self.voice_file_labels: dict[str, QLabel] = {}
         self.voice_row_buttons: dict[str, tuple[QPushButton, QPushButton, QPushButton]] = {}
         self.system_text_edits: dict[str, QLineEdit] = {}
 
         self.setObjectName("settingsDialog")
         self.setWindowTitle("设置")
-        self.resize(780, 620)
         self._build_ui()
         self._load_basic_config_to_ui()
         self._load_voice_config_to_ui()
         self._load_netdisk_config_to_ui()
+        install_no_wheel_on_children(self)
+        DialogSizeManager.apply(self, "settings", parent, "large", (780, 560))
         self.logger.info("基础配置页签初始化")
         self.logger.info("语音提示页签初始化")
         self.logger.info("网盘同步页签初始化")
@@ -113,6 +118,7 @@ class SettingsDialog(QDialog):
         self.logger.info("更新日志页签初始化")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        DialogSizeManager.remember(self, "settings")
         self.closed.emit()
         super().closeEvent(event)
 
@@ -128,6 +134,44 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_config_management_tab(), "配置管理")
         self.tabs.addTab(self._build_changelog_tab(), "更新日志")
         root_layout.addWidget(self.tabs, 1)
+
+    def _settings_card(self, title: str) -> tuple[QFrame, QVBoxLayout]:
+        card = QFrame()
+        card.setObjectName("settingsCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+        title_label = QLabel(title)
+        title_label.setObjectName("settingsCardTitle")
+        layout.addWidget(title_label)
+        return card, layout
+
+    @staticmethod
+    def _set_compact_control(widget: QWidget, width: int | None = None) -> QWidget:
+        widget.setMinimumHeight(32)
+        widget.setMaximumHeight(36)
+        widget.setSizePolicy(QSizePolicy.Fixed if width else QSizePolicy.Expanding, QSizePolicy.Fixed)
+        if isinstance(widget, QComboBox) and not widget.objectName():
+            widget.setObjectName("settingsCompactCombo")
+        elif isinstance(widget, QSpinBox) and not widget.objectName():
+            widget.setObjectName("settingsCompactSpin")
+        if width:
+            widget.setMinimumWidth(width)
+            widget.setMaximumWidth(width)
+        return widget
+
+    @staticmethod
+    def _fit_combo_width_to_items(combo: QComboBox, min_width: int = 160, extra_padding: int = 58) -> int:
+        max_text_width = 0
+        metrics = combo.fontMetrics()
+        for index in range(combo.count()):
+            max_text_width = max(max_text_width, metrics.horizontalAdvance(combo.itemText(index)))
+        width = max(min_width, max_text_width + extra_padding)
+        combo.setMinimumWidth(width)
+        combo.setMaximumWidth(width)
+        combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        combo.view().setMinimumWidth(width)
+        return width
 
     def _build_config_management_tab(self) -> QWidget:
         widget = QWidget()
@@ -270,147 +314,232 @@ class SettingsDialog(QDialog):
 
     def _build_basic_tab(self) -> QWidget:
         widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        root_layout = QVBoxLayout(widget)
+        root_layout.setContentsMargins(12, 12, 12, 12)
+        root_layout.setSpacing(12)
 
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(10)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        layout.setAlignment(Qt.AlignTop)
+
+        label_width = 132
+
+        def compact(widget: QWidget, width: int | None = None) -> QWidget:
+            self._set_compact_control(widget, width)
+            widget.setMinimumHeight(32)
+            widget.setMaximumHeight(34)
+            return widget
+
+        def label(text: str) -> QLabel:
+            item = QLabel(text)
+            item.setMinimumWidth(label_width)
+            item.setMaximumWidth(label_width)
+            item.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            return item
+
+        def help_label(text: str, title: str, body: str, tooltip: str) -> QWidget:
+            item = self._help_label(text, title, body, tooltip)
+            item.setMinimumWidth(label_width)
+            item.setMaximumWidth(label_width)
+            item.setStyleSheet("QWidget { background: transparent; } QLabel { background: transparent; }")
+            return item
+
+        def tune_button(button: QPushButton) -> QPushButton:
+            button.setMinimumHeight(32)
+            button.setMaximumHeight(34)
+            return button
 
         self.camera_combo = QComboBox()
+        compact(self.camera_combo)
+        self.camera_combo.setMinimumWidth(360)
+        self.camera_combo.setMaximumWidth(560)
         self.resolution_combo = QComboBox()
         self.resolution_combo.addItem("原始分辨率", "original")
         self.resolution_combo.addItem("720p", "720p")
         self.resolution_combo.addItem("1080p", "1080p")
+        compact(self.resolution_combo, 200)
 
         self.fps_combo = QComboBox()
         for fps in FPS_OPTIONS:
             self.fps_combo.addItem(f"{fps} FPS", fps)
+        compact(self.fps_combo, 130)
 
         self.recording_long_edge_combo = QComboBox()
         self.recording_long_edge_combo.addItem("不限制，使用摄像头原始分辨率", 0)
         for edge in LONG_EDGE_OPTIONS[1:]:
             self.recording_long_edge_combo.addItem(str(edge), edge)
+        compact(self.recording_long_edge_combo)
+        self._fit_combo_width_to_items(self.recording_long_edge_combo, min_width=170)
 
         self.font_size_spin = QSpinBox()
         self.font_size_spin.setRange(14, 72)
+        compact(self.font_size_spin, 120)
         self.margin_spin = QSpinBox()
         self.margin_spin.setRange(4, 80)
+        compact(self.margin_spin, 120)
 
-        form.addRow(
-            self._help_label("摄像头设备：", "摄像头设备说明", CAMERA_HELP_TEXT, "选择用于打包录制的摄像头设备。"),
-            self.camera_combo,
-        )
-        form.addRow(
-            self._help_label("分辨率：", "分辨率说明", RESOLUTION_HELP_TEXT, "设置摄像头采集画面的清晰度。"),
-            self.resolution_combo,
-        )
-        form.addRow(
-            self._help_label("帧率：", "帧率说明", FPS_HELP_TEXT, "设置每秒录制画面数量，推荐 25 FPS。"),
-            self.fps_combo,
-        )
-        form.addRow(
-            self._help_label(
-                "录制长边上限：",
-                "录制长边上限说明",
-                LONG_EDGE_HELP_TEXT,
-                "限制录制视频的最大边长，推荐 1280。",
-            ),
-            self.recording_long_edge_combo,
-        )
-        form.addRow(
-            self._help_label("水印字号：", "水印字号说明", WATERMARK_FONT_HELP_TEXT, "设置视频中单号和时间水印的文字大小。"),
-            self.font_size_spin,
-        )
-        form.addRow(
-            self._help_label("水印边距：", "水印边距说明", WATERMARK_MARGIN_HELP_TEXT, "设置水印距离画面边缘的距离。"),
-            self.margin_spin,
-        )
-        layout.addLayout(form)
+        video_card, video_layout = self._settings_card("视频存储")
+        video_dir_row = QHBoxLayout()
+        video_dir_row.setContentsMargins(0, 0, 0, 0)
+        video_dir_row.setSpacing(8)
+        self.video_root_dir_input = QLineEdit()
+        self.video_root_dir_input.setPlaceholderText("请选择视频存储目录")
+        compact(self.video_root_dir_input)
+        self.video_root_dir_choose_button = QPushButton("选择目录")
+        self.video_root_dir_choose_button.setObjectName("secondaryButton")
+        self.video_root_dir_open_button = QPushButton("打开目录")
+        self.video_root_dir_open_button.setObjectName("secondaryButton")
+        tune_button(self.video_root_dir_choose_button)
+        tune_button(self.video_root_dir_open_button)
+        self.video_root_dir_choose_button.clicked.connect(self._choose_video_root_dir)
+        self.video_root_dir_open_button.clicked.connect(self._open_video_root_dir)
+        video_dir_row.addWidget(self.video_root_dir_input, 1)
+        video_dir_row.addWidget(self.video_root_dir_choose_button)
+        video_dir_row.addWidget(self.video_root_dir_open_button)
+        video_grid = QGridLayout()
+        video_grid.setContentsMargins(0, 0, 0, 0)
+        video_grid.setHorizontalSpacing(12)
+        video_grid.setVerticalSpacing(8)
+        video_grid.setColumnMinimumWidth(0, label_width)
+        video_grid.setColumnStretch(1, 1)
+        video_grid.addWidget(label("视频存储目录："), 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        video_grid.addLayout(video_dir_row, 0, 1)
+        video_dir_hint = QLabel("新录制视频将保存到此目录，视频查询页也将从此目录读取数据。")
+        video_dir_hint.setObjectName("settingsHint")
+        video_dir_hint.setWordWrap(True)
+        video_grid.addWidget(video_dir_hint, 1, 1)
+        video_layout.addLayout(video_grid)
+        layout.addWidget(video_card)
 
-        hash_checkmark_path = resource_path("app/assets/checkmark.svg").as_posix()
-        hash_frame = QFrame()
-        hash_frame.setObjectName("hashCheckPanel")
-        hash_frame.setStyleSheet(
-            """
-            QFrame#hashCheckPanel {
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
-            }
-            QLabel#hashCheckTitle {
-                color: #0f172a;
-                font-size: 14px;
-                font-weight: 700;
-            }
-            QLabel#hashCheckHint {
-                color: #64748b;
-                font-size: 12px;
-            }
-            QCheckBox {
-                color: #1f2937;
-                font-size: 14px;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 4px;
-                border: 2px solid #cbd5e1;
-                background: #ffffff;
-            }
-            QCheckBox::indicator:checked {
-                border-color: #0f766e;
-                background: #0f766e;
-                image: url("%s");
-            }
-            """
-            % hash_checkmark_path
-        )
-        hash_layout = QVBoxLayout(hash_frame)
-        hash_layout.setContentsMargins(12, 10, 12, 10)
-        hash_layout.setSpacing(8)
+        camera_card, camera_layout = self._settings_card("摄像头与录制参数")
+        camera_grid = QGridLayout()
+        camera_grid.setContentsMargins(0, 0, 0, 0)
+        camera_grid.setHorizontalSpacing(12)
+        camera_grid.setVerticalSpacing(12)
+        camera_grid.setColumnMinimumWidth(0, label_width)
+        camera_grid.setColumnStretch(1, 1)
 
-        hash_title = QLabel("证据校验 / 文件校验")
-        hash_title.setObjectName("hashCheckTitle")
-        hash_layout.addWidget(hash_title)
+        self.camera_refresh_button = QPushButton("刷新设备")
+        self.camera_refresh_button.setObjectName("secondaryButton")
+        tune_button(self.camera_refresh_button)
+        self.camera_refresh_button.clicked.connect(lambda: self._refresh_camera_options())
+        camera_row = QHBoxLayout()
+        camera_row.setContentsMargins(0, 0, 0, 0)
+        camera_row.setSpacing(8)
+        camera_row.addWidget(self.camera_combo, 0)
+        camera_row.addWidget(self.camera_refresh_button, 0, Qt.AlignVCenter)
+        camera_row.addStretch(1)
+        camera_grid.addWidget(
+            help_label("摄像头设备：", "摄像头设备说明", CAMERA_HELP_TEXT, "选择用于打包录制的摄像头设备。"),
+            0,
+            0,
+            Qt.AlignLeft | Qt.AlignVCenter,
+        )
+        camera_grid.addLayout(camera_row, 0, 1)
+        camera_grid.addWidget(
+            help_label("分辨率：", "分辨率说明", RESOLUTION_HELP_TEXT, "设置摄像头采集画面的清晰度。"),
+            1,
+            0,
+            Qt.AlignLeft | Qt.AlignVCenter,
+        )
+        camera_grid.addWidget(self.resolution_combo, 1, 1, Qt.AlignLeft | Qt.AlignVCenter)
+        camera_grid.addWidget(
+            help_label("帧率：", "帧率说明", FPS_HELP_TEXT, "设置每秒录制画面数量，推荐 25 FPS。"),
+            2,
+            0,
+            Qt.AlignLeft | Qt.AlignVCenter,
+        )
+        camera_grid.addWidget(self.fps_combo, 2, 1, Qt.AlignLeft | Qt.AlignVCenter)
+        camera_grid.addWidget(
+            help_label("录制长边上限：", "录制长边上限说明", LONG_EDGE_HELP_TEXT, "限制录制视频的最大边长，推荐 1280。"),
+            3,
+            0,
+            Qt.AlignLeft | Qt.AlignVCenter,
+        )
+        camera_grid.addWidget(self.recording_long_edge_combo, 3, 1, Qt.AlignLeft | Qt.AlignVCenter)
+        camera_layout.addLayout(camera_grid)
+        layout.addWidget(camera_card)
+
+        watermark_card, watermark_layout = self._settings_card("水印设置")
+        watermark_grid = QGridLayout()
+        watermark_grid.setContentsMargins(0, 0, 0, 0)
+        watermark_grid.setHorizontalSpacing(12)
+        watermark_grid.setVerticalSpacing(12)
+        watermark_grid.setColumnMinimumWidth(0, label_width)
+        watermark_grid.setColumnStretch(1, 1)
+        watermark_grid.addWidget(
+            help_label("水印字号：", "水印字号说明", WATERMARK_FONT_HELP_TEXT, "设置视频中单号和时间水印的文字大小。"),
+            0,
+            0,
+            Qt.AlignLeft | Qt.AlignVCenter,
+        )
+        watermark_grid.addWidget(self.font_size_spin, 0, 1, Qt.AlignLeft | Qt.AlignVCenter)
+        watermark_grid.addWidget(
+            help_label("水印边距：", "水印边距说明", WATERMARK_MARGIN_HELP_TEXT, "设置水印距离画面边缘的距离。"),
+            1,
+            0,
+            Qt.AlignLeft | Qt.AlignVCenter,
+        )
+        watermark_grid.addWidget(self.margin_spin, 1, 1, Qt.AlignLeft | Qt.AlignVCenter)
+        watermark_layout.addLayout(watermark_grid)
+        layout.addWidget(watermark_card)
+
+        evidence_card, evidence_layout = self._settings_card("证据校验")
+        evidence_grid = QGridLayout()
+        evidence_grid.setContentsMargins(0, 0, 0, 0)
+        evidence_grid.setHorizontalSpacing(12)
+        evidence_grid.setVerticalSpacing(12)
+        evidence_grid.setColumnMinimumWidth(0, label_width)
+        evidence_grid.setColumnStretch(1, 1)
 
         self.hash_check_enabled = QCheckBox("开启视频哈希校验")
-        hash_layout.addWidget(self.hash_check_enabled)
-
-        hash_hint = QLabel("录制完成后自动生成 SHA256，用于校验视频文件是否被修改。大文件可能会增加少量后台处理时间。")
-        hash_hint.setObjectName("hashCheckHint")
-        hash_hint.setWordWrap(True)
-        hash_layout.addWidget(hash_hint)
-
-        hash_algorithm_row = QHBoxLayout()
-        hash_algorithm_row.setContentsMargins(0, 0, 0, 0)
-        hash_algorithm_row.setSpacing(8)
-        hash_algorithm_row.addWidget(QLabel("哈希算法："))
+        self.hash_check_enabled.setObjectName("settingsInlineCheckBox")
+        evidence_grid.addWidget(label("视频哈希校验："), 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        evidence_grid.addWidget(self.hash_check_enabled, 0, 1, Qt.AlignLeft | Qt.AlignVCenter)
         self.hash_algorithm_combo = QComboBox()
         self.hash_algorithm_combo.addItem("SHA256", "SHA256")
-        hash_algorithm_row.addWidget(self.hash_algorithm_combo)
-        hash_algorithm_row.addStretch(1)
-        hash_layout.addLayout(hash_algorithm_row)
-        layout.addWidget(hash_frame)
+        compact(self.hash_algorithm_combo, 170)
+        evidence_grid.addWidget(label("哈希算法："), 1, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        evidence_grid.addWidget(self.hash_algorithm_combo, 1, 1, Qt.AlignLeft | Qt.AlignVCenter)
+        hash_hint = QLabel("录制完成后自动生成 SHA256，用于校验视频文件是否被修改。大文件可能会增加少量后台处理时间。")
+        hash_hint.setObjectName("settingsHint")
+        hash_hint.setWordWrap(True)
+        evidence_grid.addWidget(hash_hint, 2, 1)
+        evidence_layout.addLayout(evidence_grid)
+        layout.addWidget(evidence_card)
+
+        scroll.setWidget(content)
+        root_layout.addWidget(scroll, 1)
 
         action_layout = QHBoxLayout()
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        self.restore_recommended_button = QPushButton("恢复推荐参数")
+        self.restore_recommended_button.setObjectName("secondaryButton")
+        tune_button(self.restore_recommended_button)
+        self.restore_recommended_button.clicked.connect(self._restore_recommended_defaults)
+        action_layout.addWidget(self.restore_recommended_button)
         action_layout.addStretch(1)
         self.apply_basic_config_button = QPushButton("保存并应用配置")
         self.apply_basic_config_button.setObjectName("primaryButton")
+        tune_button(self.apply_basic_config_button)
         self.apply_basic_config_button.clicked.connect(self._save_basic_config)
         action_layout.addWidget(self.apply_basic_config_button)
-        layout.addLayout(action_layout)
-        layout.addStretch(1)
+        root_layout.addLayout(action_layout)
         return widget
 
     def _build_voice_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setSpacing(14)
 
         self.voice_enabled_check = QCheckBox("开启语音提示")
         checkmark_path = resource_path("app/assets/checkmark.svg").as_posix()
@@ -442,17 +571,21 @@ class SettingsDialog(QDialog):
         self.voice_enabled_check.toggled.connect(self._sync_voice_mode_ui)
         voice_enabled_row = QHBoxLayout()
         voice_enabled_row.setContentsMargins(0, 0, 0, 0)
+        voice_enabled_row.addWidget(self.voice_enabled_check, 0, Qt.AlignLeft | Qt.AlignVCenter)
         voice_enabled_row.addStretch(1)
-        voice_enabled_row.addWidget(self.voice_enabled_check, 0, Qt.AlignCenter)
-        voice_enabled_row.addStretch(1)
-        layout.addLayout(voice_enabled_row)
+        voice_enabled_widget = QWidget()
+        voice_enabled_widget.setFixedHeight(42)
+        voice_enabled_widget.setLayout(voice_enabled_row)
+        layout.addWidget(voice_enabled_widget)
 
         self.voice_mode_stack = QStackedWidget()
-        self.voice_mode_stack.setFixedHeight(30)
         self.voice_mode_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.voice_mode_stack.setMaximumHeight(42)
         self.voice_mode_blank = QWidget()
         self.voice_mode_stack.addWidget(self.voice_mode_blank)
         self.voice_mode_panel = QWidget()
+        self.voice_mode_panel.setMinimumHeight(36)
+        self.voice_mode_panel.setMaximumHeight(42)
         self.voice_mode_panel.setObjectName("voiceModePanel")
         self.voice_mode_panel.setStyleSheet(
             """
@@ -513,19 +646,12 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.voice_mode_stack)
 
         self.voice_config_stack = QStackedWidget()
-        self.voice_config_stack.setFixedHeight(360)
-        self.voice_config_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.voice_config_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.voice_config_stack.setMaximumHeight(520)
         self.voice_config_blank = QWidget()
         self.voice_config_stack.addWidget(self.voice_config_blank)
 
-        self.system_voice_panel = QWidget()
-        system_layout = QVBoxLayout(self.system_voice_panel)
-        system_layout.setContentsMargins(0, 0, 0, 0)
-        system_layout.setSpacing(8)
-
-        system_header = QLabel("系统默认语音文字配置")
-        system_header.setObjectName("sectionTitle")
-        system_layout.addWidget(system_header)
+        self.system_voice_panel, system_layout = self._settings_card("系统默认语音")
 
         system_form = QFormLayout()
         system_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -540,7 +666,7 @@ class SettingsDialog(QDialog):
         system_layout.addStretch(1)
         self.voice_config_stack.addWidget(self.system_voice_panel)
 
-        self.custom_voice_panel = QWidget()
+        self.custom_voice_panel, custom_layout = self._settings_card("自定义语音包")
         self.custom_voice_panel.setObjectName("customVoicePanel")
         self.custom_voice_panel.setStyleSheet(
             """
@@ -552,9 +678,28 @@ class SettingsDialog(QDialog):
                 color: #475569;
                 font-weight: 700;
             }
+            QScrollArea#voiceTableScroll,
+            QScrollArea#voiceTableScroll QWidget#voiceTableWidget {
+                background: #ffffff;
+                border: none;
+            }
+            QFrame#voiceRecordRow {
+                background: #ffffff;
+                border: none;
+            }
+            QFrame#voiceRecordRow:hover {
+                background: #f8fafc;
+            }
+            QFrame#voiceRecordSeparator {
+                background: #e2e8f0;
+                border: none;
+                min-height: 1px;
+                max-height: 1px;
+            }
             QPushButton {
                 min-height: 28px;
-                padding: 3px 10px;
+                max-height: 30px;
+                padding: 2px 8px;
             }
             QPushButton#voiceUploadButton {
                 color: #0f766e;
@@ -588,31 +733,39 @@ class SettingsDialog(QDialog):
             }
             """
         )
-        custom_layout = QVBoxLayout(self.custom_voice_panel)
-        custom_layout.setContentsMargins(0, 0, 0, 0)
-        custom_layout.setSpacing(8)
-
-        header = QLabel("自定义语音包")
-        header.setObjectName("sectionTitle")
-        custom_layout.addWidget(header)
 
         scroll = QScrollArea()
+        scroll.setObjectName("voiceTableScroll")
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setMaximumHeight(430)
 
         table_widget = QWidget()
+        table_widget.setObjectName("voiceTableWidget")
         grid = QGridLayout(table_widget)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(8)
-        grid.addWidget(self._header_label("提示场景"), 0, 0)
-        grid.addWidget(self._header_label("当前音频文件"), 0, 1)
-        grid.addWidget(self._header_label("操作"), 0, 2)
+        grid.setVerticalSpacing(0)
+        grid.addWidget(self._header_label("提示场景"), 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        grid.addWidget(self._header_label("当前音频文件"), 0, 1, Qt.AlignLeft | Qt.AlignVCenter)
+        grid.addWidget(self._header_label("操作"), 0, 2, Qt.AlignLeft | Qt.AlignVCenter)
 
-        for row, (event_key, _text_label, audio_label, _file_stem) in enumerate(VOICE_SETTINGS_EVENTS, start=1):
+        for item_index, (event_key, _text_label, audio_label, _file_stem) in enumerate(VOICE_SETTINGS_EVENTS, start=1):
+            row_frame = QFrame()
+            row_frame.setObjectName("voiceRecordRow")
+            row_layout = QGridLayout(row_frame)
+            row_layout.setContentsMargins(0, 6, 0, 0)
+            row_layout.setHorizontalSpacing(8)
+            row_layout.setVerticalSpacing(6)
+            row_layout.setColumnStretch(0, 22)
+            row_layout.setColumnStretch(1, 38)
+            row_layout.setColumnStretch(2, 40)
+
             scene_label = QLabel(audio_label)
+            scene_label.setMinimumHeight(36)
             file_label = QLabel("未设置")
+            file_label.setMinimumHeight(36)
             file_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             file_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             self.voice_file_labels[event_key] = file_label
@@ -623,16 +776,19 @@ class SettingsDialog(QDialog):
             upload_button.setObjectName("voiceUploadButton")
             preview_button.setObjectName("voicePreviewButton")
             reset_button.setObjectName("voiceResetButton")
-            upload_button.setFixedWidth(64)
-            preview_button.setFixedWidth(64)
-            reset_button.setFixedWidth(82)
+            upload_button.setFixedWidth(60)
+            preview_button.setFixedWidth(60)
+            reset_button.setFixedWidth(78)
+            for button in (upload_button, preview_button, reset_button):
+                button.setMinimumHeight(28)
+                button.setMaximumHeight(30)
             upload_button.clicked.connect(lambda _checked=False, key=event_key: self._upload_voice_file(key))
             preview_button.clicked.connect(lambda _checked=False, key=event_key: self._preview_voice_event(key))
             reset_button.clicked.connect(lambda _checked=False, key=event_key: self._reset_voice_event(key))
             self.voice_row_buttons[event_key] = (upload_button, preview_button, reset_button)
 
             button_row = QHBoxLayout()
-            button_row.setContentsMargins(0, 0, 0, 0)
+            button_row.setContentsMargins(0, 0, 24, 0)
             button_row.setSpacing(6)
             button_row.addWidget(upload_button)
             button_row.addWidget(preview_button)
@@ -640,16 +796,27 @@ class SettingsDialog(QDialog):
             button_row.addStretch(1)
             button_widget = QWidget()
             button_widget.setLayout(button_row)
+            button_widget.setMinimumHeight(36)
 
-            grid.addWidget(scene_label, row, 0)
-            grid.addWidget(file_label, row, 1)
-            grid.addWidget(button_widget, row, 2)
+            row_layout.addWidget(scene_label, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
+            row_layout.addWidget(file_label, 0, 1, Qt.AlignLeft | Qt.AlignVCenter)
+            row_layout.addWidget(button_widget, 0, 2, Qt.AlignLeft | Qt.AlignVCenter)
 
-        grid.setColumnStretch(1, 1)
+            if item_index < len(VOICE_SETTINGS_EVENTS):
+                separator = QFrame()
+                separator.setObjectName("voiceRecordSeparator")
+                row_layout.addWidget(separator, 1, 0, 1, 3)
+
+            grid.addWidget(row_frame, item_index, 0, 1, 3)
+
+        grid.setColumnStretch(0, 22)
+        grid.setColumnStretch(1, 38)
+        grid.setColumnStretch(2, 40)
+        grid.setRowStretch(len(VOICE_SETTINGS_EVENTS) + 1, 1)
         scroll.setWidget(table_widget)
         custom_layout.addWidget(scroll, 1)
         self.voice_config_stack.addWidget(self.custom_voice_panel)
-        layout.addWidget(self.voice_config_stack)
+        layout.addWidget(self.voice_config_stack, 0, Qt.AlignTop)
 
         action_layout = QHBoxLayout()
         action_layout.addStretch(1)
@@ -659,76 +826,44 @@ class SettingsDialog(QDialog):
         self.voice_action_button.clicked.connect(self._on_voice_action_clicked)
         action_layout.addWidget(self.voice_action_button)
         action_layout.addStretch(1)
-        layout.addLayout(action_layout)
+        action_widget = QWidget()
+        action_widget.setFixedHeight(54)
+        action_widget.setLayout(action_layout)
+        layout.addWidget(action_widget)
+        layout.addStretch(1)
         return widget
 
     def _build_netdisk_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setSpacing(14)
 
         self.netdisk_enabled_check = QCheckBox("开启网盘同步")
         self.netdisk_enabled_check.setStyleSheet(self.voice_enabled_check.styleSheet())
         self.netdisk_enabled_check.toggled.connect(self._sync_netdisk_ui)
         enabled_row = QHBoxLayout()
         enabled_row.setContentsMargins(0, 0, 0, 0)
+        enabled_row.addWidget(self.netdisk_enabled_check, 0, Qt.AlignLeft | Qt.AlignVCenter)
         enabled_row.addStretch(1)
-        enabled_row.addWidget(self.netdisk_enabled_check, 0, Qt.AlignCenter)
-        enabled_row.addStretch(1)
+        enabled_row.addWidget(QLabel("授权状态："))
+        self.netdisk_auth_status_summary_label = QLabel("未授权")
+        self.netdisk_auth_status_summary_label.setObjectName("authStatusTag")
+        enabled_row.addWidget(self.netdisk_auth_status_summary_label)
         layout.addLayout(enabled_row)
 
         self.netdisk_config_stack = QStackedWidget()
-        self.netdisk_config_stack.setFixedHeight(360)
-        self.netdisk_config_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.netdisk_config_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.netdisk_blank_panel = QWidget()
         self.netdisk_config_stack.addWidget(self.netdisk_blank_panel)
 
         self.netdisk_panel = QWidget()
         self.netdisk_panel.setObjectName("netdiskPanel")
-        self.netdisk_panel.setStyleSheet(
-            """
-            QLabel#sectionTitle {
-                color: #0f766e;
-                font-weight: 700;
-            }
-            QLabel#authStatusLabel {
-                color: #475569;
-                font-weight: 600;
-            }
-            QPushButton#netdiskAuthButton {
-                color: #0f766e;
-                border: 1px solid #0f766e;
-                background: #ffffff;
-                border-radius: 5px;
-                font-weight: 600;
-                min-height: 30px;
-                padding: 4px 12px;
-            }
-            QPushButton#netdiskAuthButton:hover {
-                background: #ecfdf5;
-            }
-            QPushButton#netdiskTestButton {
-                color: #2563eb;
-                border: 1px solid #93c5fd;
-                background: #ffffff;
-                border-radius: 5px;
-                font-weight: 600;
-                min-height: 30px;
-                padding: 4px 12px;
-            }
-            QPushButton#netdiskTestButton:hover {
-                background: #eff6ff;
-            }
-            """
-        )
         panel_layout = QVBoxLayout(self.netdisk_panel)
         panel_layout.setContentsMargins(0, 0, 0, 0)
-        panel_layout.setSpacing(10)
+        panel_layout.setSpacing(14)
 
-        header = QLabel("百度网盘同步配置")
-        header.setObjectName("sectionTitle")
-        panel_layout.addWidget(header)
+        netdisk_card, netdisk_card_layout = self._settings_card("百度网盘配置")
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -737,20 +872,22 @@ class SettingsDialog(QDialog):
 
         self.netdisk_client_id_input = QLineEdit()
         self.netdisk_client_id_input.setPlaceholderText("请输入百度网盘 App Key / Client ID")
+        self.netdisk_client_id_input.setMaximumWidth(640)
+        self._set_compact_control(self.netdisk_client_id_input)
         form.addRow("App Key：", self.netdisk_client_id_input)
 
         self.netdisk_client_secret_input = QLineEdit()
         self.netdisk_client_secret_input.setPlaceholderText("请输入百度网盘 Secret Key / Client Secret")
         self.netdisk_client_secret_input.setEchoMode(QLineEdit.Password)
+        self.netdisk_client_secret_input.setMaximumWidth(640)
+        self._set_compact_control(self.netdisk_client_secret_input)
         form.addRow("Secret Key：", self.netdisk_client_secret_input)
 
         self.netdisk_remote_root_input = QLineEdit()
         self.netdisk_remote_root_input.setPlaceholderText("/电商溯源/videos/")
+        self.netdisk_remote_root_input.setMaximumWidth(640)
+        self._set_compact_control(self.netdisk_remote_root_input)
         form.addRow("远程上传根目录：", self.netdisk_remote_root_input)
-
-        self.netdisk_debug_check = QCheckBox("启用调试日志")
-        self.netdisk_debug_check.setToolTip("仅排查上传问题时开启；不会记录 token、refresh_token 或 Secret Key。")
-        form.addRow("调试日志：", self.netdisk_debug_check)
 
         auth_row = QHBoxLayout()
         auth_row.setContentsMargins(0, 0, 0, 0)
@@ -759,24 +896,78 @@ class SettingsDialog(QDialog):
         self.netdisk_auth_status_label.setObjectName("authStatusLabel")
         self.netdisk_auth_button = QPushButton("登录授权")
         self.netdisk_auth_button.setObjectName("netdiskAuthButton")
+        self.netdisk_auth_button.setMinimumHeight(32)
+        self.netdisk_auth_button.setMaximumHeight(34)
+        self.netdisk_auth_button.setMinimumWidth(96)
+        self.netdisk_auth_button.setMaximumWidth(110)
         self.netdisk_auth_button.clicked.connect(self._authorize_netdisk)
         self.netdisk_test_button = QPushButton("测试连接")
         self.netdisk_test_button.setObjectName("netdiskTestButton")
+        self.netdisk_test_button.setMinimumHeight(32)
+        self.netdisk_test_button.setMaximumHeight(34)
+        self.netdisk_test_button.setMinimumWidth(96)
+        self.netdisk_test_button.setMaximumWidth(110)
         self.netdisk_test_button.clicked.connect(self._test_netdisk_connection)
         auth_row.addWidget(self.netdisk_auth_status_label)
-        auth_row.addSpacing(8)
+        auth_row.addSpacing(18)
         auth_row.addWidget(self.netdisk_auth_button)
+        auth_row.addSpacing(10)
         auth_row.addWidget(self.netdisk_test_button)
         auth_row.addStretch(1)
         auth_widget = QWidget()
+        auth_widget.setObjectName("transparentSettingsRow")
         auth_widget.setLayout(auth_row)
         form.addRow("授权状态：", auth_widget)
 
-        panel_layout.addLayout(form)
+        self.netdisk_debug_check = QCheckBox("启用调试日志")
+        self.netdisk_debug_check.setObjectName("settingsInlineCheckBox")
+        self.netdisk_debug_check.setToolTip("仅排查上传问题时开启；不会记录 token、refresh_token 或 Secret Key。")
+        form.addRow("调试日志：", self.netdisk_debug_check)
+
+        netdisk_card_layout.addLayout(form)
         hint = QLabel("提示：access_token 和 refresh_token 仅保存在本机配置文件中，不会显示在界面和日志里。")
         hint.setObjectName("hintLabel")
         hint.setWordWrap(True)
-        panel_layout.addWidget(hint)
+        netdisk_card_layout.addWidget(hint)
+        panel_layout.addWidget(netdisk_card)
+
+        auto_sync_frame, auto_sync_layout = self._settings_card("自动同步")
+
+        self.auto_sync_enabled_check = QCheckBox("开启自动同步")
+        self.auto_sync_enabled_check.setObjectName("settingsInlineCheckBox")
+        self.auto_sync_enabled_check.setStyleSheet(self.voice_enabled_check.styleSheet())
+        self.auto_sync_enabled_check.toggled.connect(self._sync_netdisk_ui)
+        auto_title_row = QHBoxLayout()
+        auto_title_row.setContentsMargins(0, 0, 0, 0)
+        auto_title_row.addWidget(self.auto_sync_enabled_check)
+        auto_title_row.addStretch(1)
+        auto_sync_layout.addLayout(auto_title_row)
+
+        self.auto_sync_fields_widget = QWidget()
+        self.auto_sync_fields_widget.setObjectName("transparentSettingsRow")
+        auto_sync_fields = QHBoxLayout(self.auto_sync_fields_widget)
+        auto_sync_fields.setContentsMargins(0, 0, 0, 0)
+        auto_sync_fields.setSpacing(12)
+        self.auto_sync_trigger_combo = QComboBox()
+        self.auto_sync_trigger_combo.addItem("最后一次录制结束后", "after_last_recording")
+        self._set_compact_control(self.auto_sync_trigger_combo, 240)
+        auto_sync_fields.addWidget(QLabel("触发时机："))
+        auto_sync_fields.addWidget(self.auto_sync_trigger_combo)
+
+        self.auto_sync_delay_combo = QComboBox()
+        for minutes in AUTO_SYNC_DELAY_OPTIONS:
+            self.auto_sync_delay_combo.addItem(f"{minutes}分钟", minutes)
+        self._set_compact_control(self.auto_sync_delay_combo, 120)
+        auto_sync_fields.addWidget(QLabel("延迟时间："))
+        auto_sync_fields.addWidget(self.auto_sync_delay_combo)
+        auto_sync_fields.addStretch(1)
+        auto_sync_layout.addWidget(self.auto_sync_fields_widget)
+
+        auto_sync_hint = QLabel("录制结束并持续空闲指定时间后，自动上传符合条件的未上传视频；上传失败记录仍需在同步记录中手动重试。")
+        auto_sync_hint.setObjectName("settingsHint")
+        auto_sync_hint.setWordWrap(True)
+        auto_sync_layout.addWidget(auto_sync_hint)
+        panel_layout.addWidget(auto_sync_frame)
         panel_layout.addStretch(1)
         self.netdisk_config_stack.addWidget(self.netdisk_panel)
         layout.addWidget(self.netdisk_config_stack)
@@ -895,6 +1086,10 @@ class SettingsDialog(QDialog):
     def _load_basic_config_to_ui(self) -> None:
         selected_index = int(self.config_manager.config.get("camera_index", 0) or 0)
         self._refresh_camera_options(selected_index)
+        video_dir_text = str(self.config_manager.get_video_dir())
+        self.video_root_dir_input.setText(video_dir_text)
+        self.video_root_dir_input.setToolTip(video_dir_text)
+        self.video_root_dir_input.setCursorPosition(0)
         self._select_combo_data(self.resolution_combo, str(self.config_manager.config.get("resolution", "original")), "original")
         fps, _fps_valid = self._coerce_fps(self.config_manager.config.get("fps", DEFAULT_FPS))
         max_long_edge, _edge_valid = self._coerce_long_edge(
@@ -913,6 +1108,10 @@ class SettingsDialog(QDialog):
     def _set_basic_config_enabled(self, enabled: bool) -> None:
         for widget in (
             self.camera_combo,
+            self.video_root_dir_input,
+            self.video_root_dir_choose_button,
+            self.video_root_dir_open_button,
+            getattr(self, "camera_refresh_button", self.camera_combo),
             self.resolution_combo,
             self.fps_combo,
             self.recording_long_edge_combo,
@@ -920,9 +1119,34 @@ class SettingsDialog(QDialog):
             self.margin_spin,
             self.hash_check_enabled,
             self.hash_algorithm_combo,
+            getattr(self, "restore_recommended_button", self.apply_basic_config_button),
             self.apply_basic_config_button,
         ):
             widget.setEnabled(enabled)
+
+    def _restore_recommended_defaults(self) -> None:
+        message = (
+            "将恢复以下推荐参数：\n"
+            "分辨率：原始分辨率\n"
+            "帧率：30 FPS\n"
+            "录制长边上限：1280\n"
+            "水印字号：28\n"
+            "水印边距：16\n"
+            "视频哈希校验：开启\n"
+            "哈希算法：SHA256\n\n"
+            "不会修改摄像头设备、视频存储目录、网盘授权、自定义语音包等设备或账号相关配置。\n"
+            "恢复后需要点击“保存并应用配置”才会生效。"
+        )
+        if QMessageBox.question(self, "恢复推荐参数", message, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        self._select_combo_data(self.resolution_combo, "original", "original")
+        self._select_combo_data(self.fps_combo, 30, DEFAULT_FPS)
+        self._select_combo_data(self.recording_long_edge_combo, 1280, DEFAULT_LONG_EDGE)
+        self.font_size_spin.setValue(28)
+        self.margin_spin.setValue(16)
+        self.hash_check_enabled.setChecked(True)
+        self._select_combo_data(self.hash_algorithm_combo, "SHA256", "SHA256")
+        self._set_status("已恢复推荐参数，保存后生效", "info")
 
     def _save_basic_config(self) -> None:
         if self.is_recording_callback():
@@ -932,7 +1156,16 @@ class SettingsDialog(QDialog):
             return
 
         try:
+            current_video_dir = self.config_manager.get_video_dir()
+            raw_video_dir = self.video_root_dir_input.text().strip()
+            candidate_video_dir = self.config_manager.resolve_path(raw_video_dir or "videos").resolve()
+            if candidate_video_dir != current_video_dir and self.is_syncing_callback():
+                self._set_status("当前正在同步网盘，请先停止同步后再修改视频存储目录。", "warning")
+                self.video_root_dir_input.setText(str(current_video_dir))
+                return
+            video_root_dir = self.config_manager.ensure_video_root_dir_writable(raw_video_dir or "videos")
             values = {
+                "video_root_dir": str(video_root_dir),
                 "camera_index": int(self.camera_combo.currentData() or 0),
                 "camera_name": self._selected_camera_name(),
                 "resolution": self.resolution_combo.currentData(),
@@ -948,11 +1181,33 @@ class SettingsDialog(QDialog):
             }
             updated_config = self.config_manager.update(values)
             self.basic_config_saved.emit(updated_config)
-            self.logger.info("基础配置保存成功")
-            self._set_status("基础配置保存成功", "success")
+            self.video_root_dir_input.setText(str(self.config_manager.get_video_dir()))
+            self.logger.info("基础配置保存成功：video_root_dir=%s", self.config_manager.get_video_dir())
+            if video_root_dir != current_video_dir:
+                self._set_status("视频存储目录已更新", "success")
+            else:
+                self._set_status("基础配置保存成功", "success")
         except Exception as exc:
             self.logger.exception("基础配置保存失败")
             self._set_status(f"基础配置保存失败：{exc}", "error")
+
+    def _choose_video_root_dir(self) -> None:
+        if self.is_recording_callback():
+            self._set_status("当前正在录制，请结束录制后再修改视频存储目录。", "warning")
+            return
+        current_dir = str(self.config_manager.get_video_dir())
+        selected = QFileDialog.getExistingDirectory(self, "选择视频存储目录", current_dir)
+        if selected:
+            self.video_root_dir_input.setText(str(Path(selected).resolve()))
+            self.video_root_dir_input.setCursorPosition(0)
+
+    def _open_video_root_dir(self) -> None:
+        try:
+            video_dir = self.config_manager.ensure_video_root_dir_writable(self.video_root_dir_input.text().strip() or "videos")
+            open_folder(video_dir)
+        except Exception as exc:
+            self.logger.exception("打开视频存储目录失败")
+            self._set_status(f"打开视频存储目录失败：{exc}", "error")
 
     def _load_voice_config_to_ui(self) -> None:
         voice_config = self._current_voice_config()
@@ -1158,6 +1413,7 @@ class SettingsDialog(QDialog):
 
     def _load_netdisk_config_to_ui(self) -> None:
         netdisk_config = self._current_netdisk_config()
+        cloud_sync_config = self._current_cloud_sync_config()
         self.netdisk_enabled_check.blockSignals(True)
         self.netdisk_enabled_check.setChecked(bool(netdisk_config.get("enabled", False)))
         self.netdisk_enabled_check.blockSignals(False)
@@ -1166,11 +1422,27 @@ class SettingsDialog(QDialog):
         self.netdisk_client_secret_input.setText(str(netdisk_config.get("client_secret") or ""))
         self.netdisk_remote_root_input.setText(str(netdisk_config.get("remote_root") or "/电商溯源/videos/"))
         self.netdisk_debug_check.setChecked(bool(netdisk_config.get("debug", False)))
+        self.auto_sync_enabled_check.blockSignals(True)
+        self.auto_sync_enabled_check.setChecked(bool(cloud_sync_config.get("auto_sync_enabled", False)))
+        self.auto_sync_enabled_check.blockSignals(False)
+        self._select_combo_data(
+            self.auto_sync_trigger_combo,
+            str(cloud_sync_config.get("auto_sync_trigger") or "after_last_recording"),
+            "after_last_recording",
+        )
+        self._select_combo_data(
+            self.auto_sync_delay_combo,
+            int(cloud_sync_config.get("auto_sync_delay_minutes") or 10),
+            10,
+        )
         self._refresh_netdisk_auth_status(netdisk_config)
         self._sync_netdisk_ui()
 
     def _current_netdisk_config(self) -> dict[str, object]:
         return normalize_netdisk_config(self.config_manager.config.get("netdisk_sync", {}))
+
+    def _current_cloud_sync_config(self) -> dict[str, object]:
+        return normalize_cloud_sync_config(self.config_manager.config.get("cloud_sync", {}))
 
     def _netdisk_config_from_ui(self) -> dict[str, object]:
         current = self._current_netdisk_config()
@@ -1187,8 +1459,18 @@ class SettingsDialog(QDialog):
             "debug": self.netdisk_debug_check.isChecked(),
         }
 
+    def _cloud_sync_config_from_ui(self) -> dict[str, object]:
+        return normalize_cloud_sync_config(
+            {
+                "auto_sync_enabled": self.auto_sync_enabled_check.isChecked(),
+                "auto_sync_trigger": str(self.auto_sync_trigger_combo.currentData() or "after_last_recording"),
+                "auto_sync_delay_minutes": int(self.auto_sync_delay_combo.currentData() or 10),
+            }
+        )
+
     def _sync_netdisk_ui(self, *_args) -> None:
         enabled = self.netdisk_enabled_check.isChecked()
+        auto_enabled = enabled and self.auto_sync_enabled_check.isChecked()
         self.netdisk_config_stack.setCurrentWidget(self.netdisk_panel if enabled else self.netdisk_blank_panel)
         for widget in (
             self.netdisk_client_id_input,
@@ -1197,38 +1479,59 @@ class SettingsDialog(QDialog):
             self.netdisk_debug_check,
             self.netdisk_auth_button,
             self.netdisk_test_button,
+            self.auto_sync_enabled_check,
         ):
             widget.setEnabled(enabled)
+        for widget in (self.auto_sync_trigger_combo, self.auto_sync_delay_combo):
+            widget.setEnabled(auto_enabled)
+        if hasattr(self, "auto_sync_fields_widget"):
+            self.auto_sync_fields_widget.setVisible(auto_enabled)
 
     def _refresh_netdisk_auth_status(self, netdisk_config: dict[str, object] | None = None) -> None:
         netdisk_config = netdisk_config or self._current_netdisk_config()
         if netdisk_config.get("access_token") or netdisk_config.get("refresh_token"):
             self.netdisk_auth_status_label.setText("已授权")
             self.netdisk_auth_status_label.setStyleSheet("color: #047857; font-weight: 700;")
+            if hasattr(self, "netdisk_auth_status_summary_label"):
+                self.netdisk_auth_status_summary_label.setText("已授权")
+                self.netdisk_auth_status_summary_label.setProperty("status", "ok")
+                self.netdisk_auth_status_summary_label.style().unpolish(self.netdisk_auth_status_summary_label)
+                self.netdisk_auth_status_summary_label.style().polish(self.netdisk_auth_status_summary_label)
             self.netdisk_auth_button.setText("重新授权")
         else:
             self.netdisk_auth_status_label.setText("未授权")
-            self.netdisk_auth_status_label.setStyleSheet("color: #d97706; font-weight: 700;")
+            self.netdisk_auth_status_label.setStyleSheet("color: #64748b; font-weight: 700;")
+            if hasattr(self, "netdisk_auth_status_summary_label"):
+                self.netdisk_auth_status_summary_label.setText("未授权")
+                self.netdisk_auth_status_summary_label.setProperty("status", "none")
+                self.netdisk_auth_status_summary_label.style().unpolish(self.netdisk_auth_status_summary_label)
+                self.netdisk_auth_status_summary_label.style().polish(self.netdisk_auth_status_summary_label)
             self.netdisk_auth_button.setText("登录授权")
 
-    def _save_netdisk_config(self, netdisk_config: dict[str, object]) -> dict:
+    def _save_netdisk_config(self, netdisk_config: dict[str, object], cloud_sync_config: dict[str, object] | None = None) -> dict:
         normalized = normalize_netdisk_config(netdisk_config)
-        updated_config = self.config_manager.update({"netdisk_sync": normalized})
+        values: dict[str, object] = {"netdisk_sync": normalized}
+        if cloud_sync_config is not None:
+            values["cloud_sync"] = normalize_cloud_sync_config(cloud_sync_config)
+        updated_config = self.config_manager.update(values)
         self.config_saved.emit(updated_config)
         self.logger.info(
-            "网盘同步配置保存成功：enabled=%s, provider=%s, remote_root=%s, has_client_id=%s, has_token=%s",
+            "网盘同步配置保存成功：enabled=%s, provider=%s, remote_root=%s, has_client_id=%s, has_token=%s, auto_sync=%s, delay=%s",
             normalized.get("enabled"),
             normalized.get("provider"),
             normalized.get("remote_root"),
             bool(normalized.get("client_id")),
             bool(normalized.get("access_token") or normalized.get("refresh_token")),
+            bool((cloud_sync_config or self._current_cloud_sync_config()).get("auto_sync_enabled", False)),
+            int((cloud_sync_config or self._current_cloud_sync_config()).get("auto_sync_delay_minutes", 10) or 10),
         )
         return updated_config
 
     def _save_netdisk_settings(self) -> None:
         try:
             netdisk_config = self._netdisk_config_from_ui()
-            self._save_netdisk_config(netdisk_config)
+            cloud_sync_config = self._cloud_sync_config_from_ui()
+            self._save_netdisk_config(netdisk_config, cloud_sync_config)
             self.netdisk_remote_root_input.setText(str(netdisk_config.get("remote_root") or "/电商溯源/videos/"))
             self._refresh_netdisk_auth_status(netdisk_config)
             self._sync_netdisk_ui()

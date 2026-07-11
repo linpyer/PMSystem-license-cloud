@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateEdit,
-    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -242,7 +241,6 @@ class PreviewAlertOverlay(QWidget):
 
 class MonitorTab(QWidget):
     status_message = Signal(str)
-    video_dir_changed = Signal(str)
     warning_message = Signal(str)
     critical_message = Signal(str)
 
@@ -275,7 +273,6 @@ class MonitorTab(QWidget):
         self._build_ui()
         self._connect_signals()
         self._load_config_to_controls()
-        self._update_video_dir_label()
 
         self.recorder.start()
         app = QApplication.instance()
@@ -439,17 +436,6 @@ class MonitorTab(QWidget):
         root_layout.setContentsMargins(12, 12, 12, 12)
         root_layout.setSpacing(10)
 
-        top_layout = QHBoxLayout()
-        self.video_dir_label = QLabel()
-        self.video_dir_label.setObjectName("pathLabel")
-        self.video_dir_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.video_dir_label.setWordWrap(True)
-        self.choose_dir_button = QPushButton("选择保存目录")
-        top_layout.addWidget(self.video_dir_label, 1)
-        top_layout.addWidget(self.choose_dir_button)
-        self.choose_dir_button.setObjectName("secondaryButton")
-        root_layout.addLayout(top_layout)
-
         content_layout = QGridLayout()
         content_layout.setColumnStretch(0, 3)
         content_layout.setColumnStretch(1, 1)
@@ -596,7 +582,7 @@ class MonitorTab(QWidget):
         self.manual_start_button.setObjectName("primaryButton")
         self.manual_stop_button = QPushButton("手动停止录制")
         self.manual_stop_button.setObjectName("stopButton")
-        self.open_folder_button = QPushButton("打开视频保存文件夹")
+        self.open_folder_button = QPushButton("打开视频存储目录")
         self.refresh_camera_button = QPushButton("刷新摄像头")
         button_layout.addWidget(self.manual_start_button, 0, 0)
         button_layout.addWidget(self.manual_stop_button, 0, 1)
@@ -640,7 +626,6 @@ class MonitorTab(QWidget):
         self.manual_stop_button.clicked.connect(lambda: self._manual_stop())
         self.open_folder_button.clicked.connect(lambda: self._open_video_folder())
         self.refresh_camera_button.clicked.connect(lambda: self._refresh_camera())
-        self.choose_dir_button.clicked.connect(lambda: self._choose_video_dir())
         self.ship_record_type_radio.toggled.connect(
             lambda checked: checked and self._on_record_type_changed("发货")
         )
@@ -1098,38 +1083,6 @@ class MonitorTab(QWidget):
         self.status_message.emit("摄像头已刷新")
         self.focus_scan_input(100)
 
-    def _choose_video_dir(self) -> None:
-        if self.is_recording:
-            self.warning_message.emit("录制中不能修改视频保存目录。")
-            self.focus_scan_input(80)
-            return
-
-        current_dir = str(self.config_manager.get_video_dir())
-        selected = QFileDialog.getExistingDirectory(self, "选择视频保存目录", current_dir)
-        if not selected:
-            self.focus_scan_input(100)
-            return
-
-        selected_path = Path(selected)
-        if not selected_path.exists() or not selected_path.is_dir():
-            self.logger.warning("保存目录无效：%s", selected)
-            self.warning_message.emit("保存目录无效。")
-            self.focus_scan_input()
-            return
-
-        try:
-            self.config = self.config_manager.update({"video_save_dir": selected})
-            self.scanner_guard.update_config(self.config)
-            ensure_directory(selected_path)
-            self.recorder.update_config(self.config)
-            self._update_video_dir_label()
-            self.video_dir_changed.emit(str(self.config_manager.get_video_dir()))
-            self.logger.info("视频保存目录已更新：%s", self.config_manager.get_video_dir())
-        except Exception:
-            self.logger.exception("保存目录保存失败：%s", selected)
-            self.critical_message.emit("保存目录保存失败，请查看日志。")
-        self.focus_scan_input(100)
-
     def _apply_config(self) -> None:
         if self.is_recording:
             self.warning_message.emit("录制中不能修改摄像头配置。")
@@ -1360,16 +1313,12 @@ class MonitorTab(QWidget):
             self.show_recording_alert(self._recording_alert_reason(message))
         self.focus_scan_input()
 
-    def _update_video_dir_label(self) -> None:
-        video_dir = self.config_manager.get_video_dir()
-        self.video_dir_label.setText(f"当前视频保存目录：{video_dir}")
-        self.video_dir_label.setToolTip(str(video_dir))
-
     def apply_external_config(self, config: dict) -> None:
         self.config = config
         self.scanner_guard.update_config(self.config)
         self.voice_prompt.update_config(self.config)
         self.recorder.update_config(self.config)
+        self.refresh_recent_recordings()
         self.focus_scan_input()
 
     def apply_basic_config(self, config: dict) -> None:

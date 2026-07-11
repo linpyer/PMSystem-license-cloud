@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import ctypes
 
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
@@ -14,6 +15,17 @@ from app.utils.runtime_paths import app_dir, resource_path, user_data_dir
 
 
 APP_TITLE = APP_NAME
+APP_ICON_PATH = "app/assets/app_icon.ico"
+APP_USER_MODEL_ID = "PMSystem.PackagingTrace.Monitor"
+
+
+def _set_windows_app_user_model_id() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    except Exception:
+        return
 
 
 def main() -> int:
@@ -29,10 +41,12 @@ def main() -> int:
     logger.info("程序目录：%s", app_dir())
     logger.info("用户数据目录：%s", data_dir)
 
+    _set_windows_app_user_model_id()
+
     app = QApplication(sys.argv)
     app.setApplicationName(APP_TITLE)
     app.setApplicationVersion(APP_VERSION)
-    icon_path = resource_path("app/assets/logo.ico")
+    icon_path = resource_path(APP_ICON_PATH)
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     app.setStyleSheet(APP_STYLES)

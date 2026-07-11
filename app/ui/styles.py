@@ -92,6 +92,56 @@ QScrollArea#rightOperationScroll > QWidget > QWidget {
     background: transparent;
 }
 
+QScrollArea#recordDetailScrollArea {
+    background: #ffffff;
+    border: none;
+}
+
+QScrollArea#recordDetailScrollArea > QWidget > QWidget,
+QWidget#recordDetailContent {
+    background: #ffffff;
+}
+
+QFrame#recordDetailCard {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+}
+
+QLabel#detailCardTitle {
+    color: #0f172a;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#recordDetailLabel {
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+QLineEdit#detailCustomReasonInput,
+QTextEdit#detailRemarkEdit {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    color: #0f172a;
+    padding: 7px 10px;
+    selection-background-color: #ccfbf1;
+    selection-color: #0f172a;
+    placeholder-text-color: #94a3b8;
+}
+
+QLineEdit#detailCustomReasonInput:hover,
+QTextEdit#detailRemarkEdit:hover {
+    border-color: #94a3b8;
+}
+
+QLineEdit#detailCustomReasonInput:focus,
+QTextEdit#detailRemarkEdit:focus {
+    border-color: #14b8a6;
+}
+
 QWidget#rightOperationPanel {
     background: transparent;
 }
@@ -325,6 +375,105 @@ QComboBox QAbstractItemView {
     selection-color: #0f172a;
     outline: none;
     padding: 4px;
+}
+
+QComboBox#detailRecordTypeCombo,
+QComboBox#detailImportantReasonCombo {
+    min-height: 28px;
+    max-height: 30px;
+    min-width: 90px;
+    padding: 4px 28px 4px 10px;
+    font-size: 13px;
+}
+
+QComboBox#detailRecordTypeCombo {
+    max-width: 112px;
+}
+
+QComboBox#detailImportantReasonCombo {
+    max-width: 168px;
+}
+
+QComboBox#detailRecordTypeCombo::drop-down,
+QComboBox#detailImportantReasonCombo::drop-down {
+    width: 26px;
+}
+
+QComboBox#detailRecordTypeCombo::down-arrow,
+QComboBox#detailImportantReasonCombo::down-arrow {
+    width: 10px;
+    height: 10px;
+}
+
+QCheckBox#detailImportantCheckbox {
+    background: transparent;
+    border: none;
+    padding: 0px;
+    margin: 0px;
+    spacing: 8px;
+    color: #0f172a;
+    font-size: 13px;
+}
+
+QCheckBox#detailImportantCheckbox:hover,
+QCheckBox#detailImportantCheckbox:pressed,
+QCheckBox#detailImportantCheckbox:checked,
+QCheckBox#detailImportantCheckbox:disabled {
+    background: transparent;
+    border: none;
+}
+
+QCheckBox#detailImportantCheckbox::indicator {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+}
+
+QCheckBox#detailImportantCheckbox::indicator:hover {
+    border-color: #14b8a6;
+    background: #f0fdfa;
+}
+
+QCheckBox#detailImportantCheckbox::indicator:pressed {
+    border-color: #0f766e;
+    background: #ccfbf1;
+}
+
+QCheckBox#detailImportantCheckbox::indicator:checked {
+    border-color: #0f766e;
+    background: #0f766e;
+    image: url("__CHECKMARK__");
+}
+
+QCheckBox#detailImportantCheckbox::indicator:disabled {
+    border-color: #e2e8f0;
+    background: #f8fafc;
+}
+
+QCheckBox#detailImportantCheckbox:disabled {
+    color: #94a3b8;
+}
+
+QComboBox#queryCompactFilterCombo {
+    min-height: 30px;
+    max-height: 34px;
+    padding: 4px 28px 4px 10px;
+    border-radius: 8px;
+    font-size: 14px;
+}
+
+QComboBox#queryCompactFilterCombo::drop-down {
+    width: 26px;
+    border-left: 1px solid #e2e8f0;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+
+QComboBox#queryCompactFilterCombo::down-arrow {
+    width: 10px;
+    height: 10px;
 }
 
 QAbstractSpinBox {
@@ -942,6 +1091,138 @@ QPushButton#paginationPageButton:checked {
     color: #ffffff;
 }
 
+QFrame#settingsCard,
+QFrame#customVoicePanel {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+}
+
+QLabel#settingsCardTitle {
+    color: #0f172a;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#settingsHint,
+QLabel#hintLabel {
+    color: #64748b;
+    font-size: 12px;
+}
+
+QLabel#authStatusTag {
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#authStatusTag[status="ok"] {
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+    color: #047857;
+}
+
+QLabel#authStatusTag[status="none"] {
+    border-color: #e2e8f0;
+    background: #f8fafc;
+    color: #64748b;
+}
+
+QWidget#transparentSettingsRow,
+QWidget#voiceTableWidget {
+    background: transparent;
+}
+
+QComboBox#settingsCompactCombo {
+    min-height: 32px;
+    max-height: 36px;
+    padding: 5px 30px 5px 10px;
+    border-radius: 8px;
+}
+
+QComboBox#settingsCompactCombo::drop-down {
+    width: 28px;
+}
+
+QComboBox#settingsCompactCombo::down-arrow {
+    width: 10px;
+    height: 10px;
+}
+
+QSpinBox#settingsCompactSpin {
+    min-height: 32px;
+    max-height: 36px;
+    padding: 5px 24px 5px 10px;
+    border-radius: 8px;
+}
+
+QCheckBox#settingsInlineCheckBox {
+    background: transparent;
+    border: none;
+    padding: 0px;
+    margin: 0px;
+    min-height: 32px;
+    spacing: 8px;
+    color: #0f172a;
+}
+
+QCheckBox#settingsInlineCheckBox:hover,
+QCheckBox#settingsInlineCheckBox:pressed,
+QCheckBox#settingsInlineCheckBox:checked,
+QCheckBox#settingsInlineCheckBox:disabled {
+    background: transparent;
+    border: none;
+}
+
+QCheckBox#settingsInlineCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 1px solid #cbd5e1;
+    background: #ffffff;
+}
+
+QCheckBox#settingsInlineCheckBox::indicator:hover {
+    border-color: #14b8a6;
+    background: #f0fdfa;
+}
+
+QCheckBox#settingsInlineCheckBox::indicator:checked {
+    border-color: #0f766e;
+    background: #0f766e;
+    image: url("__CHECKMARK__");
+}
+
+QCheckBox#settingsInlineCheckBox::indicator:disabled {
+    border-color: #e2e8f0;
+    background: #f8fafc;
+}
+
+QMenu,
+QMenu#copyContextMenu {
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 6px;
+    color: #0f172a;
+}
+
+QMenu::item {
+    min-width: 112px;
+    min-height: 28px;
+    padding: 4px 18px;
+    border-radius: 6px;
+}
+
+QMenu::item:selected {
+    background: #ccfbf1;
+    color: #0f172a;
+}
+
 QPushButton#paginationButton:disabled {
     background: #f8fafc;
     border-color: #e5e7eb;
@@ -961,6 +1242,7 @@ QLineEdit#paginationJumpInput:focus {
     border-color: #0f766e;
 }
 
+QToolButton#statsButton,
 QToolButton#settingsButton,
 QToolButton#helpIconButton {
     margin: 6px 0 6px 0;
@@ -976,6 +1258,7 @@ QToolButton#helpIconButton {
     max-height: 32px;
 }
 
+QToolButton#statsButton:hover,
 QToolButton#settingsButton:hover,
 QToolButton#helpIconButton:hover {
     background: #f1f5f9;
@@ -1008,6 +1291,26 @@ QToolButton#helpButton:hover {
     background: #dbeafe;
     border-color: #93c5fd;
     color: #1d4ed8;
+}
+
+QToolButton#extendedFilterToggleButton {
+    background: #ffffff;
+    border: 1px solid #cfd8e3;
+    border-radius: 8px;
+    color: #475569;
+    padding: 0;
+}
+
+QToolButton#extendedFilterToggleButton:hover {
+    background: #f0fdfa;
+    border-color: #14b8a6;
+    color: #0f766e;
+}
+
+QToolButton#extendedFilterToggleButton:pressed {
+    background: #ccfbf1;
+    border-color: #0f766e;
+    color: #0f766e;
 }
 
 QTableWidget {
@@ -1043,6 +1346,47 @@ QTableWidget::item:selected:!active {
 QTableWidget::item:focus {
     border: none;
     outline: none;
+}
+
+QFrame#videoTableStateOverlay {
+    background: transparent;
+    border: none;
+}
+
+QFrame#videoTableStateBox {
+    background: rgba(255, 255, 255, 232);
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+}
+
+QLabel#videoLoadingSpinner {
+    color: #0f766e;
+    font-size: 18px;
+    font-weight: 800;
+    min-width: 22px;
+}
+
+QLabel#videoTableStateIcon {
+    color: #94a3b8;
+    font-size: 30px;
+    font-weight: 700;
+}
+
+QLabel#videoTableStateTitle {
+    color: #475569;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+QLabel#videoTableStateSubtitle {
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+QFrame#videoSkeletonBlock {
+    background: #e2e8f0;
+    border: none;
+    border-radius: 6px;
 }
 
 QHeaderView::section {
@@ -1117,6 +1461,91 @@ QTabBar#helpTabBar QToolButton:disabled {
     border-color: #e2e8f0;
     background: #f8fafc;
     color: #94a3b8;
+}
+
+QDialog#packagingStatsDialog {
+    background: #f8fafc;
+}
+
+QScrollArea#statsTabScrollArea {
+    background: #f8fafc;
+    border: none;
+}
+
+QScrollArea#statsTabScrollArea > QWidget > QWidget,
+QWidget#statsTabContent {
+    background: #f8fafc;
+}
+
+QLabel#statsDialogTitle {
+    color: #0f172a;
+    font-size: 20px;
+    font-weight: 800;
+}
+
+QLabel#statsDialogSubtitle {
+    color: #64748b;
+    font-size: 12px;
+}
+
+QFrame#statsMetricCard,
+QFrame#statsChartCard {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+}
+
+QFrame#statsOverviewSection {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+}
+
+QLabel#statsCardTitle {
+    color: #64748b;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+QLabel#statsCardValue {
+    color: #0f172a;
+    font-size: 34px;
+    font-weight: 800;
+}
+
+QLabel#statsCardHint,
+QLabel#statsSummaryLabel {
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+QLabel#statsCardDrillHint {
+    color: #94a3b8;
+    font-size: 12px;
+}
+
+QPushButton#statsQuickButton,
+QPushButton#statsSegmentButton {
+    min-height: 30px;
+    border-radius: 8px;
+    padding: 4px 12px;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    color: #334155;
+}
+
+QPushButton#statsQuickButton:hover,
+QPushButton#statsSegmentButton:hover {
+    background: #f0fdfa;
+    border-color: #14b8a6;
+    color: #0f766e;
+}
+
+QPushButton#statsQuickButton:checked,
+QPushButton#statsSegmentButton:checked {
+    background: #14b8a6;
+    border-color: #14b8a6;
+    color: #ffffff;
 }
 
 QToolTip {
@@ -1216,7 +1645,9 @@ QScrollBar::add-page:horizontal,
 QScrollBar::sub-page:horizontal {
     background: transparent;
 }
-""".replace("__CHEVRON_DOWN__", _qss_url("app/assets/icons/chevron-down.svg")).replace(
+""".replace("__CHECKMARK__", _qss_url("app/assets/checkmark.svg")).replace(
+    "__CHEVRON_DOWN__", _qss_url("app/assets/icons/chevron-down.svg")
+).replace(
     "__CHEVRON_DOWN_DISABLED__", _qss_url("app/assets/icons/chevron-down-disabled.svg")
 ).replace("__CHEVRON_UP__", _qss_url("app/assets/icons/chevron-up.svg")).replace(
     "__CHEVRON_UP_DISABLED__", _qss_url("app/assets/icons/chevron-up-disabled.svg")

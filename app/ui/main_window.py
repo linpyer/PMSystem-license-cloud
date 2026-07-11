@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+import traceback
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter
@@ -26,6 +27,7 @@ from app.ui.help_dialog import HelpDialog
 from app.ui.monitor_tab import MonitorTab
 from app.ui.query_tab import QueryTab
 from app.ui.settings_dialog import SettingsDialog
+from app.ui.stats_dialog import PackagingStatsDialog
 from app.utils.runtime_paths import resource_path
 
 
@@ -37,8 +39,7 @@ MIN_WINDOW_HEIGHT = 860
 SILENT_MONITOR_MESSAGES = {
     "配置保存成功",
     "配置已保存",
-    "视频保存目录已更新",
-    "保存目录已更新",
+    "视频存储目录已更新",
 }
 SILENT_MONITOR_MESSAGE_PREFIXES = (
     "录制类型已切换",
@@ -148,11 +149,13 @@ class MainWindow(QMainWindow):
         self.logger = logger
         self.help_dialog: HelpDialog | None = None
         self.settings_dialog: SettingsDialog | None = None
+        self.stats_dialog: PackagingStatsDialog | None = None
         self._last_toast_message = ""
         self._last_toast_time = 0.0
+        self._last_video_root_dir = str(self.config_manager.get_video_dir())
 
         self.setWindowTitle(APP_TITLE)
-        icon_path = resource_path("app/assets/logo.ico")
+        icon_path = resource_path("app/assets/app_icon.ico")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 
@@ -175,8 +178,8 @@ class MainWindow(QMainWindow):
         self.monitor_tab.status_message.connect(self._on_monitor_status_message)
         self.monitor_tab.warning_message.connect(lambda message: self._show_notice_banner(message, "warning"))
         self.monitor_tab.critical_message.connect(lambda message: self._show_notice_banner(message, "critical"))
-        self.monitor_tab.video_dir_changed.connect(self.query_tab.set_video_dir)
         self.monitor_tab.recorder.recording_state_changed.connect(self._sync_settings_recording_state)
+        self.monitor_tab.recorder.recording_state_changed.connect(self.query_tab.on_recording_state_changed)
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
         self._setup_status_tip()
@@ -326,6 +329,18 @@ class MainWindow(QMainWindow):
         corner_layout.setContentsMargins(0, 0, 12, 0)
         corner_layout.setSpacing(8)
 
+        self.stats_button = QToolButton(self)
+        self.stats_button.setObjectName("statsButton")
+        stats_icon = resource_path("app/assets/icons/chart-bars.svg")
+        if stats_icon.exists():
+            self.stats_button.setIcon(QIcon(str(stats_icon)))
+            self.stats_button.setIconSize(QSize(17, 17))
+        else:
+            self.stats_button.setText("统")
+        self.stats_button.setToolTip("打包发货统计")
+        self.stats_button.setFocusPolicy(Qt.NoFocus)
+        self.stats_button.clicked.connect(self._show_stats_dialog)
+
         self.settings_button = QToolButton(self)
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setText("⚙")
@@ -339,29 +354,61 @@ class MainWindow(QMainWindow):
         self.help_button.setToolTip("使用说明")
         self.help_button.setFocusPolicy(Qt.NoFocus)
         self.help_button.clicked.connect(self._show_help_dialog)
+        corner_layout.addWidget(self.stats_button)
         corner_layout.addWidget(self.settings_button)
         corner_layout.addWidget(self.help_button)
         self.tabs.setCornerWidget(corner, Qt.TopRightCorner)
 
-    def _show_settings_dialog(self) -> None:
-        self.logger.info("设置弹窗打开")
-        if self.settings_dialog is None:
-            self.settings_dialog = SettingsDialog(
-                config_manager=self.config_manager,
-                logger=self.logger,
-                voice_prompt=self.monitor_tab.voice_prompt,
-                is_recording_callback=lambda: self.monitor_tab.is_recording,
+    def _show_stats_dialog(self) -> None:
+        self.logger.info("用户打开打包发货统计弹窗")
+        if self.stats_dialog is None:
+            self.stats_dialog = PackagingStatsDialog(
+                database=self.query_tab.database,
+                notice_callback=self.show_status_tip,
                 parent=self,
             )
-            self.settings_dialog.config_saved.connect(self.monitor_tab.apply_external_config)
-            self.settings_dialog.config_saved.connect(self.query_tab.reload_config)
-            self.settings_dialog.basic_config_saved.connect(self.monitor_tab.apply_basic_config)
-            self.settings_dialog.closed.connect(self._restore_monitor_focus)
+        self.stats_dialog.show()
+        self.stats_dialog.raise_()
+        self.stats_dialog.activateWindow()
 
-        self.settings_dialog.refresh_state(self.monitor_tab.is_recording)
-        self.settings_dialog.show()
-        self.settings_dialog.raise_()
-        self.settings_dialog.activateWindow()
+    def _show_settings_dialog(self) -> None:
+        self.logger.info("open_settings: clicked")
+        try:
+            if self.settings_dialog is not None and self.settings_dialog.isVisible():
+                self.logger.info("open_settings: existing dialog visible")
+                self.settings_dialog.raise_()
+                self.settings_dialog.activateWindow()
+                return
+
+            if self.settings_dialog is None:
+                self.logger.info("open_settings: creating dialog")
+                self.settings_dialog = SettingsDialog(
+                    config_manager=self.config_manager,
+                    logger=self.logger,
+                    voice_prompt=self.monitor_tab.voice_prompt,
+                    is_recording_callback=lambda: self.monitor_tab.is_recording,
+                    is_syncing_callback=lambda: self.query_tab.is_netdisk_syncing(),
+                    parent=self,
+                )
+                self.settings_dialog.config_saved.connect(self.monitor_tab.apply_external_config)
+                self.settings_dialog.config_saved.connect(self.query_tab.reload_config)
+                self.settings_dialog.basic_config_saved.connect(self.monitor_tab.apply_basic_config)
+                self.settings_dialog.basic_config_saved.connect(self.query_tab.reload_config)
+                self.settings_dialog.basic_config_saved.connect(self._on_basic_config_saved)
+                self.settings_dialog.closed.connect(self._restore_monitor_focus)
+                self.settings_dialog.destroyed.connect(self._on_settings_dialog_destroyed)
+                self.logger.info("open_settings: dialog created")
+
+            self.settings_dialog.refresh_state(self.monitor_tab.is_recording)
+            self.logger.info("open_settings: showing dialog")
+            self.settings_dialog.show()
+            self.settings_dialog.raise_()
+            self.settings_dialog.activateWindow()
+        except Exception:
+            self.logger.exception("打开设置窗口失败")
+            traceback.print_exc()
+            self.settings_dialog = None
+            self.show_status_tip("设置窗口打开失败，请查看日志", "error", 5000)
 
     def _show_help_dialog(self) -> None:
         self.logger.info("用户打开使用说明页签窗口")
@@ -377,8 +424,18 @@ class MainWindow(QMainWindow):
         if self.settings_dialog is not None and self.settings_dialog.isVisible():
             self.settings_dialog.refresh_state(recording)
 
+    def _on_basic_config_saved(self, _config: dict) -> None:
+        current_dir = str(self.config_manager.get_video_dir())
+        if current_dir != self._last_video_root_dir:
+            self._last_video_root_dir = current_dir
+            self.show_status_tip("视频存储目录已更新", "success", 4000)
+
     def _on_help_dialog_closed(self) -> None:
         self.logger.info("用户关闭使用说明页签窗口")
+        QTimer.singleShot(0, self._restore_monitor_focus)
+
+    def _on_settings_dialog_destroyed(self, _obj=None) -> None:
+        self.settings_dialog = None
         QTimer.singleShot(0, self._restore_monitor_focus)
 
     def _restore_monitor_focus(self) -> None:
@@ -404,6 +461,7 @@ class MainWindow(QMainWindow):
     def _on_monitor_status_message(self, message: str) -> None:
         if self._is_video_data_changed_message(message):
             self.query_tab.mark_dirty()
+        self.query_tab.on_recording_status_message(message)
         if self._is_silent_monitor_message(message):
             self.logger.debug("监控页静默成功提示已忽略：%s", message)
             return
