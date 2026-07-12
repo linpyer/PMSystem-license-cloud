@@ -1940,8 +1940,13 @@ class QueryTab(QWidget):
         self.config_manager = config_manager
         self.logger = logger
         self.video_dir = self._initial_query_dir()
-        self.database = DatabaseManager(self.config_manager.base_dir / "pm_system.db", logger)
-        self.logger.info("查询页 SQLite 数据库路径：%s", self.database.db_path)
+        self.database = DatabaseManager(self.config_manager.database_path, logger)
+        self.logger.info(
+            "查询页 SQLite 数据库路径：database_path=%s, database_exists=%s, video_root_dir=%s",
+            self.database.db_path,
+            self.database.db_path.exists(),
+            self.video_dir,
+        )
         self.date_filter_enabled = False
         self.date_filter_mode = "all"
         self.type_filter = "全部"

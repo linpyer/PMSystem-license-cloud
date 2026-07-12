@@ -269,7 +269,12 @@ class MonitorTab(QWidget):
         self.scanner_guard = ScannerGuard(self.config, logger)
         self.voice_prompt = VoicePrompt(self.config, logger)
 
-        self.recorder = RecorderThread(config=self.config, base_dir=self.config_manager.base_dir, logger=logger)
+        self.recorder = RecorderThread(
+            config=self.config,
+            base_dir=self.config_manager.base_dir,
+            logger=logger,
+            db_path=self.config_manager.database_path,
+        )
         self._build_ui()
         self._connect_signals()
         self._load_config_to_controls()
@@ -1046,7 +1051,7 @@ class MonitorTab(QWidget):
 
         try:
             video_dir = self.config_manager.get_video_dir()
-            database = DatabaseManager(self.config_manager.base_dir / "pm_system.db", self.logger)
+            database = DatabaseManager(self.config_manager.database_path, self.logger)
             duplicate_count = database.count_order_no(order_id, video_dir)
             database.close()
         except Exception:
@@ -1331,7 +1336,7 @@ class MonitorTab(QWidget):
 
     def refresh_recent_recordings(self) -> None:
         try:
-            database = DatabaseManager(self.config_manager.base_dir / "pm_system.db", self.logger)
+            database = DatabaseManager(self.config_manager.database_path, self.logger)
             rows = database.get_recent_videos(self.config_manager.get_video_dir(), limit=3)
             database.close()
             self._render_recent_recordings(rows)
@@ -1411,7 +1416,7 @@ class MonitorTab(QWidget):
         fallback_order_no = str(entry.get("order_no") or "-")
         database: DatabaseManager | None = None
         try:
-            database = DatabaseManager(self.config_manager.base_dir / "pm_system.db", self.logger)
+            database = DatabaseManager(self.config_manager.database_path, self.logger)
             record = database.get_video_by_id(record_id) if record_id else None
             if record is None and str(fallback_path).strip() and str(fallback_path) != ".":
                 record = database.get_video_by_path(fallback_path)

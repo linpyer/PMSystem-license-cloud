@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
+from app.core.database_paths import app_data_dir
 from app.core.version import APP_DATA_DIR_NAME
 
 APP_DIR_NAME = APP_DATA_DIR_NAME
@@ -22,9 +22,4 @@ def resource_path(relative_path: str | Path) -> Path:
 
 
 def user_data_dir() -> Path:
-    if not getattr(sys, "frozen", False):
-        return app_dir()
-
-    local_app_data_value = os.environ.get("LOCALAPPDATA")
-    local_app_data = Path(local_app_data_value) if local_app_data_value else Path.home() / "AppData" / "Local"
-    return local_app_data / APP_DIR_NAME
+    return app_data_dir()

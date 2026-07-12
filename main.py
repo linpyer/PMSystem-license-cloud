@@ -40,6 +40,8 @@ def main() -> int:
     logger.info("程序版本：%s", APP_VERSION)
     logger.info("程序目录：%s", app_dir())
     logger.info("用户数据目录：%s", data_dir)
+    logger.info("database_path=%s", config_manager.database_path)
+    logger.info("video_root_dir=%s", config_manager.get_video_dir())
 
     _set_windows_app_user_model_id()
 

@@ -10,6 +10,9 @@ from pathlib import Path
 from posixpath import normpath
 from typing import Any
 
+from app.core.database_paths import database_path, local_app_data_dir, source_app_dir
+from app.core.version import APP_DATA_DIR_NAME
+
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "video_root_dir": "videos",
@@ -184,9 +187,11 @@ class ConfigManager:
     def __init__(self, base_dir: Path) -> None:
         self.base_dir = Path(base_dir)
         self.config_path = self.base_dir / "config.json"
+        self.database_path = database_path(self.base_dir)
         self.config: dict[str, Any] = deepcopy(DEFAULT_CONFIG)
 
     def load(self) -> dict[str, Any]:
+        self._migrate_legacy_config_if_needed()
         if not self.config_path.exists():
             self.config = deepcopy(DEFAULT_CONFIG)
             self._normalize_video_root_dir_config(self.config)
@@ -238,6 +243,59 @@ class ConfigManager:
             recent["last_camera_name"] = normalized_values["camera_name"]
         self.save()
         return self.config
+
+    def _migrate_legacy_config_if_needed(self) -> None:
+        candidates = self._legacy_config_candidates()
+        source = next((candidate for candidate in candidates if candidate.exists() and candidate.is_file()), None)
+        if source is None:
+            return
+
+        should_copy = not self.config_path.exists()
+        if self.config_path.exists():
+            try:
+                with self.config_path.open("r", encoding="utf-8") as file:
+                    current = json.load(file)
+                default_video_dir = str((self.base_dir / "videos").resolve())
+                current_video_dir = str(current.get("video_root_dir") or current.get("video_save_dir") or "").strip()
+                with source.open("r", encoding="utf-8") as file:
+                    legacy = json.load(file)
+                legacy_video_dir = str(legacy.get("video_root_dir") or legacy.get("video_save_dir") or "").strip()
+                should_copy = (
+                    bool(legacy_video_dir)
+                    and current_video_dir == default_video_dir
+                    and legacy_video_dir != current_video_dir
+                )
+            except (OSError, json.JSONDecodeError):
+                should_copy = False
+        if not should_copy:
+            return
+
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.config_path.exists():
+            backup = self.config_path.with_name(f"config_before_legacy_migration_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+            shutil.copy2(self.config_path, backup)
+        shutil.copy2(source, self.config_path)
+
+    def _legacy_config_candidates(self) -> list[Path]:
+        candidates = [
+            local_app_data_dir() / APP_DATA_DIR_NAME / "config.json",
+            source_app_dir() / "config.json",
+            Path.cwd() / "config.json",
+        ]
+        result: list[Path] = []
+        seen: set[str] = set()
+        target = self.config_path.resolve()
+        for candidate in candidates:
+            try:
+                resolved = candidate.expanduser().resolve()
+            except OSError:
+                resolved = candidate.expanduser().absolute()
+            key = os.path.normcase(os.path.normpath(str(resolved)))
+            if key in seen or resolved == target:
+                continue
+            seen.add(key)
+            result.append(resolved)
+        return result
 
     def get_video_dir(self) -> Path:
         return self.resolve_path(str(self.config.get("video_root_dir") or self.config.get("video_save_dir") or "videos"))

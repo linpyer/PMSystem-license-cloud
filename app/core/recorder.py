@@ -15,6 +15,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.core.camera import apply_capture_settings, get_capture_size, list_camera_devices, open_camera
 from app.core.database import DatabaseManager
+from app.core.database_paths import database_path
 from app.core.disk_space_checker import DiskSpaceChecker
 from app.core.file_hash import calculate_file_hash, normalize_hash_algorithm
 from app.core.video_checker import VideoChecker
@@ -242,10 +243,17 @@ class RecorderThread(QThread):
     warning_message = Signal(str)
     critical_message = Signal(str)
 
-    def __init__(self, config: dict[str, Any], base_dir: Path, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        base_dir: Path,
+        logger: logging.Logger,
+        db_path: str | Path | None = None,
+    ) -> None:
         super().__init__()
         self.config = dict(config)
         self.base_dir = Path(base_dir)
+        self.database_path = Path(db_path) if db_path is not None else database_path(self.base_dir)
         self.logger = logger
 
         self._commands: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -1495,7 +1503,7 @@ class RecorderThread(QThread):
         record_id = 0
         try:
             path = Path(file_path)
-            database = DatabaseManager(self.base_dir / "pm_system.db", self.logger)
+            database = DatabaseManager(self.database_path, self.logger)
             record = database.get_video_by_path(path)
             if record:
                 record_id = int(record.get("id") or 0)
@@ -1646,7 +1654,7 @@ class RecorderThread(QThread):
     def _update_video_index(self, final_path: Path, recorded_at: datetime | None = None) -> None:
         try:
             record_type = str(self._record_type_for_current_recording or self.config.get("current_record_type") or "发货")
-            database = DatabaseManager(self.base_dir / "pm_system.db", self.logger)
+            database = DatabaseManager(self.database_path, self.logger)
             database.upsert_video_file(final_path, record_type=record_type, recorded_at=recorded_at)
             database.close()
             self.logger.info("新录制视频写入 SQLite record_type：%s，%s", record_type, final_path)
@@ -1658,7 +1666,7 @@ class RecorderThread(QThread):
         database: DatabaseManager | None = None
         try:
             now_text = format_datetime()
-            database = DatabaseManager(self.base_dir / "pm_system.db", self.logger)
+            database = DatabaseManager(self.database_path, self.logger)
             ok = database.update_video_metadata(
                 final_path,
                 {
