@@ -143,10 +143,11 @@ class StatusTipLabel(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, config_manager: ConfigManager, logger: logging.Logger) -> None:
+    def __init__(self, config_manager: ConfigManager, logger: logging.Logger, theme_manager=None) -> None:
         super().__init__()
         self.config_manager = config_manager
         self.logger = logger
+        self.theme_manager = theme_manager
         self.help_dialog: HelpDialog | None = None
         self.settings_dialog: SettingsDialog | None = None
         self.stats_dialog: PackagingStatsDialog | None = None
@@ -388,6 +389,7 @@ class MainWindow(QMainWindow):
                     voice_prompt=self.monitor_tab.voice_prompt,
                     is_recording_callback=lambda: self.monitor_tab.is_recording,
                     is_syncing_callback=lambda: self.query_tab.is_netdisk_syncing(),
+                    theme_manager=self.theme_manager,
                     parent=self,
                 )
                 self.settings_dialog.config_saved.connect(self.monitor_tab.apply_external_config)
@@ -398,6 +400,8 @@ class MainWindow(QMainWindow):
                 self.settings_dialog.closed.connect(self._restore_monitor_focus)
                 self.settings_dialog.destroyed.connect(self._on_settings_dialog_destroyed)
                 self.logger.info("open_settings: dialog created")
+            elif not self.settings_dialog.isVisible():
+                self.settings_dialog.begin_theme_preview_session()
 
             self.settings_dialog.refresh_state(self.monitor_tab.is_recording)
             self.logger.info("open_settings: showing dialog")

@@ -91,6 +91,7 @@ class SettingsDialog(QDialog):
         voice_prompt: VoicePrompt,
         is_recording_callback=None,
         is_syncing_callback=None,
+        theme_manager=None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -99,6 +100,11 @@ class SettingsDialog(QDialog):
         self.voice_prompt = voice_prompt
         self.is_recording_callback = is_recording_callback or (lambda: False)
         self.is_syncing_callback = is_syncing_callback or (lambda: False)
+        self.theme_manager = theme_manager
+        self._theme_preview_session_active = False
+        self._theme_preview_saved = False
+        self.original_theme_mode = "system"
+        self.original_resolved_theme = "light"
         self.voice_file_labels: dict[str, QLabel] = {}
         self.voice_row_buttons: dict[str, tuple[QPushButton, QPushButton, QPushButton]] = {}
         self.system_text_edits: dict[str, QLineEdit] = {}
@@ -106,6 +112,7 @@ class SettingsDialog(QDialog):
         self.setObjectName("settingsDialog")
         self.setWindowTitle("设置")
         self._build_ui()
+        self.begin_theme_preview_session()
         self._load_basic_config_to_ui()
         self._load_voice_config_to_ui()
         self._load_netdisk_config_to_ui()
@@ -118,9 +125,32 @@ class SettingsDialog(QDialog):
         self.logger.info("更新日志页签初始化")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._cancel_theme_preview_if_needed()
         DialogSizeManager.remember(self, "settings")
         self.closed.emit()
         super().closeEvent(event)
+
+    def reject(self) -> None:  # type: ignore[override]
+        self._cancel_theme_preview_if_needed()
+        super().reject()
+
+    def begin_theme_preview_session(self) -> None:
+        """Capture the persisted appearance before this settings session previews it."""
+        if self.theme_manager is None:
+            return
+        self._theme_preview_session_active = True
+        self._theme_preview_saved = False
+        self.original_theme_mode = self.theme_manager.current_mode()
+        self.original_resolved_theme = self.theme_manager.resolved_theme()
+        self.theme_manager.begin_preview()
+        self._load_appearance_config_to_ui()
+
+    def _cancel_theme_preview_if_needed(self) -> None:
+        if self.theme_manager is None or not self._theme_preview_session_active:
+            return
+        if not self._theme_preview_saved:
+            self.theme_manager.cancel_preview()
+        self._theme_preview_session_active = False
 
     def _build_ui(self) -> None:
         root_layout = QVBoxLayout(self)
@@ -385,6 +415,29 @@ class SettingsDialog(QDialog):
         self.margin_spin = QSpinBox()
         self.margin_spin.setRange(4, 80)
         compact(self.margin_spin, 120)
+
+        appearance_card, appearance_layout = self._settings_card("外观设置")
+        appearance_row = QHBoxLayout()
+        appearance_row.setContentsMargins(0, 0, 0, 0)
+        appearance_row.setSpacing(12)
+        appearance_label = label("系统主题：")
+        appearance_row.addWidget(appearance_label)
+        self.theme_mode_group = QButtonGroup(self)
+        self.theme_mode_buttons: dict[str, QRadioButton] = {}
+        for mode, text in (("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")):
+            button = QRadioButton(text)
+            button.setObjectName("appearanceThemeRadio")
+            button.toggled.connect(lambda checked, value=mode: self._preview_theme_mode(value) if checked else None)
+            self.theme_mode_group.addButton(button)
+            self.theme_mode_buttons[mode] = button
+            appearance_row.addWidget(button)
+        appearance_row.addStretch(1)
+        appearance_layout.addLayout(appearance_row)
+        appearance_hint = QLabel("选择后立即预览；点击“保存并应用配置”后才会写入配置。")
+        appearance_hint.setObjectName("settingsHint")
+        appearance_hint.setWordWrap(True)
+        appearance_layout.addWidget(appearance_hint)
+        layout.addWidget(appearance_card)
 
         video_card, video_layout = self._settings_card("视频存储")
         video_dir_row = QHBoxLayout()
@@ -1049,6 +1102,9 @@ class SettingsDialog(QDialog):
         try:
             result = self.config_manager.import_config(import_path)
             self.voice_prompt.update_config(self.config_manager.config)
+            if self.theme_manager is not None:
+                self.theme_manager.apply_configured_theme()
+                self._theme_preview_saved = True
             self._load_basic_config_to_ui()
             self._load_voice_config_to_ui()
             self._load_netdisk_config_to_ui()
@@ -1084,6 +1140,7 @@ class SettingsDialog(QDialog):
         self._set_basic_config_enabled(not bool(is_recording if is_recording is not None else self.is_recording_callback()))
 
     def _load_basic_config_to_ui(self) -> None:
+        self._load_appearance_config_to_ui()
         selected_index = int(self.config_manager.config.get("camera_index", 0) or 0)
         self._refresh_camera_options(selected_index)
         video_dir_text = str(self.config_manager.get_video_dir())
@@ -1105,8 +1162,27 @@ class SettingsDialog(QDialog):
         self.hash_check_enabled.setChecked(bool(hash_config.get("enabled", True)))
         self._select_combo_data(self.hash_algorithm_combo, str(hash_config.get("algorithm") or "SHA256").upper(), "SHA256")
 
+    def _load_appearance_config_to_ui(self) -> None:
+        if not hasattr(self, "theme_mode_buttons"):
+            return
+        raw = self.config_manager.config.get("appearance", {})
+        mode = str(raw.get("theme") if isinstance(raw, dict) else "system").strip().lower()
+        if mode not in self.theme_mode_buttons:
+            mode = "system"
+        for button_mode, button in self.theme_mode_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(button_mode == mode)
+            button.blockSignals(False)
+
+    def _preview_theme_mode(self, mode: str) -> None:
+        if self.theme_manager is None:
+            return
+        self._theme_preview_saved = False
+        self.theme_manager.preview_theme(mode)
+
     def _set_basic_config_enabled(self, enabled: bool) -> None:
         for widget in (
+            *getattr(self, "theme_mode_buttons", {}).values(),
             self.camera_combo,
             self.video_root_dir_input,
             self.video_root_dir_choose_button,
@@ -1165,6 +1241,9 @@ class SettingsDialog(QDialog):
                 return
             video_root_dir = self.config_manager.ensure_video_root_dir_writable(raw_video_dir or "videos")
             values = {
+                "appearance": {
+                    "theme": self._selected_theme_mode(),
+                },
                 "video_root_dir": str(video_root_dir),
                 "camera_index": int(self.camera_combo.currentData() or 0),
                 "camera_name": self._selected_camera_name(),
@@ -1180,6 +1259,9 @@ class SettingsDialog(QDialog):
                 },
             }
             updated_config = self.config_manager.update(values)
+            if self.theme_manager is not None:
+                self.theme_manager.commit_theme(self._selected_theme_mode())
+            self._theme_preview_saved = True
             self.basic_config_saved.emit(updated_config)
             self.video_root_dir_input.setText(str(self.config_manager.get_video_dir()))
             self.logger.info("基础配置保存成功：video_root_dir=%s", self.config_manager.get_video_dir())
@@ -1190,6 +1272,12 @@ class SettingsDialog(QDialog):
         except Exception as exc:
             self.logger.exception("基础配置保存失败")
             self._set_status(f"基础配置保存失败：{exc}", "error")
+
+    def _selected_theme_mode(self) -> str:
+        for mode, button in getattr(self, "theme_mode_buttons", {}).items():
+            if button.isChecked():
+                return mode
+        return "system"
 
     def _choose_video_root_dir(self) -> None:
         if self.is_recording_callback():

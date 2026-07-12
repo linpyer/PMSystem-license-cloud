@@ -15,6 +15,9 @@ from app.core.version import APP_DATA_DIR_NAME
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
+    "appearance": {
+        "theme": "system",
+    },
     "video_root_dir": "videos",
     "video_save_dir": "videos",
     "camera_index": 0,
@@ -141,6 +144,7 @@ NETDISK_EXPORT_SECRET_KEYS = {
     "last_auth_time",
 }
 EXPORTABLE_CONFIG_KEYS = {
+    "appearance",
     "video_root_dir",
     "camera_index",
     "camera_name",
@@ -165,6 +169,15 @@ EXPORTABLE_CONFIG_KEYS = {
 
 
 AUTO_SYNC_DELAY_OPTIONS = (1, 5, 10, 15, 30, 60)
+THEME_MODE_OPTIONS = {"system", "light", "dark"}
+
+
+def normalize_appearance_config(raw: dict[str, Any] | None) -> dict[str, str]:
+    config = deepcopy(DEFAULT_CONFIG["appearance"])
+    if isinstance(raw, dict):
+        config.update(raw)
+    mode = str(config.get("theme") or "system").strip().lower()
+    return {"theme": mode if mode in THEME_MODE_OPTIONS else "system"}
 
 
 def normalize_cloud_sync_config(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -195,6 +208,7 @@ class ConfigManager:
         if not self.config_path.exists():
             self.config = deepcopy(DEFAULT_CONFIG)
             self._normalize_video_root_dir_config(self.config)
+            self._normalize_appearance_config(self.config)
             self.save()
             return self.config
 
@@ -206,9 +220,10 @@ class ConfigManager:
         except (OSError, json.JSONDecodeError):
             self.config = deepcopy(DEFAULT_CONFIG)
             self._normalize_video_root_dir_config(self.config)
+            self._normalize_appearance_config(self.config)
             self.save()
         else:
-            if migrated or self._normalize_legacy_display_text():
+            if migrated or self._normalize_appearance_config(self.config) or self._normalize_legacy_display_text():
                 self.save()
 
         return self.config
@@ -217,6 +232,7 @@ class ConfigManager:
         if config is not None:
             self.config = self._merge_defaults(config, DEFAULT_CONFIG)
         self._normalize_video_root_dir_config(self.config)
+        self._normalize_appearance_config(self.config)
         self._normalize_legacy_display_text()
 
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -609,6 +625,10 @@ class ConfigManager:
             imported["netdisk_sync"] = self._sanitize_netdisk_import(imported["netdisk_sync"])
         if "voice_prompt" in imported and isinstance(imported["voice_prompt"], dict):
             imported["voice_prompt"] = self._merge_defaults(imported["voice_prompt"], DEFAULT_CONFIG["voice_prompt"])
+        if "appearance" in imported:
+            imported["appearance"] = normalize_appearance_config(
+                imported["appearance"] if isinstance(imported["appearance"], dict) else None
+            )
         return imported
 
     def _sanitize_netdisk_export(self, config: dict[str, Any]) -> dict[str, Any]:
@@ -669,6 +689,14 @@ class ConfigManager:
         else:
             config["recent"] = {"last_video_dir": normalized}
             changed = True
+        return changed
+
+    @staticmethod
+    def _normalize_appearance_config(config: dict[str, Any]) -> bool:
+        before = config.get("appearance")
+        normalized = normalize_appearance_config(before if isinstance(before, dict) else None)
+        changed = before != normalized
+        config["appearance"] = normalized
         return changed
 
     def _config_path_to_path(self, value: str) -> Path | None:

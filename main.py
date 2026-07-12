@@ -9,8 +9,8 @@ from PySide6.QtWidgets import QApplication
 from app.core.config_manager import ConfigManager
 from app.core.logger import setup_logging
 from app.core.version import APP_NAME, APP_VERSION
+from app.theme.theme_manager import ThemeManager
 from app.ui.main_window import MainWindow
-from app.ui.styles import APP_STYLES
 from app.utils.runtime_paths import app_dir, resource_path, user_data_dir
 
 
@@ -51,9 +51,11 @@ def main() -> int:
     icon_path = resource_path(APP_ICON_PATH)
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
-    app.setStyleSheet(APP_STYLES)
+    theme_manager = ThemeManager(app, config_manager)
+    app.setProperty("theme_manager", theme_manager)
+    theme_manager.apply_configured_theme()
 
-    window = MainWindow(config_manager=config_manager, logger=logger)
+    window = MainWindow(config_manager=config_manager, logger=logger, theme_manager=theme_manager)
     window.show()
 
     return app.exec()
