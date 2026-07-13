@@ -358,6 +358,7 @@ class MainWindow(QMainWindow):
             widget.installEventFilter(self)
 
         corner = QWidget(self)
+        corner.setObjectName("navigationActions")
         corner_layout = QHBoxLayout(corner)
         corner_layout.setContentsMargins(0, 0, 12, 0)
         corner_layout.setSpacing(8)

@@ -208,13 +208,15 @@ QCalendarWidget QAbstractItemView:disabled {{ color: {tokens.text_disabled}; }}
 QCalendarWidget QTableView {{ background: {tokens.surface}; color: {tokens.text_primary}; selection-background-color: {tokens.selected}; selection-color: {tokens.text_primary}; }}
 QCalendarWidget QHeaderView::section {{ background: {tokens.surface_secondary}; color: {tokens.text_secondary}; border-color: {tokens.border}; }}
 
-/* Phase 2: main window and core pages. */
-QWidget {{ background: {tokens.window_background}; color: {tokens.text_primary}; }}
+/* Phase 2: main window and core pages.
+   Keep generic containers transparent. Surfaces are opt-in through an objectName
+   or a semantic role so layouts do not turn into nested cards. */
+QWidget {{ color: {tokens.text_primary}; }}
 QGroupBox {{
-    background: {tokens.surface};
+    background: transparent;
     color: {tokens.text_primary};
-    border: 1px solid {tokens.border};
-    border-radius: 12px;
+    border: none;
+    margin: 0;
 }}
 QGroupBox::title {{
     color: {tokens.text_primary};
@@ -560,7 +562,8 @@ QTabWidget#mainNavigation QTabBar::tab:hover:!selected {{
     background: {tokens.hover};
     color: {tokens.text_primary};
 }}
-QWidget#navigationBrand {{ background: {tokens.topbar_background}; }}
+QWidget#navigationBrand {{ background: transparent; }}
+QWidget#navigationActions {{ background: {tokens.topbar_background}; }}
 QLabel#navigationBrandTitle {{ color: {tokens.text_primary}; font-weight: 700; font-size: 11pt; }}
 QLabel#navigationBrandIcon {{ background: transparent; min-width: 20px; min-height: 20px; }}
 
@@ -581,15 +584,18 @@ QGroupBox#plainRightCard, QGroupBox#recentCard {{
     background: transparent;
     border: none;
     margin: 0;
-    padding: 10px 14px;
+    padding: 0;
 }}
 QGroupBox#plainRightCard::title, QGroupBox#recentCard::title {{ background: transparent; padding: 0; }}
 QFrame#recordingStatusBlock {{
     background: {tokens.surface_secondary};
-    border: 1px solid {tokens.border};
+    border: 1px solid transparent;
     border-radius: 10px;
 }}
-QFrame#recordingStatusBlock[state="idle"] {{ background: {tokens.surface_secondary}; border-color: {tokens.border}; }}
+QFrame#recordingStatusBlock[state="idle"] {{ background: {tokens.surface_secondary}; border-color: transparent; }}
+QFrame#recordingStatusBlock[state="recording"] {{ background: {recording_background}; border-color: {recording_border}; }}
+QFrame#recordingStatusBlock[state="warning"] {{ background: {warning_background}; border-color: {warning_border}; }}
+QFrame#recordingStatusBlock[state="error"] {{ background: {recording_background}; border-color: {recording_border}; }}
 QLabel#recordingStatusTitle {{ color: {tokens.text_primary}; font-size: 12pt; font-weight: 700; }}
 QLabel#recordingStatusDetail, QLabel#cameraStatusValue {{ color: {tokens.text_secondary}; }}
 QLabel#durationValue {{ color: {tokens.text_primary}; font-size: 11pt; font-weight: 700; }}
@@ -610,7 +616,8 @@ QPushButton#stopButton {{
     border: 1px solid {"#9f4048" if is_dark else "#fca5a5"};
 }}
 QPushButton#stopButton:hover {{ background: {"#6f363d" if is_dark else "#fee2e2"}; }}
-QFrame#recentTitleAccent {{ background: {tokens.border_strong}; border: none; }}
+QFrame#monitorPanelDivider {{ background: {tokens.border}; border: none; max-height: 1px; min-height: 1px; }}
+QFrame#recentTitleAccent {{ background: transparent; border: none; max-width: 0; min-width: 0; }}
 QWidget#recentRecordingRow {{ background: transparent; border: none; border-bottom: 1px solid {tokens.border}; }}
 QWidget#recentRecordingRow:hover {{ background: {tokens.hover}; }}
 QLabel#recentOrderText {{ color: {tokens.text_primary}; }}
@@ -625,6 +632,24 @@ QPushButton#recentDeleteButton {{
 QPushButton#recentDeleteButton:hover {{ background: {"#44272b" if is_dark else "#fef2f2"}; border-color: {"#9f4048" if is_dark else "#fca5a5"}; }}
 
 QWidget#videoQueryPage QLineEdit#videoSearchInput {{ min-height: 38px; padding: 5px 10px; }}
+QWidget#videoQueryPage QWidget#querySegmentControl {{
+    background: {tokens.surface};
+    border: 1px solid {tokens.border};
+    border-radius: 8px;
+}}
+QWidget#videoQueryPage QWidget#querySegmentControl QPushButton#filterButton {{
+    min-height: 32px;
+    margin: 0;
+    padding: 3px 12px;
+    background: transparent;
+    border: none;
+    border-right: 1px solid {tokens.border};
+    border-radius: 0;
+}}
+QWidget#videoQueryPage QWidget#querySegmentControl QPushButton#filterButton[segmentPosition="first"] {{ border-top-left-radius: 7px; border-bottom-left-radius: 7px; }}
+QWidget#videoQueryPage QWidget#querySegmentControl QPushButton#filterButton[segmentPosition="last"] {{ border-right: none; border-top-right-radius: 7px; border-bottom-right-radius: 7px; }}
+QWidget#videoQueryPage QWidget#querySegmentControl QPushButton#filterButton:hover {{ background: {tokens.hover}; border-color: {tokens.border}; }}
+QWidget#videoQueryPage QWidget#querySegmentControl QPushButton#filterButton:checked {{ background: {tokens.selected}; color: {tokens.text_primary}; border-color: {tokens.border}; font-weight: 700; }}
 QWidget#videoQueryPage QPushButton#filterButton, QWidget#videoQueryPage QPushButton#datePickerButton {{
     min-height: 34px; border-radius: 8px; padding: 4px 12px; background: {tokens.surface}; color: {tokens.text_primary}; border-color: {tokens.border};
 }}
@@ -633,11 +658,16 @@ QWidget#videoQueryPage QPushButton#filterButton:checked {{ background: {tokens.s
 QWidget#videoQueryPage QToolButton#extendedFilterToggleButton {{ background: transparent; border-color: transparent; color: {tokens.text_secondary}; }}
 QWidget#videoQueryPage QToolButton#extendedFilterToggleButton:hover {{ background: {tokens.hover}; border-color: {tokens.border}; color: {tokens.text_primary}; }}
 QWidget#videoQueryPage QWidget#netdiskFilterRow, QWidget#videoQueryPage QWidget#videoDetailFilterRow {{ background: transparent; }}
-QWidget#videoQueryPage QTableWidget#videoQueryTable {{
+QFrame#videoTableContainer {{
     background: {tokens.surface};
-    alternate-background-color: {tokens.surface};
     border: 1px solid {tokens.border};
     border-radius: 10px;
+}}
+QWidget#videoQueryPage QTableWidget#videoQueryTable {{
+    background: transparent;
+    alternate-background-color: {tokens.surface};
+    border: none;
+    border-radius: 0;
     gridline-color: transparent;
     selection-background-color: {tokens.selected};
     selection-color: {tokens.text_primary};
@@ -677,9 +707,13 @@ QWidget#videoQueryPage QPushButton#revealSceneLinkButton {{ color: {tokens.text_
 QWidget#videoQueryPage QPushButton#openSceneLinkButton:hover, QWidget#videoQueryPage QPushButton#revealSceneLinkButton:hover, QWidget#videoQueryPage QPushButton#tableUploadButton:hover {{ background: {tokens.hover}; text-decoration: underline; border-radius: 5px; }}
 QWidget#videoQueryPage QPushButton#tableDangerButton {{ background: transparent; border: none; color: {"#fecaca" if is_dark else "#b91c1c"}; min-height: 26px; padding: 0 4px; }}
 QWidget#videoQueryPage QPushButton#tableDangerButton:hover {{ background: {"#44272b" if is_dark else "#fef2f2"}; text-decoration: underline; border-radius: 5px; }}
-QWidget#videoQueryPage QWidget#paginationBar {{ background: transparent; }}
+QWidget#videoQueryPage QWidget#paginationBar {{ background: transparent; border-top: 1px solid {tokens.border}; }}
 QWidget#videoQueryPage QPushButton#paginationButton, QWidget#videoQueryPage QPushButton#paginationPageButton {{ background: transparent; border-color: transparent; color: {tokens.text_secondary}; min-height: 32px; min-width: 32px; padding: 2px 7px; }}
 QWidget#videoQueryPage QPushButton#paginationButton:hover, QWidget#videoQueryPage QPushButton#paginationPageButton:hover {{ background: {tokens.hover}; color: {tokens.text_primary}; }}
 QWidget#videoQueryPage QPushButton#paginationPageButton:checked {{ background: {tokens.selected}; color: {tokens.text_primary}; border-color: transparent; }}
 QWidget#videoQueryPage QComboBox#paginationCombo, QWidget#videoQueryPage QLineEdit#paginationJumpInput {{ min-height: 32px; border-color: {tokens.border}; }}
+
+/* The generic filter rule is declared above, so apply the segmented state last. */
+QWidget#videoQueryPage QWidget#querySegmentControl QPushButton#filterButton:hover {{ background: {tokens.hover}; border-color: {tokens.border}; }}
+QWidget#videoQueryPage QWidget#querySegmentControl QPushButton#filterButton:checked {{ background: {tokens.selected}; color: {tokens.text_primary}; border-color: {tokens.border}; font-weight: 700; }}
 """

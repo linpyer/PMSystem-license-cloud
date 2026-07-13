@@ -199,11 +199,11 @@ class PreviewAlertOverlay(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, False)
         rect = self.rect()
         wave = (math.sin(self._phase) + 1.0) / 2.0
-        opacity = 0.26 + 0.09 * math.sin(self._phase)
+        opacity = 0.13 + 0.05 * math.sin(self._phase)
         if time.monotonic() < self._boost_until:
-            opacity = min(0.45, max(opacity, 0.42))
-        opacity = max(0.18, min(0.38 if time.monotonic() >= self._boost_until else 0.45, opacity))
-        thickness = int(44 + 18 * wave)
+            opacity = min(0.25, max(opacity, 0.22))
+        opacity = max(0.09, min(0.18 if time.monotonic() >= self._boost_until else 0.25, opacity))
+        thickness = int(24 + 12 * wave)
         thickness = min(thickness, max(12, rect.width() // 4), max(12, rect.height() // 4))
         edge_alpha = int(255 * opacity)
         soft_alpha = int(edge_alpha * 0.45)
@@ -232,11 +232,11 @@ class PreviewAlertOverlay(QWidget):
         right.setColorAt(1.0, QColor(220, 38, 38, 0))
         painter.fillRect(rect.right() - thickness + 1, rect.top(), thickness, rect.height(), right)
 
-        border = QColor(220, 38, 38, min(160, edge_alpha + 35))
-        painter.fillRect(rect.left(), rect.top(), rect.width(), 3, border)
-        painter.fillRect(rect.left(), rect.bottom() - 2, rect.width(), 3, border)
-        painter.fillRect(rect.left(), rect.top(), 3, rect.height(), border)
-        painter.fillRect(rect.right() - 2, rect.top(), 3, rect.height(), border)
+        border = QColor(220, 38, 38, min(140, edge_alpha + 26))
+        painter.fillRect(rect.left(), rect.top(), rect.width(), 2, border)
+        painter.fillRect(rect.left(), rect.bottom() - 1, rect.width(), 2, border)
+        painter.fillRect(rect.left(), rect.top(), 2, rect.height(), border)
+        painter.fillRect(rect.right() - 1, rect.top(), 2, rect.height(), border)
 
 
 class MonitorTab(QWidget):
@@ -480,15 +480,15 @@ class MonitorTab(QWidget):
         side_panel_container.setMinimumWidth(380)
         side_panel_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         side_panel = QVBoxLayout(side_panel_container)
-        side_panel.setContentsMargins(0, 0, 0, 0)
-        side_panel.setSpacing(6)
+        side_panel.setContentsMargins(14, 14, 14, 14)
+        side_panel.setSpacing(12)
         side_scroll.setWidget(side_panel_container)
         content_layout.addWidget(side_scroll, 0, 1)
 
         status_group = QGroupBox("")
         status_group.setObjectName("plainRightCard")
         status_layout = QVBoxLayout(status_group)
-        status_layout.setContentsMargins(12, 10, 12, 10)
+        status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(8)
 
         self.status_block = QFrame()
@@ -536,6 +536,11 @@ class MonitorTab(QWidget):
         self._set_start_time_visible(False)
         side_panel.addWidget(status_group)
 
+        status_divider = QFrame()
+        status_divider.setObjectName("monitorPanelDivider")
+        status_divider.setFrameShape(QFrame.HLine)
+        side_panel.addWidget(status_divider)
+
         scan_group = QGroupBox("")
         scan_group.setObjectName("plainRightCard")
         scan_layout = QVBoxLayout(scan_group)
@@ -579,6 +584,11 @@ class MonitorTab(QWidget):
         scan_layout.addWidget(self.scan_input)
         side_panel.addWidget(scan_group)
 
+        scan_divider = QFrame()
+        scan_divider.setObjectName("monitorPanelDivider")
+        scan_divider.setFrameShape(QFrame.HLine)
+        side_panel.addWidget(scan_divider)
+
         button_group = QGroupBox("")
         button_group.setObjectName("plainRightCard")
         button_layout = QGridLayout(button_group)
@@ -598,6 +608,11 @@ class MonitorTab(QWidget):
         self.refresh_camera_button.setObjectName("secondaryButton")
         side_panel.addWidget(button_group)
 
+        action_divider = QFrame()
+        action_divider.setObjectName("monitorPanelDivider")
+        action_divider.setFrameShape(QFrame.HLine)
+        side_panel.addWidget(action_divider)
+
         recent_group = QGroupBox("")
         recent_group.setObjectName("recentCard")
         recent_layout = QVBoxLayout(recent_group)
@@ -608,7 +623,7 @@ class MonitorTab(QWidget):
         recent_title_layout.setSpacing(8)
         recent_title_accent = QFrame()
         recent_title_accent.setObjectName("recentTitleAccent")
-        recent_title_accent.setFixedSize(3, 16)
+        recent_title_accent.setFixedSize(0, 0)
         recent_title_label = QLabel("最近录制")
         recent_title_label.setObjectName("recentCardTitle")
         recent_title_layout.addWidget(recent_title_accent)
