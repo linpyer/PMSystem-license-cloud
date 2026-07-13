@@ -172,6 +172,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.monitor_tab, "打包监控")
         self.tabs.addTab(self.query_tab, "视频查询")
         self._setup_help_entry()
+        if self.theme_manager is not None:
+            self.theme_manager.theme_changed.connect(self._apply_navigation_icons)
+            self._apply_navigation_icons(self.theme_manager.current_mode(), self.theme_manager.resolved_theme())
         central_layout.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
         self._init_window_geometry()
@@ -332,26 +335,18 @@ class MainWindow(QMainWindow):
 
         self.stats_button = QToolButton(self)
         self.stats_button.setObjectName("statsButton")
-        stats_icon = resource_path("app/assets/icons/chart-bars.svg")
-        if stats_icon.exists():
-            self.stats_button.setIcon(QIcon(str(stats_icon)))
-            self.stats_button.setIconSize(QSize(17, 17))
-        else:
-            self.stats_button.setText("统")
         self.stats_button.setToolTip("打包发货统计")
         self.stats_button.setFocusPolicy(Qt.NoFocus)
         self.stats_button.clicked.connect(self._show_stats_dialog)
 
         self.settings_button = QToolButton(self)
         self.settings_button.setObjectName("settingsButton")
-        self.settings_button.setText("⚙")
         self.settings_button.setToolTip("设置")
         self.settings_button.setFocusPolicy(Qt.NoFocus)
         self.settings_button.clicked.connect(self._show_settings_dialog)
 
         self.help_button = QToolButton(self)
         self.help_button.setObjectName("helpIconButton")
-        self.help_button.setText("?")
         self.help_button.setToolTip("使用说明")
         self.help_button.setFocusPolicy(Qt.NoFocus)
         self.help_button.clicked.connect(self._show_help_dialog)
@@ -359,6 +354,23 @@ class MainWindow(QMainWindow):
         corner_layout.addWidget(self.settings_button)
         corner_layout.addWidget(self.help_button)
         self.tabs.setCornerWidget(corner, Qt.TopRightCorner)
+
+    def _apply_navigation_icons(self, _mode: str = "system", resolved_theme: str = "light") -> None:
+        suffix = "-light" if resolved_theme == "dark" else ""
+        icon_specs = (
+            (self.stats_button, f"app/assets/icons/chart-bars{suffix}.svg", QSize(18, 18)),
+            (self.settings_button, f"app/assets/icons/settings{suffix}.svg", QSize(19, 19)),
+            (self.help_button, f"app/assets/icons/circle-help{suffix}.svg", QSize(19, 19)),
+        )
+        for button, relative_path, size in icon_specs:
+            icon_path = resource_path(relative_path)
+            if icon_path.exists():
+                button.setText("")
+                button.setIcon(QIcon(str(icon_path)))
+                button.setIconSize(size)
+            else:
+                button.setIcon(QIcon())
+                button.setText("?" if button is self.help_button else "")
 
     def _show_stats_dialog(self) -> None:
         self.logger.info("用户打开打包发货统计弹窗")

@@ -1971,7 +1971,8 @@ class QueryTab(QWidget):
         self._skeleton_blocks: list[QFrame] = []
         self._loading_animation_step = 0
         self._loading_spinner_frames = ("◐", "◓", "◑", "◒")
-        self._skeleton_colors = ("#E2E8F0", "#E7EDF4", "#EDF3F8", "#F1F5F9", "#EDF3F8", "#E7EDF4")
+        self._theme_manager = QApplication.instance().property("theme_manager") if QApplication.instance() else None
+        self._skeleton_colors = self._skeleton_palette()
         self._loading_animation_timer = QTimer(self)
         self._loading_animation_timer.setInterval(180)
         self._loading_animation_timer.timeout.connect(self._on_loading_animation_tick)
@@ -1996,6 +1997,8 @@ class QueryTab(QWidget):
         self.netdisk_progress_hide_timer.setSingleShot(True)
         self.netdisk_progress_hide_timer.timeout.connect(self._hide_netdisk_progress)
         self._build_ui()
+        if self._theme_manager is not None:
+            self._theme_manager.theme_changed.connect(self._on_theme_changed)
         self._update_netdisk_controls()
         QTimer.singleShot(1000, self._maybe_schedule_auto_sync_on_startup)
         self.logger.info("查询页初始化视频存储目录：%s", self.video_dir)
@@ -2153,7 +2156,6 @@ class QueryTab(QWidget):
         self.netdisk_history_button.setToolTip("查看百度网盘上传历史和失败原因")
         self.netdisk_auto_status_label = QLabel("")
         self.netdisk_auto_status_label.setObjectName("netdiskAutoStatusLabel")
-        self.netdisk_auto_status_label.setStyleSheet("color: #64748b; font-size: 12px;")
         self.extended_filters_expanded = False
         self.extended_filters_toggle_button = QToolButton()
         self.extended_filters_toggle_button.setObjectName("extendedFilterToggleButton")
@@ -2566,6 +2568,16 @@ class QueryTab(QWidget):
         for block in list(self._skeleton_blocks):
             block.setStyleSheet(f"background: {color}; border-radius: 6px; border: none;")
 
+    def _skeleton_palette(self) -> tuple[str, ...]:
+        if self._theme_manager is not None and self._theme_manager.resolved_theme() == "dark":
+            return ("#424242", "#474747", "#4c4c4c", "#515151", "#4c4c4c", "#474747")
+        return ("#E2E8F0", "#E7EDF4", "#EDF3F8", "#F1F5F9", "#EDF3F8", "#E7EDF4")
+
+    def _on_theme_changed(self, _mode: str, _resolved_theme: str) -> None:
+        self._skeleton_colors = self._skeleton_palette()
+        if self._skeleton_active:
+            self._on_loading_animation_tick()
+
     def _show_skeleton_rows(self, row_count: int = 7) -> None:
         self._skeleton_active = True
         self._skeleton_blocks.clear()
@@ -2632,7 +2644,7 @@ class QueryTab(QWidget):
         block = QFrame()
         block.setObjectName("videoSkeletonBlock")
         block.setFixedSize(width, height)
-        block.setStyleSheet("background: #e2e8f0; border-radius: 6px; border: none;")
+        block.setStyleSheet(f"background: {self._skeleton_colors[0]}; border-radius: 6px; border: none;")
         self._skeleton_blocks.append(block)
         return block
 

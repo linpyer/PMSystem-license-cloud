@@ -164,6 +164,25 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_config_management_tab(), "配置管理")
         self.tabs.addTab(self._build_changelog_tab(), "更新日志")
         root_layout.addWidget(self.tabs, 1)
+        self._clear_theme_conflicting_styles()
+
+    def _clear_theme_conflicting_styles(self) -> None:
+        """Let the application stylesheet own the core settings appearance."""
+        for object_name in (
+            "configManagementCard",
+            "changelogCard",
+            "voiceModePanel",
+            "customVoicePanel",
+        ):
+            for widget in self.findChildren(QWidget, object_name):
+                widget.setStyleSheet("")
+        for widget in (
+            getattr(self, "voice_enabled_check", None),
+            getattr(self, "netdisk_enabled_check", None),
+            getattr(self, "auto_sync_enabled_check", None),
+        ):
+            if widget is not None:
+                widget.setStyleSheet("")
 
     def _settings_card(self, title: str) -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
@@ -595,6 +614,7 @@ class SettingsDialog(QDialog):
         layout.setSpacing(14)
 
         self.voice_enabled_check = QCheckBox("开启语音提示")
+        self.voice_enabled_check.setObjectName("settingsMainCheckBox")
         checkmark_path = resource_path("app/assets/checkmark.svg").as_posix()
         self.voice_enabled_check.setStyleSheet(
             """
@@ -893,6 +913,7 @@ class SettingsDialog(QDialog):
         layout.setSpacing(14)
 
         self.netdisk_enabled_check = QCheckBox("开启网盘同步")
+        self.netdisk_enabled_check.setObjectName("settingsMainCheckBox")
         self.netdisk_enabled_check.setStyleSheet(self.voice_enabled_check.styleSheet())
         self.netdisk_enabled_check.toggled.connect(self._sync_netdisk_ui)
         enabled_row = QHBoxLayout()
@@ -1579,7 +1600,9 @@ class SettingsDialog(QDialog):
         netdisk_config = netdisk_config or self._current_netdisk_config()
         if netdisk_config.get("access_token") or netdisk_config.get("refresh_token"):
             self.netdisk_auth_status_label.setText("已授权")
-            self.netdisk_auth_status_label.setStyleSheet("color: #047857; font-weight: 700;")
+            self.netdisk_auth_status_label.setProperty("status", "ok")
+            self.netdisk_auth_status_label.style().unpolish(self.netdisk_auth_status_label)
+            self.netdisk_auth_status_label.style().polish(self.netdisk_auth_status_label)
             if hasattr(self, "netdisk_auth_status_summary_label"):
                 self.netdisk_auth_status_summary_label.setText("已授权")
                 self.netdisk_auth_status_summary_label.setProperty("status", "ok")
@@ -1588,7 +1611,9 @@ class SettingsDialog(QDialog):
             self.netdisk_auth_button.setText("重新授权")
         else:
             self.netdisk_auth_status_label.setText("未授权")
-            self.netdisk_auth_status_label.setStyleSheet("color: #64748b; font-weight: 700;")
+            self.netdisk_auth_status_label.setProperty("status", "none")
+            self.netdisk_auth_status_label.style().unpolish(self.netdisk_auth_status_label)
+            self.netdisk_auth_status_label.style().polish(self.netdisk_auth_status_label)
             if hasattr(self, "netdisk_auth_status_summary_label"):
                 self.netdisk_auth_status_summary_label.setText("未授权")
                 self.netdisk_auth_status_summary_label.setProperty("status", "none")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import QObject, QEvent, QTimer, Qt
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 
 class ToastManager(QObject):
@@ -66,6 +66,18 @@ class ToastManager(QObject):
 
     @staticmethod
     def _style(level: str) -> str:
+        app = QApplication.instance()
+        theme_manager = app.property("theme_manager") if app is not None else None
+        is_dark = bool(theme_manager is not None and theme_manager.resolved_theme() == "dark")
+        if is_dark:
+            styles = {
+                "success": "background: #173824; color: #bbf7d0; border: 1px solid #2d6a42; border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;",
+                "error": "background: #44272b; color: #fecaca; border: 1px solid #9f4048; border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;",
+                "warning": "background: #3b3020; color: #fde68a; border: 1px solid #8a6d30; border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;",
+                "critical": "background: #44272b; color: #fecaca; border: 1px solid #b34b55; border-radius: 8px; padding: 7px 12px; font-weight: 700; line-height: 1.35;",
+                "info": "background: #2f3440; color: #dbeafe; border: 1px solid #52627e; border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;",
+            }
+            return styles.get(level, styles["info"])
         styles = {
             "success": (
                 "background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; "

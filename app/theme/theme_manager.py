@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QApplication
 
 from app.theme.theme_styles import build_theme_styles
-from app.theme.theme_tokens import normalize_theme_mode, tokens_for
+from app.theme.theme_tokens import ThemeTokens, normalize_theme_mode, tokens_for
 from app.ui.styles import APP_STYLES
 
 if TYPE_CHECKING:
@@ -34,6 +34,9 @@ class ThemeManager(QObject):
     def resolved_theme(self, mode: str | None = None) -> str:
         requested = normalize_theme_mode(mode if mode is not None else self._mode)
         return self._system_theme() if requested == "system" else requested
+
+    def current_tokens(self) -> ThemeTokens:
+        return tokens_for(self.resolved_theme())
 
     def apply_theme(self, mode: str | None = None) -> None:
         if mode is not None:
