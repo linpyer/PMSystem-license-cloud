@@ -2,53 +2,62 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QDialog, QTabWidget, QTextBrowser, QToolButton, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QDialog, QTabWidget, QTextBrowser, QToolButton, QVBoxLayout
 
+from app.theme.theme_tokens import LIGHT_TOKENS
 from app.ui.dialog_utils import DialogSizeManager
 from app.utils.runtime_paths import resource_path
 
 
-HELP_STYLE = """
-body {
+def build_help_style() -> str:
+    """Build browser CSS from the active application theme."""
+    app = QApplication.instance()
+    manager = app.property("theme_manager") if app is not None else None
+    tokens = manager.current_tokens() if manager is not None else LIGHT_TOKENS
+    note_background = "#3b3020" if tokens.window_background.lower() == "#212121" else "#fffbeb"
+    note_border = "#8a6d30" if tokens.window_background.lower() == "#212121" else "#fde68a"
+    note_text = "#fde68a" if tokens.window_background.lower() == "#212121" else "#78350f"
+    return f"""
+body {{
     font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
-    color: #1f2937;
+    color: {tokens.text_primary};
     line-height: 1.72;
     font-size: 14px;
     margin: 0;
-}
-h1 {
+}}
+h1 {{
     font-size: 20px;
     margin: 4px 0 14px 0;
-    color: #0f172a;
-}
-h2 {
+    color: {tokens.text_primary};
+}}
+h2 {{
     font-size: 16px;
     margin: 18px 0 8px 0;
-    color: #0f766e;
-}
-ol {
+    color: {tokens.text_secondary};
+}}
+ol {{
     margin: 0 0 0 22px;
     padding: 0;
-}
-li {
+}}
+li {{
     margin: 5px 0;
-}
-p {
+}}
+p {{
     margin: 7px 0;
-}
-.question {
+}}
+.question {{
     font-weight: 700;
-    color: #111827;
+    color: {tokens.text_primary};
     margin-top: 13px;
-}
-.note {
-    background: #fffbeb;
-    border: 1px solid #fde68a;
+}}
+.note {{
+    background: {note_background};
+    border: 1px solid {note_border};
     border-radius: 6px;
     padding: 8px 10px;
-    color: #78350f;
+    color: {note_text};
     margin-top: 8px;
-}
+}}
 """
 
 
@@ -232,14 +241,27 @@ class HelpDialog(QDialog):
         for title, html in HELP_TABS:
             self.tabs.addTab(self._create_tab(html), title)
         layout.addWidget(self.tabs, 1)
+        app = QApplication.instance()
+        manager = app.property("theme_manager") if app is not None else None
+        if manager is not None:
+            manager.theme_changed.connect(self._refresh_theme)
         QTimer.singleShot(0, self._style_tab_scroll_buttons)
 
     def _create_tab(self, html: str) -> QTextBrowser:
         browser = QTextBrowser(self)
         browser.setObjectName("helpContent")
         browser.setOpenExternalLinks(False)
-        browser.setHtml(f'<!doctype html><html><head><meta charset="utf-8"><style>{HELP_STYLE}</style></head><body>{html}</body></html>')
+        browser.setProperty("helpHtml", html)
+        browser.setHtml(f'<!doctype html><html><head><meta charset="utf-8"><style>{build_help_style()}</style></head><body>{html}</body></html>')
         return browser
+
+    def _refresh_theme(self, *_args) -> None:
+        for browser in self.tabs.findChildren(QTextBrowser):
+            html = str(browser.property("helpHtml") or "")
+            position = browser.verticalScrollBar().value()
+            browser.setHtml(f'<!doctype html><html><head><meta charset="utf-8"><style>{build_help_style()}</style></head><body>{html}</body></html>')
+            browser.verticalScrollBar().setValue(position)
+        self._style_tab_scroll_buttons()
 
     def _style_tab_scroll_buttons(self) -> None:
         left_icon = QIcon(str(resource_path("app/assets/icons/chevron-left.svg")))

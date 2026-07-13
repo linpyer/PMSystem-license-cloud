@@ -68,39 +68,24 @@ class ToastManager(QObject):
     def _style(level: str) -> str:
         app = QApplication.instance()
         theme_manager = app.property("theme_manager") if app is not None else None
-        is_dark = bool(theme_manager is not None and theme_manager.resolved_theme() == "dark")
-        if is_dark:
-            styles = {
-                "success": "background: #173824; color: #bbf7d0; border: 1px solid #2d6a42; border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;",
-                "error": "background: #44272b; color: #fecaca; border: 1px solid #9f4048; border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;",
-                "warning": "background: #3b3020; color: #fde68a; border: 1px solid #8a6d30; border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;",
-                "critical": "background: #44272b; color: #fecaca; border: 1px solid #b34b55; border-radius: 8px; padding: 7px 12px; font-weight: 700; line-height: 1.35;",
-                "info": "background: #2f3440; color: #dbeafe; border: 1px solid #52627e; border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;",
-            }
-            return styles.get(level, styles["info"])
-        styles = {
-            "success": (
-                "background: #ecfdf5; color: #065f46; border: 1px solid #a7f3d0; "
-                "border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;"
-            ),
-            "error": (
-                "background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; "
-                "border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;"
-            ),
-            "warning": (
-                "background: #fffbeb; color: #92400e; border: 1px solid #fde68a; "
-                "border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;"
-            ),
-            "critical": (
-                "background: #fef2f2; color: #7f1d1d; border: 1px solid #fca5a5; "
-                "border-radius: 8px; padding: 7px 12px; font-weight: 700; line-height: 1.35;"
-            ),
-            "info": (
-                "background: #eff6ff; color: #1e3a8a; border: 1px solid #bfdbfe; "
-                "border-radius: 8px; padding: 7px 12px; font-weight: 600; line-height: 1.35;"
-            ),
-        }
-        return styles.get(level, styles["info"])
+        tokens = theme_manager.current_tokens() if theme_manager is not None else None
+        if tokens is None:
+            background, foreground, border = "#ffffff", "#202123", "#d1d5db"
+        else:
+            background, foreground, border = tokens.surface, tokens.text_primary, tokens.border
+        accent = {
+            "success": "#22c55e",
+            "warning": "#d97706",
+            "error": "#dc2626",
+            "critical": "#dc2626",
+            "info": "#6b7280",
+        }.get(level, "#6b7280")
+        weight = 700 if level == "critical" else 600
+        return (
+            f"background: {background}; color: {foreground}; border: 1px solid {border}; "
+            f"border-left: 3px solid {accent}; border-radius: 8px; padding: 7px 12px; "
+            f"font-weight: {weight}; line-height: 1.35;"
+        )
 
 
 def _status_tip_target(parent: QWidget) -> QWidget | None:

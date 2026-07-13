@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from app.core.database import DatabaseManager
 from app.core.important_reasons import IMPORTANT_REASON_OPTIONS, remark_display_parts
 from app.core.video_player import open_video, reveal_in_file_manager
+from app.theme.theme_tokens import LIGHT_TOKENS, ThemeTokens
 from app.ui.dialog_utils import DialogSizeManager
 
 
@@ -51,6 +52,30 @@ REASON_COLORS = {
     "user_rejected": "#EF4444",
     "other": "#94A3B8",
 }
+
+
+def _current_theme_tokens() -> ThemeTokens:
+    app = QApplication.instance()
+    manager = app.property("theme_manager") if app is not None else None
+    if manager is not None:
+        return manager.current_tokens()
+    return LIGHT_TOKENS
+
+
+class ThemeAwarePaintWidget(QWidget):
+    """Cache tokens between paint calls and repaint only when the theme changes."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._theme_tokens = _current_theme_tokens()
+        app = QApplication.instance()
+        manager = app.property("theme_manager") if app is not None else None
+        if manager is not None:
+            manager.theme_changed.connect(self._refresh_theme)
+
+    def _refresh_theme(self, *_args) -> None:
+        self._theme_tokens = _current_theme_tokens()
+        self.update()
 
 
 class StatsDateEdit(QPushButton):
@@ -97,16 +122,11 @@ class MetricCard(QFrame):
     def __init__(self, metric_key: str, title: str, hint: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.metric_key = metric_key
-        role, accent, bg, border = CARD_THEMES.get(metric_key, ("neutral", "#0F172A", "#FFFFFF", "#E2E8F0"))
+        role, *_ = CARD_THEMES.get(metric_key, ("neutral", "#0F172A", "#FFFFFF", "#E2E8F0"))
         self.setObjectName("statsMetricCard")
         self.setProperty("metricRole", role)
-        self.accent_color = accent
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(96)
-        self.setStyleSheet(
-            f"QFrame#statsMetricCard {{ background: {bg}; border: 1px solid {border}; border-radius: 14px; }}"
-            f"QFrame#statsMetricCard:hover {{ border-color: {accent}; }}"
-        )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(4)
@@ -115,6 +135,7 @@ class MetricCard(QFrame):
         title_label.setObjectName("statsCardTitle")
         self.value_label = QLabel("0")
         self.value_label.setObjectName("statsCardValue")
+        self.value_label.setProperty("metricRole", role)
         self.hint_label = QLabel(hint)
         self.hint_label.setObjectName("statsCardHint")
         self.hint_label.setWordWrap(True)
@@ -130,7 +151,6 @@ class MetricCard(QFrame):
         self.value_label.setText(str(value))
         if hint is not None:
             self.hint_label.setText(hint)
-        self.value_label.setStyleSheet(f"color: {self.accent_color};")
 
     def mouseDoubleClickEvent(self, event) -> None:  # type: ignore[override]
         if event.button() == Qt.LeftButton:
@@ -140,7 +160,7 @@ class MetricCard(QFrame):
         super().mouseDoubleClickEvent(event)
 
 
-class StatsBarChartWidget(QWidget):
+class StatsBarChartWidget(ThemeAwarePaintWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(270)
@@ -157,8 +177,9 @@ class StatsBarChartWidget(QWidget):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#FFFFFF"))
-        painter.setPen(QColor("#0F172A"))
+        tokens = self._theme_tokens
+        painter.fillRect(self.rect(), QColor(tokens.surface))
+        painter.setPen(QColor(tokens.text_primary))
         title_font = QFont(self.font())
         title_font.setPointSize(12)
         title_font.setBold(True)
@@ -167,7 +188,7 @@ class StatsBarChartWidget(QWidget):
 
         chart = self.rect().adjusted(48, 44, -24, -38)
         if not self._data:
-            painter.setPen(QColor("#94A3B8"))
+            painter.setPen(QColor(tokens.text_disabled))
             painter.drawText(chart, Qt.AlignCenter, "暂无统计数据")
             return
 
@@ -179,12 +200,12 @@ class StatsBarChartWidget(QWidget):
         span = max(1, max_value - min_value)
         baseline = chart.bottom() - (0 - min_value) / span * chart.height()
 
-        grid_pen = QPen(QColor("#E2E8F0"), 1)
+        grid_pen = QPen(QColor(tokens.border), 1)
         painter.setPen(grid_pen)
         for index in range(5):
             y = chart.top() + chart.height() * index / 4
             painter.drawLine(chart.left(), int(y), chart.right(), int(y))
-        painter.setPen(QPen(QColor("#CBD5E1"), 1))
+        painter.setPen(QPen(QColor(tokens.border_strong), 1))
         painter.drawLine(chart.left(), int(baseline), chart.right(), int(baseline))
 
         count = len(self._data)
@@ -204,14 +225,14 @@ class StatsBarChartWidget(QWidget):
             painter.setPen(Qt.NoPen)
             painter.setBrush(color)
             painter.drawRoundedRect(rect, 6, 6)
-            painter.setPen(QColor("#0F172A"))
+            painter.setPen(QColor(tokens.text_primary))
             value_text_y = top - 6 if value >= 0 else top + height + 16
             painter.drawText(QRectF(center_x - 45, value_text_y - 14, 90, 18), Qt.AlignCenter, str(value))
-            painter.setPen(QColor("#64748B"))
+            painter.setPen(QColor(tokens.text_secondary))
             painter.drawText(QRectF(center_x - 45, chart.bottom() + 8, 90, 22), Qt.AlignCenter, label)
 
 
-class CompareBarChartWidget(QWidget):
+class CompareBarChartWidget(ThemeAwarePaintWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(370)
@@ -243,19 +264,20 @@ class CompareBarChartWidget(QWidget):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#FFFFFF"))
+        tokens = self._theme_tokens
+        painter.fillRect(self.rect(), QColor(tokens.surface))
 
         title_font = QFont(self.font())
         title_font.setPointSize(12)
         title_font.setBold(True)
         painter.setFont(title_font)
-        painter.setPen(QColor("#0F172A"))
+        painter.setPen(QColor(tokens.text_primary))
         painter.drawText(16, 24, self._title)
         self._draw_legend(painter)
 
         chart = self.rect().adjusted(52, 50, -28, -42)
         if not self._labels:
-            painter.setPen(QColor("#94A3B8"))
+            painter.setPen(QColor(tokens.text_disabled))
             painter.drawText(chart, Qt.AlignCenter, "暂无对比数据")
             return
 
@@ -267,11 +289,11 @@ class CompareBarChartWidget(QWidget):
         span = max(1, max_value - min_value)
         baseline = chart.bottom() - (0 - min_value) / span * chart.height()
 
-        painter.setPen(QPen(QColor("#E2E8F0"), 1))
+        painter.setPen(QPen(QColor(tokens.border), 1))
         for index in range(5):
             y = chart.top() + chart.height() * index / 4
             painter.drawLine(chart.left(), int(y), chart.right(), int(y))
-        painter.setPen(QPen(QColor("#CBD5E1"), 1))
+        painter.setPen(QPen(QColor(tokens.border_strong), 1))
         painter.drawLine(chart.left(), int(baseline), chart.right(), int(baseline))
 
         label_count = len(self._labels)
@@ -295,10 +317,10 @@ class CompareBarChartWidget(QWidget):
                 painter.setPen(Qt.NoPen)
                 painter.setBrush(color)
                 painter.drawRoundedRect(rect, 5, 5)
-                painter.setPen(QColor("#0F172A"))
+                painter.setPen(QColor(tokens.text_primary))
                 text_y = top - 5 if value >= 0 else top + height + 14
                 painter.drawText(QRectF(center_x + offset - 28, text_y - 12, 56, 16), Qt.AlignCenter, str(value))
-            painter.setPen(QColor("#64748B"))
+            painter.setPen(QColor(tokens.text_secondary))
             painter.drawText(QRectF(center_x - 56, chart.bottom() + 8, 112, 24), Qt.AlignCenter, label)
 
     def _draw_legend(self, painter: QPainter) -> None:
@@ -308,12 +330,12 @@ class CompareBarChartWidget(QWidget):
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(color))
             painter.drawRoundedRect(QRectF(x, y - 8, 12, 12), 3, 3)
-            painter.setPen(QColor("#64748B"))
+            painter.setPen(QColor(self._theme_tokens.text_secondary))
             painter.drawText(x + 18, y + 2, name)
             x += 92
 
 
-class ReasonBreakdownWidget(QWidget):
+class ReasonBreakdownWidget(ThemeAwarePaintWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(190)
@@ -327,8 +349,9 @@ class ReasonBreakdownWidget(QWidget):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#FFFFFF"))
-        painter.setPen(QColor("#0F172A"))
+        tokens = self._theme_tokens
+        painter.fillRect(self.rect(), QColor(tokens.surface))
+        painter.setPen(QColor(tokens.text_primary))
         title_font = QFont(self.font())
         title_font.setPointSize(12)
         title_font.setBold(True)
@@ -337,7 +360,7 @@ class ReasonBreakdownWidget(QWidget):
 
         area = self.rect().adjusted(16, 42, -16, -12)
         if sum(self._data.values()) <= 0:
-            painter.setPen(QColor("#94A3B8"))
+            painter.setPen(QColor(tokens.text_disabled))
             painter.drawText(area, Qt.AlignCenter, "当前时间范围内暂无重要标记")
             return
 
@@ -349,15 +372,15 @@ class ReasonBreakdownWidget(QWidget):
         for index, (reason_key, reason_label) in enumerate(IMPORTANT_REASON_OPTIONS):
             value = self._data.get(reason_key, 0)
             y = area.top() + index * row_height
-            painter.setPen(QColor("#334155"))
+            painter.setPen(QColor(tokens.text_secondary))
             painter.drawText(area.left(), y + 17, reason_label)
-            painter.setPen(QColor("#0F172A"))
+            painter.setPen(QColor(tokens.text_primary))
             painter.drawText(area.left() + 126, y + 17, str(value))
             bar_x = area.left() + 164
             bar_w = max(1, area.right() - bar_x)
             bg_rect = QRectF(bar_x, y + 6, bar_w, 10)
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor("#F1F5F9"))
+            painter.setBrush(QColor(tokens.surface_secondary))
             painter.drawRoundedRect(bg_rect, 5, 5)
             if value > 0:
                 fill_rect = QRectF(bar_x, y + 6, bar_w * value / max_value, 10)
@@ -379,6 +402,7 @@ class StatsDetailDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("statsDetailDialog")
         self.database = database
         self.metric_key = metric_key
         self.metric_title = metric_title
@@ -524,9 +548,9 @@ class StatsDetailDialog(QDialog):
                 if important:
                     item.setForeground(QColor("#DC2626"))
                 elif not remark:
-                    item.setForeground(QColor("#64748b"))
+                    item.setForeground(QColor(_current_theme_tokens().text_secondary))
                 else:
-                    item.setForeground(QColor("#1f2937"))
+                    item.setForeground(QColor(_current_theme_tokens().text_primary))
             self.table.setItem(row, column, item)
         self._set_scene_cell(row, path)
 
@@ -987,8 +1011,9 @@ class PackagingStatsDialog(QDialog):
                 value = int(diff.get(key, 0))
                 text = f"+{value}" if value > 0 else str(value)
                 card.value_label.setText(text)
-                color = "#16A34A" if value > 0 else "#DC2626" if value < 0 else "#64748B"
-                card.value_label.setStyleSheet(f"color: {color};")
+                card.value_label.setProperty("diffState", "positive" if value > 0 else "negative" if value < 0 else "neutral")
+                card.value_label.style().unpolish(card.value_label)
+                card.value_label.style().polish(card.value_label)
             self._refresh_compare_chart()
             self.compare_summary.setText(self._summary_text(diff, names[0], names[1]))
             self._notice("对比统计已刷新", "success")

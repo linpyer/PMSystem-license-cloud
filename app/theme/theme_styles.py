@@ -56,6 +56,10 @@ QComboBox QAbstractItemView {{
     selection-background-color: {tokens.selected};
     selection-color: {tokens.text_primary};
 }}
+QComboBox::drop-down {{ border: none; width: 26px; background: transparent; }}
+QComboBox::down-arrow {{ width: 10px; height: 10px; }}
+QComboBox QAbstractItemView::item {{ min-height: 30px; padding: 4px 8px; }}
+QComboBox QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:selected {{ background: {tokens.selected}; color: {tokens.text_primary}; }}
 QPushButton, QToolButton {{
     background: {tokens.surface};
     color: {tokens.text_primary};
@@ -184,6 +188,25 @@ QToolTip {{
     padding: 5px 8px;
 }}
 QMessageBox {{ background: {tokens.surface}; color: {tokens.text_primary}; }}
+
+/* Phase 3: shared auxiliary dialogs, popups and generated controls. */
+QDialog {{ background: {tokens.window_background}; color: {tokens.text_primary}; }}
+QDialog QLabel {{ background: transparent; color: {tokens.text_primary}; }}
+QMessageBox QLabel {{ color: {tokens.text_primary}; }}
+QMessageBox QPushButton {{ min-width: 76px; }}
+QMessageBox QPushButton#dangerButton {{ background: {"#5b3035" if is_dark else "#fef2f2"}; color: {"#fecaca" if is_dark else "#b91c1c"}; border-color: {"#9f4048" if is_dark else "#fca5a5"}; }}
+QMessageBox QPushButton#dangerButton:hover {{ background: {"#6f363d" if is_dark else "#fee2e2"}; }}
+QCalendarWidget {{ background: {tokens.surface}; color: {tokens.text_primary}; border: 1px solid {tokens.border}; border-radius: 8px; }}
+QCalendarWidget QWidget {{ background: {tokens.surface}; color: {tokens.text_primary}; }}
+QCalendarWidget QToolButton {{ background: transparent; color: {tokens.text_primary}; border: none; min-height: 28px; padding: 2px 6px; }}
+QCalendarWidget QToolButton:hover {{ background: {tokens.hover}; border-radius: 6px; }}
+QCalendarWidget QMenu {{ background: {tokens.surface}; color: {tokens.text_primary}; }}
+QCalendarWidget QSpinBox {{ background: {tokens.input_background}; color: {tokens.text_primary}; border-color: {tokens.border}; }}
+QCalendarWidget QAbstractItemView {{ background: {tokens.surface}; color: {tokens.text_primary}; selection-background-color: {tokens.selected}; selection-color: {tokens.text_primary}; }}
+QCalendarWidget QAbstractItemView:enabled {{ color: {tokens.text_primary}; }}
+QCalendarWidget QAbstractItemView:disabled {{ color: {tokens.text_disabled}; }}
+QCalendarWidget QTableView {{ background: {tokens.surface}; color: {tokens.text_primary}; selection-background-color: {tokens.selected}; selection-color: {tokens.text_primary}; }}
+QCalendarWidget QHeaderView::section {{ background: {tokens.surface_secondary}; color: {tokens.text_secondary}; border-color: {tokens.border}; }}
 
 /* Phase 2: main window and core pages. */
 QWidget {{ background: {tokens.window_background}; color: {tokens.text_primary}; }}
@@ -426,4 +449,71 @@ QLabel#authStatusLabel[status="ok"] {{ color: #22c55e; }}
 QLabel#authStatusLabel[status="none"] {{ color: {tokens.text_secondary}; }}
 QLabel#authStatusTag {{ background: {tokens.surface_secondary}; border-color: {tokens.border}; color: {tokens.text_secondary}; }}
 QLabel#authStatusTag[status="ok"] {{ background: {"#173824" if is_dark else "#f0fdf4"}; border-color: {"#2d6a42" if is_dark else "#bbf7d0"}; color: {"#86efac" if is_dark else "#047857"}; }}
+
+/* Detail, history and drilldown dialogs. */
+QDialog#importantMarkDialog, QDialog#recordDetailDialog, QDialog#duplicateRecordsDialog,
+QDialog#netdiskHistoryDialog, QDialog#statsDetailDialog, QDialog#packagingStatsDialog,
+QDialog#helpDialog {{ background: {tokens.window_background}; }}
+QScrollArea#recordDetailScrollArea, QWidget#recordDetailContent {{ background: transparent; }}
+QFrame#recordDetailCard, QFrame#statsPanelCard, QFrame#statsMetricCard {{
+    background: {tokens.surface}; border: 1px solid {tokens.border}; border-radius: 12px;
+}}
+QFrame#recordDetailCard:hover, QFrame#statsMetricCard:hover {{ border-color: {tokens.border_strong}; }}
+QLabel#detailOrderTitle {{ color: {tokens.text_primary}; font-size: 22px; font-weight: 700; }}
+QLabel#detailCardTitle, QLabel#statsDialogTitle {{ color: {tokens.text_primary}; font-size: 16px; font-weight: 700; }}
+QLabel#dialogTitle {{ color: {tokens.text_primary}; font-weight: 700; }}
+QLabel#detailValue, QLabel#detailHashValue, QLabel#statsDialogSubtitle, QLabel#dialogSubtleLabel {{ color: {tokens.text_secondary}; }}
+QLineEdit#detailPathInput, QLineEdit#detailCustomReasonInput, QTextEdit#detailRemarkEdit {{
+    background: {tokens.input_background}; color: {tokens.text_primary}; border-color: {tokens.border_strong};
+}}
+QLineEdit#detailPathInput:read-only {{ background: {tokens.surface_secondary}; color: {tokens.text_primary}; }}
+QTextEdit#detailRemarkEdit {{ padding: 7px 9px; }}
+QCheckBox#detailImportantCheckbox {{ background: transparent; color: {tokens.text_primary}; }}
+QComboBox#detailRecordTypeCombo, QComboBox#detailImportantReasonCombo {{
+    background: {tokens.input_background}; color: {tokens.text_primary}; border-color: {tokens.border_strong};
+}}
+QLabel#detailStatusBadge {{ background: {tokens.surface}; border-radius: 10px; padding: 2px 10px; font-weight: 700; }}
+QLabel#detailStatusBadge[tone="success"] {{ color: {"#86efac" if is_dark else "#047857"}; border: 1px solid {"#2d6a42" if is_dark else "#86efac"}; }}
+QLabel#detailStatusBadge[tone="warning"] {{ color: {"#fde68a" if is_dark else "#b45309"}; border: 1px solid {"#8a6d30" if is_dark else "#fcd34d"}; }}
+QLabel#detailStatusBadge[tone="error"] {{ color: {"#fecaca" if is_dark else "#b91c1c"}; border: 1px solid {"#9f4048" if is_dark else "#fca5a5"}; }}
+QLabel#detailHashVerify[state="success"] {{ color: {"#86efac" if is_dark else "#047857"}; font-weight: 700; }}
+QLabel#detailHashVerify[state="error"] {{ color: {"#fecaca" if is_dark else "#b91c1c"}; font-weight: 700; }}
+QLabel#detailHashVerify[state="neutral"], QLabel#detailHashStatus {{ color: {tokens.text_secondary}; }}
+QLabel#duplicateDialogTitle, QLabel#historyDialogTitle {{ color: {tokens.text_primary}; font-size: 20px; font-weight: 700; }}
+QLabel#duplicateDialogSubtitle, QLabel#duplicateSelectedLabel, QLabel#historyDialogHint {{ color: {tokens.text_secondary}; }}
+QCheckBox#duplicateRowCheckbox {{ background: transparent; padding: 0; margin: 0; }}
+QCheckBox#duplicateRowCheckbox::indicator {{ background: {tokens.input_background}; border-color: {tokens.border_strong}; }}
+QCheckBox#duplicateRowCheckbox::indicator:checked {{ background: {tokens.primary_button_background}; border-color: {tokens.primary_button_background}; }}
+QWidget#netdiskProgressPanel {{ background: {tokens.surface}; border: 1px solid {tokens.border}; border-radius: 10px; }}
+QProgressBar#netdiskProgressBar {{ background: {tokens.surface_secondary}; border: 1px solid {tokens.border}; border-radius: 5px; }}
+QProgressBar#netdiskProgressBar::chunk {{ background: {tokens.primary_button_background}; border-radius: 4px; }}
+
+/* Statistics cards and read-only drilldown. Business colours stay small and semantic. */
+QFrame#statsMetricCard[metricRole="ship"] {{ background: {"#203429" if is_dark else "#f0fdf4"}; border-color: {"#356344" if is_dark else "#bbf7d0"}; }}
+QFrame#statsMetricCard[metricRole="return"] {{ background: {"#3a301f" if is_dark else "#fffbeb"}; border-color: {"#80652b" if is_dark else "#fde68a"}; }}
+QFrame#statsMetricCard[metricRole="important"] {{ background: {"#3b2527" if is_dark else "#fef2f2"}; border-color: {"#81424a" if is_dark else "#fecaca"}; }}
+QLabel#statsCardTitle, QLabel#statsCardHint, QLabel#statsCardDrillHint {{ color: {tokens.text_secondary}; background: transparent; }}
+QLabel#statsCardValue[metricRole="ship"] {{ color: {"#86efac" if is_dark else "#16a34a"}; }}
+QLabel#statsCardValue[metricRole="return"] {{ color: {"#fde68a" if is_dark else "#d97706"}; }}
+QLabel#statsCardValue[metricRole="important"] {{ color: {"#fecaca" if is_dark else "#dc2626"}; }}
+QLabel#statsCardValue[diffState="positive"] {{ color: {"#86efac" if is_dark else "#16a34a"}; }}
+QLabel#statsCardValue[diffState="negative"] {{ color: {"#fecaca" if is_dark else "#dc2626"}; }}
+QLabel#statsCardValue[diffState="neutral"] {{ color: {tokens.text_secondary}; }}
+QScrollArea#statsTabScrollArea, QScrollArea#statsTabScrollArea::viewport {{ background: {tokens.window_background}; }}
+QScrollArea#statsTabScrollArea > QWidget > QWidget, QWidget#statsTabContent {{ background: {tokens.window_background}; }}
+QFrame#statsChartCard, QFrame#statsReasonCard, QFrame#statsCompareCard {{ background: {tokens.surface}; border: 1px solid {tokens.border}; border-radius: 12px; }}
+QFrame#statsOverviewSection {{ background: {tokens.surface}; border: 1px solid {tokens.border}; border-radius: 12px; }}
+QPushButton#statsQuickButton, QPushButton#statsSegmentButton {{ background: {tokens.surface}; color: {tokens.text_primary}; border-color: {tokens.border_strong}; }}
+QPushButton#statsQuickButton:hover, QPushButton#statsSegmentButton:hover {{ background: {tokens.hover}; }}
+QPushButton#statsQuickButton:checked, QPushButton#statsSegmentButton:checked {{ background: {tokens.selected}; border-color: {tokens.border_strong}; color: {tokens.text_primary}; }}
+QLabel#statsSummaryLabel {{ color: {tokens.text_secondary}; }}
+
+/* Help, menus and common state containers. */
+QTextBrowser#helpContent {{ background: {tokens.surface}; color: {tokens.text_primary}; border: 1px solid {tokens.border}; border-radius: 10px; padding: 8px; }}
+QTabWidget#helpTabs::pane {{ background: transparent; border-color: {tokens.border}; }}
+QToolButton#helpPrevButton, QToolButton#helpNextButton {{ background: transparent; color: {tokens.text_primary}; border: 1px solid transparent; border-radius: 8px; }}
+QToolButton#helpPrevButton:hover, QToolButton#helpNextButton:hover {{ background: {tokens.hover}; border-color: {tokens.border}; }}
+QFrame#emptyStateContainer, QFrame#errorStateContainer, QFrame#loadingStateContainer {{ background: transparent; }}
+QLabel#emptyStateTitle, QLabel#errorStateTitle {{ color: {tokens.text_secondary}; }}
+QLabel#emptyStateHint, QLabel#errorStateHint {{ color: {tokens.text_disabled}; }}
 """

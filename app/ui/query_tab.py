@@ -184,6 +184,7 @@ class FlowLayout(QLayout):
 class ImportantMarkDialog(QDialog):
     def __init__(self, order_no: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("importantMarkDialog")
         self.setWindowTitle("标记为重要")
         DialogSizeManager.apply(self, "important_mark", parent, "small", (420, 260))
         layout = QVBoxLayout(self)
@@ -192,11 +193,11 @@ class ImportantMarkDialog(QDialog):
 
         title = QLabel("该记录将被标记为重要，删除时会额外提醒。")
         title.setWordWrap(True)
-        title.setStyleSheet("font-weight: 700; color: #0f172a;")
+        title.setObjectName("dialogTitle")
         layout.addWidget(title)
 
         order_label = QLabel(f"单号：{order_no or '-'}")
-        order_label.setStyleSheet("color: #475569;")
+        order_label.setObjectName("dialogSubtleLabel")
         layout.addWidget(order_label)
 
         layout.addWidget(QLabel("重要原因："))
@@ -354,6 +355,7 @@ class RecordDetailDialog(QDialog):
         record_updated_callback=None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("recordDetailDialog")
         self.record = self._normalize_record_data(record)
         self.duplicates = [self._normalize_record_data(item) for item in (duplicates or [])]
         self.database = database
@@ -403,7 +405,6 @@ class RecordDetailDialog(QDialog):
         header_layout.setSpacing(10)
         order_title = QLabel(self._field("order_no", "-"))
         order_title.setObjectName("detailOrderTitle")
-        order_title.setStyleSheet("font-size: 22px; font-weight: 700; color: #0f172a;")
         header_layout.addWidget(order_title, 1)
         file_status = self._field("status", NORMAL_STATUS)
         header_layout.addWidget(self._status_badge(file_status, self._file_status_color(file_status)))
@@ -589,7 +590,7 @@ class RecordDetailDialog(QDialog):
         value_label.setWordWrap(False)
         value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        value_label.setStyleSheet("color: #0f172a;")
+        value_label.setObjectName("detailValue")
         value_label.setToolTip(value)
         grid.addWidget(name, row, label_column, Qt.AlignLeft | Qt.AlignVCenter)
         grid.addWidget(value_label, row, label_column + 1, Qt.AlignLeft | Qt.AlignVCenter)
@@ -599,7 +600,7 @@ class RecordDetailDialog(QDialog):
         value_label = QLabel(value)
         value_label.setWordWrap(True)
         value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        value_label.setStyleSheet("color: #0f172a;")
+        value_label.setObjectName("detailValue")
         grid.addWidget(name, row, 0, Qt.AlignLeft | Qt.AlignTop)
         grid.addWidget(value_label, row, 1)
         return row + 1
@@ -755,6 +756,7 @@ class RecordDetailDialog(QDialog):
     def _add_copy_row(self, grid: QGridLayout, row: int, label: str, value: str) -> int:
         name = self._detail_label(label)
         line = QLineEdit(value)
+        line.setObjectName("detailPathInput")
         line.setReadOnly(True)
         button = QPushButton("复制")
         button.setObjectName("secondaryButton")
@@ -817,7 +819,7 @@ class RecordDetailDialog(QDialog):
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(8)
         self.hash_status_label = QLabel("")
-        self.hash_status_label.setStyleSheet("color: #64748b;")
+        self.hash_status_label.setObjectName("detailHashStatus")
         self.hash_generate_button = QPushButton("生成校验码")
         self.hash_generate_button.setObjectName("secondaryButton")
         self.hash_generate_button.clicked.connect(self._start_hash_generation)
@@ -832,7 +834,7 @@ class RecordDetailDialog(QDialog):
 
     def _add_hash_label_row(self, grid: QGridLayout, row: int, label: str, value_widget: QLabel) -> int:
         name = self._detail_label(label)
-        value_widget.setStyleSheet("color: #0f172a;")
+        value_widget.setObjectName("detailHashValue")
         grid.addWidget(name, row, 0, Qt.AlignLeft | Qt.AlignVCenter)
         grid.addWidget(value_widget, row, 1, Qt.AlignLeft | Qt.AlignVCenter)
         return row + 1
@@ -862,8 +864,11 @@ class RecordDetailDialog(QDialog):
         if verify_at:
             verify_text = f"{verify_status}（{verify_at}）"
         self.hash_verify_value.setText(verify_text)
-        verify_color = "#dc2626" if verify_status in {"不一致", "文件不存在"} else "#047857" if verify_status == "通过" else "#0f172a"
-        self.hash_verify_value.setStyleSheet(f"color: {verify_color}; font-weight: 700;" if verify_status != "未校验" else "color: #0f172a;")
+        verify_state = "error" if verify_status in {"不一致", "文件不存在"} else "success" if verify_status == "通过" else "neutral"
+        self.hash_verify_value.setObjectName("detailHashVerify")
+        self.hash_verify_value.setProperty("state", verify_state)
+        self.hash_verify_value.style().unpolish(self.hash_verify_value)
+        self.hash_verify_value.style().polish(self.hash_verify_value)
         self.hash_generate_button.setText("重新生成校验码" if hash_value else "生成校验码")
         self.hash_status_label.setText("" if enabled else "哈希校验未开启，可手动生成或校验。")
 
@@ -1032,11 +1037,10 @@ class RecordDetailDialog(QDialog):
 
     def _status_badge(self, text: str, color: str) -> QLabel:
         badge = QLabel(text)
+        badge.setObjectName("detailStatusBadge")
         badge.setAlignment(Qt.AlignCenter)
-        badge.setStyleSheet(
-            f"color: {color}; border: 1px solid {color}; border-radius: 10px; "
-            "padding: 2px 10px; font-weight: 700; background: #ffffff;"
-        )
+        tone = "error" if color.lower() in {"#dc2626", "#ef4444", "#b91c1c"} else "warning" if color.lower() in {"#d97706", "#f59e0b", "#b45309"} else "success"
+        badge.setProperty("tone", tone)
         return badge
 
     def _field(self, key: str, default: str = "") -> str:
@@ -1151,6 +1155,7 @@ class DuplicateRecordsDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("duplicateRecordsDialog")
         self.database = database
         self.order_no = str(order_no or "").strip()
         self.query_dir = Path(query_dir)
@@ -1181,11 +1186,11 @@ class DuplicateRecordsDialog(QDialog):
         title_block = QVBoxLayout()
         title_block.setSpacing(4)
         title = QLabel("重复单号记录")
-        title.setStyleSheet("font-size: 20px; font-weight: 700; color: #0f172a;")
+        title.setObjectName("duplicateDialogTitle")
         title_block.addWidget(title)
 
         self.subtitle_label = QLabel("")
-        self.subtitle_label.setStyleSheet("color: #475569; font-size: 13px;")
+        self.subtitle_label.setObjectName("duplicateDialogSubtitle")
         title_block.addWidget(self.subtitle_label)
         header_layout.addLayout(title_block, 1)
 
@@ -1228,7 +1233,7 @@ class DuplicateRecordsDialog(QDialog):
 
         footer = QHBoxLayout()
         self.selected_label = QLabel("已选择 0 条")
-        self.selected_label.setStyleSheet("color: #64748b;")
+        self.selected_label.setObjectName("duplicateSelectedLabel")
         footer.addWidget(self.selected_label)
         footer.addStretch(1)
         layout.addLayout(footer)
@@ -1257,11 +1262,11 @@ class DuplicateRecordsDialog(QDialog):
         checkbox.setCursor(Qt.PointingHandCursor)
         checkbox.setFixedSize(18, 18)
         checkbox.stateChanged.connect(lambda _state: self._update_selected_count())
-        checkbox.setStyleSheet(self._checkbox_style())
+        checkbox.setObjectName("duplicateRowCheckbox")
         self.checkboxes[record_id] = checkbox
         checkbox_container = QWidget()
         checkbox_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        checkbox_container.setStyleSheet("background: transparent;")
+        checkbox_container.setObjectName("duplicateCheckboxHost")
         checkbox_layout = QHBoxLayout(checkbox_container)
         checkbox_layout.setContentsMargins(0, 0, 0, 0)
         checkbox_layout.setAlignment(Qt.AlignCenter)
@@ -1321,7 +1326,7 @@ class DuplicateRecordsDialog(QDialog):
         self.select_all_checkbox = QCheckBox(header)
         self.select_all_checkbox.setCursor(Qt.PointingHandCursor)
         self.select_all_checkbox.setFixedSize(18, 18)
-        self.select_all_checkbox.setStyleSheet(self._checkbox_style())
+        self.select_all_checkbox.setObjectName("duplicateRowCheckbox")
         self.select_all_checkbox.stateChanged.connect(self._on_select_all_checkbox_changed)
         header.sectionResized.connect(lambda *_args: self._position_select_all_checkbox())
         header.geometriesChanged.connect(self._position_select_all_checkbox)
@@ -1375,15 +1380,6 @@ class DuplicateRecordsDialog(QDialog):
         self.select_all_checkbox.blockSignals(True)
         self.select_all_checkbox.setChecked(total > 0 and selected == total)
         self.select_all_checkbox.blockSignals(False)
-
-    @staticmethod
-    def _checkbox_style() -> str:
-        return (
-            "QCheckBox { background: transparent; padding: 0; margin: 0; }"
-            "QCheckBox::indicator { width: 16px; height: 16px; border: 1px solid #CBD5E1; "
-            "border-radius: 3px; background: #FFFFFF; }"
-            "QCheckBox::indicator:checked { background: #0F766E; border-color: #0F766E; }"
-        )
 
     def _selected_records(self) -> list[dict[str, Any]]:
         selected_ids = {record_id for record_id, checkbox in self.checkboxes.items() if checkbox.isChecked()}
@@ -1554,6 +1550,7 @@ class NetdiskHistoryDialog(QDialog):
 
     def __init__(self, database: DatabaseManager, logger: logging.Logger, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("netdiskHistoryDialog")
         self.database = database
         self.logger = logger
         self.current_page = 1
@@ -1577,7 +1574,7 @@ class NetdiskHistoryDialog(QDialog):
         layout.setSpacing(12)
 
         title = QLabel("网盘同步记录")
-        title.setStyleSheet("font-size: 20px; font-weight: 700; color: #0f172a;")
+        title.setObjectName("historyDialogTitle")
         layout.addWidget(title)
 
         filter_layout = QHBoxLayout()
@@ -1657,7 +1654,7 @@ class NetdiskHistoryDialog(QDialog):
         layout.addWidget(self.table, 1)
 
         self.hint_label = QLabel("右键单号或远程路径可复制。")
-        self.hint_label.setStyleSheet("color: #64748b; font-size: 12px;")
+        self.hint_label.setObjectName("historyDialogHint")
         layout.addWidget(self.hint_label)
 
         pagination = QHBoxLayout()
