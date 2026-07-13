@@ -255,6 +255,19 @@ QToolButton#statsButton:hover, QToolButton#settingsButton:hover, QToolButton#hel
     background: {tokens.hover};
     border-color: {tokens.border};
 }}
+QToolButton#windowMinButton, QToolButton#windowMaxButton, QToolButton#windowCloseButton {{
+    margin: 7px 0;
+    min-width: 34px; max-width: 34px;
+    min-height: 34px; max-height: 34px;
+    padding: 0;
+    background: transparent;
+    color: {tokens.text_secondary};
+    border: 1px solid transparent;
+    border-radius: 8px;
+    font-size: 14px;
+}}
+QToolButton#windowMinButton:hover, QToolButton#windowMaxButton:hover {{ background: {tokens.hover}; color: {tokens.text_primary}; }}
+QToolButton#windowCloseButton:hover {{ background: {"#5b3035" if is_dark else "#fef2f2"}; color: {"#fecaca" if is_dark else "#b91c1c"}; border-color: {"#9f4048" if is_dark else "#fca5a5"}; }}
 QStatusBar {{
     background: {tokens.topbar_background};
     color: {tokens.text_secondary};

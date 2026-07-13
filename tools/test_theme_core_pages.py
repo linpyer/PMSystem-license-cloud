@@ -36,6 +36,9 @@ def main() -> int:
             assert not window.stats_button.icon().isNull()
             assert not window.settings_button.icon().isNull()
             assert not window.help_button.icon().isNull()
+            assert not window.window_min_button.icon().isNull()
+            assert not window.window_max_button.icon().isNull()
+            assert not window.window_close_button.icon().isNull()
             assert len(window.findChildren(QTableWidget)) >= 1
             window.show()
             app.processEvents()

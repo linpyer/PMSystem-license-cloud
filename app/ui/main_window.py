@@ -4,7 +4,7 @@ import logging
 import time
 import traceback
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -145,6 +145,7 @@ class StatusTipLabel(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self, config_manager: ConfigManager, logger: logging.Logger, theme_manager=None) -> None:
         super().__init__()
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         self.config_manager = config_manager
         self.logger = logger
         self.theme_manager = theme_manager
@@ -154,6 +155,8 @@ class MainWindow(QMainWindow):
         self._last_toast_message = ""
         self._last_toast_time = 0.0
         self._last_video_root_dir = str(self.config_manager.get_video_dir())
+        self._window_drag_offset: QPoint | None = None
+        self._resolved_theme = "light"
 
         self.setWindowTitle(APP_TITLE)
         icon_path = resource_path("app/assets/app_icon.ico")
@@ -226,6 +229,8 @@ class MainWindow(QMainWindow):
 
     def changeEvent(self, event) -> None:  # type: ignore[override]
         super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange:
+            self._apply_window_control_icons()
         if event.type() == QEvent.ActivationChange and self.isActiveWindow():
             QTimer.singleShot(100, self._restore_monitor_focus)
 
@@ -332,20 +337,25 @@ class MainWindow(QMainWindow):
 
     def _setup_help_entry(self) -> None:
         brand = QWidget(self)
+        self.navigation_brand = brand
         brand.setObjectName("navigationBrand")
         brand_layout = QHBoxLayout(brand)
         brand_layout.setContentsMargins(14, 0, 16, 0)
         brand_layout.setSpacing(8)
         icon_label = QLabel(brand)
+        self.navigation_brand_icon = icon_label
         icon_label.setObjectName("navigationBrandIcon")
         icon_path = resource_path("app/assets/app_icon.ico")
         if icon_path.exists():
             icon_label.setPixmap(QPixmap(str(icon_path)).scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         title_label = QLabel(APP_TITLE, brand)
+        self.navigation_brand_title = title_label
         title_label.setObjectName("navigationBrandTitle")
         brand_layout.addWidget(icon_label)
         brand_layout.addWidget(title_label)
         self.tabs.setCornerWidget(brand, Qt.TopLeftCorner)
+        for widget in (brand, icon_label, title_label):
+            widget.installEventFilter(self)
 
         corner = QWidget(self)
         corner_layout = QHBoxLayout(corner)
@@ -369,12 +379,60 @@ class MainWindow(QMainWindow):
         self.help_button.setToolTip("使用说明")
         self.help_button.setFocusPolicy(Qt.NoFocus)
         self.help_button.clicked.connect(self._show_help_dialog)
+        self.window_min_button = QToolButton(self)
+        self.window_min_button.setObjectName("windowMinButton")
+        self.window_min_button.setToolTip("最小化")
+        self.window_min_button.setFocusPolicy(Qt.NoFocus)
+        self.window_min_button.clicked.connect(self.showMinimized)
+
+        self.window_max_button = QToolButton(self)
+        self.window_max_button.setObjectName("windowMaxButton")
+        self.window_max_button.setToolTip("最大化")
+        self.window_max_button.setFocusPolicy(Qt.NoFocus)
+        self.window_max_button.clicked.connect(self._toggle_maximized)
+
+        self.window_close_button = QToolButton(self)
+        self.window_close_button.setObjectName("windowCloseButton")
+        self.window_close_button.setToolTip("关闭")
+        self.window_close_button.setFocusPolicy(Qt.NoFocus)
+        self.window_close_button.clicked.connect(self.close)
         corner_layout.addWidget(self.stats_button)
         corner_layout.addWidget(self.settings_button)
         corner_layout.addWidget(self.help_button)
+        corner_layout.addSpacing(4)
+        corner_layout.addWidget(self.window_min_button)
+        corner_layout.addWidget(self.window_max_button)
+        corner_layout.addWidget(self.window_close_button)
         self.tabs.setCornerWidget(corner, Qt.TopRightCorner)
 
+    def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
+        if watched in {self.navigation_brand, self.navigation_brand_icon, self.navigation_brand_title}:
+            if event.type() == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+                self._toggle_maximized()
+                return True
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                if not self.isMaximized():
+                    self._window_drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                return True
+            if event.type() == QEvent.MouseMove and self._window_drag_offset is not None and event.buttons() & Qt.LeftButton:
+                self.move(event.globalPosition().toPoint() - self._window_drag_offset)
+                return True
+            if event.type() == QEvent.MouseButtonRelease:
+                self._window_drag_offset = None
+                return True
+        return super().eventFilter(watched, event)
+
+    def _toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+            self.window_max_button.setToolTip("最大化")
+        else:
+            self.showMaximized()
+            self.window_max_button.setToolTip("恢复")
+        self._apply_window_control_icons()
+
     def _apply_navigation_icons(self, _mode: str = "system", resolved_theme: str = "light") -> None:
+        self._resolved_theme = resolved_theme
         suffix = "-light" if resolved_theme == "dark" else ""
         icon_specs = (
             (self.stats_button, f"app/assets/icons/chart-bars{suffix}.svg", QSize(18, 18)),
@@ -390,6 +448,22 @@ class MainWindow(QMainWindow):
             else:
                 button.setIcon(QIcon())
                 button.setText("?" if button is self.help_button else "")
+        self._apply_window_control_icons()
+
+    def _apply_window_control_icons(self) -> None:
+        if not hasattr(self, "window_min_button"):
+            return
+        suffix = "-light" if self._resolved_theme == "dark" else ""
+        max_icon = "window-restore" if self.isMaximized() else "window-maximize"
+        specs = (
+            (self.window_min_button, "window-minimize"),
+            (self.window_max_button, max_icon),
+            (self.window_close_button, "window-close"),
+        )
+        for button, icon_name in specs:
+            path = resource_path(f"app/assets/icons/{icon_name}{suffix}.svg")
+            button.setIcon(QIcon(str(path)) if path.exists() else QIcon())
+            button.setIconSize(QSize(18, 18))
 
     def _show_stats_dialog(self) -> None:
         self.logger.info("用户打开打包发货统计弹窗")
