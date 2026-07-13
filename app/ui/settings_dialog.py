@@ -363,17 +363,20 @@ class SettingsDialog(QDialog):
 
     def _build_basic_tab(self) -> QWidget:
         widget = QWidget()
+        widget.setObjectName("settingsBasicTab")
         root_layout = QVBoxLayout(widget)
         root_layout.setContentsMargins(12, 12, 12, 12)
         root_layout.setSpacing(12)
 
         scroll = QScrollArea()
+        scroll.setObjectName("settingsBasicScrollArea")
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setFrameShape(QFrame.NoFrame)
 
         content = QWidget()
+        content.setObjectName("settingsBasicScrollContent")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
@@ -591,8 +594,10 @@ class SettingsDialog(QDialog):
         scroll.setWidget(content)
         root_layout.addWidget(scroll, 1)
 
-        action_layout = QHBoxLayout()
-        action_layout.setContentsMargins(0, 0, 0, 0)
+        action_bar = QWidget()
+        action_bar.setObjectName("settingsBasicActionBar")
+        action_layout = QHBoxLayout(action_bar)
+        action_layout.setContentsMargins(0, 8, 0, 0)
         self.restore_recommended_button = QPushButton("恢复推荐参数")
         self.restore_recommended_button.setObjectName("secondaryButton")
         tune_button(self.restore_recommended_button)
@@ -604,11 +609,12 @@ class SettingsDialog(QDialog):
         tune_button(self.apply_basic_config_button)
         self.apply_basic_config_button.clicked.connect(self._save_basic_config)
         action_layout.addWidget(self.apply_basic_config_button)
-        root_layout.addLayout(action_layout)
+        root_layout.addWidget(action_bar)
         return widget
 
     def _build_voice_tab(self) -> QWidget:
         widget = QWidget()
+        widget.setObjectName("settingsVoiceTab")
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(14)
@@ -741,71 +747,6 @@ class SettingsDialog(QDialog):
 
         self.custom_voice_panel, custom_layout = self._settings_card("自定义语音包")
         self.custom_voice_panel.setObjectName("customVoicePanel")
-        self.custom_voice_panel.setStyleSheet(
-            """
-            QLabel#sectionTitle {
-                color: #0f766e;
-                font-weight: 700;
-            }
-            QLabel#tableHeaderLabel {
-                color: #475569;
-                font-weight: 700;
-            }
-            QScrollArea#voiceTableScroll,
-            QScrollArea#voiceTableScroll QWidget#voiceTableWidget {
-                background: #ffffff;
-                border: none;
-            }
-            QFrame#voiceRecordRow {
-                background: #ffffff;
-                border: none;
-            }
-            QFrame#voiceRecordRow:hover {
-                background: #f8fafc;
-            }
-            QFrame#voiceRecordSeparator {
-                background: #e2e8f0;
-                border: none;
-                min-height: 1px;
-                max-height: 1px;
-            }
-            QPushButton {
-                min-height: 28px;
-                max-height: 30px;
-                padding: 2px 8px;
-            }
-            QPushButton#voiceUploadButton {
-                color: #0f766e;
-                border: 1px solid #0f766e;
-                background: #ffffff;
-                border-radius: 5px;
-                font-weight: 600;
-            }
-            QPushButton#voiceUploadButton:hover {
-                background: #ecfdf5;
-            }
-            QPushButton#voicePreviewButton {
-                color: #2563eb;
-                border: 1px solid #93c5fd;
-                background: #ffffff;
-                border-radius: 5px;
-                font-weight: 600;
-            }
-            QPushButton#voicePreviewButton:hover {
-                background: #eff6ff;
-            }
-            QPushButton#voiceResetButton {
-                color: #64748b;
-                border: 1px solid #cbd5e1;
-                background: #ffffff;
-                border-radius: 5px;
-                font-weight: 600;
-            }
-            QPushButton#voiceResetButton:hover {
-                background: #f8fafc;
-            }
-            """
-        )
 
         scroll = QScrollArea()
         scroll.setObjectName("voiceTableScroll")
@@ -868,6 +809,7 @@ class SettingsDialog(QDialog):
             button_row.addWidget(reset_button)
             button_row.addStretch(1)
             button_widget = QWidget()
+            button_widget.setObjectName("voiceRecordActions")
             button_widget.setLayout(button_row)
             button_widget.setMinimumHeight(36)
 
@@ -892,14 +834,15 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.voice_config_stack, 0, Qt.AlignTop)
 
         action_layout = QHBoxLayout()
+        action_layout.setContentsMargins(0, 8, 0, 0)
         action_layout.addStretch(1)
         self.voice_action_button = QPushButton("保存设置")
         self.voice_action_button.setObjectName("primaryButton")
         self.voice_action_button.setMinimumWidth(150)
         self.voice_action_button.clicked.connect(self._on_voice_action_clicked)
         action_layout.addWidget(self.voice_action_button)
-        action_layout.addStretch(1)
         action_widget = QWidget()
+        action_widget.setObjectName("settingsVoiceActionBar")
         action_widget.setFixedHeight(54)
         action_widget.setLayout(action_layout)
         layout.addWidget(action_widget)
@@ -1047,14 +990,18 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.netdisk_config_stack)
 
         action_layout = QHBoxLayout()
+        action_layout.setContentsMargins(0, 8, 0, 0)
         action_layout.addStretch(1)
         self.netdisk_save_button = QPushButton("保存设置")
         self.netdisk_save_button.setObjectName("primaryButton")
         self.netdisk_save_button.setMinimumWidth(150)
         self.netdisk_save_button.clicked.connect(self._save_netdisk_settings)
         action_layout.addWidget(self.netdisk_save_button)
-        action_layout.addStretch(1)
-        layout.addLayout(action_layout)
+        action_widget = QWidget()
+        action_widget.setObjectName("settingsNetdiskActionBar")
+        action_widget.setFixedHeight(54)
+        action_widget.setLayout(action_layout)
+        layout.addWidget(action_widget)
         return widget
 
     def _export_config(self) -> None:

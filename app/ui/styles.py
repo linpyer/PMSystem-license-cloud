@@ -14,8 +14,7 @@ APP_STYLES = """
     color: #1f2937;
 }
 
-QMainWindow,
-QWidget {
+QMainWindow {
     background: #f4f6f8;
 }
 

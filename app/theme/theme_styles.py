@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.theme.theme_tokens import ThemeTokens
+from app.utils.runtime_paths import resource_path
 
 
 def build_theme_styles(tokens: ThemeTokens) -> str:
@@ -15,6 +16,7 @@ def build_theme_styles(tokens: ThemeTokens) -> str:
     warning_text = "#fbbf24" if is_dark else "#b45309"
     danger_hover = "#44272b" if is_dark else "#fef2f2"
     danger_hover_text = "#fecaca" if is_dark else "#b91c1c"
+    checkmark_path = resource_path("app/assets/checkmark-dark.svg" if is_dark else "app/assets/checkmark.svg").as_posix()
 
     return f"""
 /* Theme foundation. Object-specific business status styles remain local. */
@@ -84,6 +86,14 @@ QPushButton#secondaryButton {{
     border-color: {tokens.border_strong};
     color: {tokens.text_primary};
 }}
+QPushButton[buttonRole="danger"]:enabled {{
+    background: {"#5b3035" if is_dark else "#fef2f2"};
+    border-color: {"#9f4048" if is_dark else "#fca5a5"};
+    color: {"#fecaca" if is_dark else "#b91c1c"};
+}}
+QPushButton[buttonRole="danger"]:enabled:hover {{
+    background: {"#6f363d" if is_dark else "#fee2e2"};
+}}
 QPushButton:disabled, QToolButton:disabled {{
     background: {tokens.surface_secondary};
     color: {tokens.text_disabled};
@@ -95,20 +105,35 @@ QCheckBox, QRadioButton {{
     background: transparent;
 }}
 QCheckBox::indicator, QRadioButton::indicator {{
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     border: 1px solid {tokens.border_strong};
     background: {tokens.input_background};
 }}
 QCheckBox::indicator {{ border-radius: 4px; }}
-QRadioButton::indicator {{ border-radius: 8px; }}
-QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+QRadioButton::indicator {{ border-radius: 9px; }}
+QCheckBox::indicator:checked {{
     background: {tokens.primary_button_background};
     border-color: {tokens.primary_button_background};
+    image: url("{checkmark_path}");
 }}
+QRadioButton::indicator:checked {{
+    border: 5px solid {tokens.primary_button_background};
+    background: {tokens.input_background};
+}}
+QCheckBox:disabled, QRadioButton:disabled {{ color: {tokens.text_disabled}; }}
 QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
     background: {tokens.surface_secondary};
     border-color: {tokens.border};
+}}
+QCheckBox::indicator:checked:disabled {{
+    background: {tokens.border_strong};
+    border-color: {tokens.border_strong};
+    image: url("{checkmark_path}");
+}}
+QRadioButton::indicator:checked:disabled {{
+    border-color: {tokens.border_strong};
+    background: {tokens.surface_secondary};
 }}
 QTabWidget::pane {{
     background: {tokens.window_background};
@@ -180,6 +205,7 @@ QScrollBar::handle:horizontal {{
 QScrollBar::handle:horizontal:hover {{ background: {tokens.border_strong}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; background: transparent; border: none; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
+QScrollBar::corner {{ background: {tokens.window_background}; border: none; }}
 QToolTip {{
     background: {tokens.surface};
     color: {tokens.text_primary};
@@ -418,6 +444,20 @@ QLabel#videoTableStateTitle {{ color: {tokens.text_primary}; }}
 QFrame#videoSkeletonBlock {{ background: {tokens.border}; }}
 
 QDialog#settingsDialog {{ background: {tokens.window_background}; }}
+QWidget#settingsBasicTab, QScrollArea#settingsBasicScrollArea,
+QScrollArea#settingsBasicScrollArea::viewport, QWidget#settingsBasicScrollContent,
+QWidget#settingsBasicActionBar, QWidget#settingsVoiceTab {{
+    background: {tokens.window_background};
+    border: none;
+}}
+QWidget#settingsBasicActionBar, QWidget#settingsVoiceActionBar, QWidget#settingsNetdiskActionBar {{
+    background: {tokens.window_background};
+    border: none;
+    border-top: 1px solid {tokens.border};
+    min-height: 46px;
+    padding: 0;
+    margin: 0;
+}}
 QFrame#settingsCard, QFrame#customVoicePanel, QFrame#configManagementCard, QFrame#changelogCard {{
     background: {tokens.surface};
     border-color: {tokens.border};
@@ -427,6 +467,8 @@ QLabel#configManagementHint, QLabel#changelogItem, QLabel#changelogSection {{ co
 QWidget#voiceModePanel, QWidget#transparentSettingsRow, QWidget#voiceTableWidget, QScrollArea#voiceTableScroll {{
     background: transparent;
 }}
+QScrollArea#voiceTableScroll::viewport, QScrollArea#voiceTableScroll > QWidget > QWidget,
+QWidget#voiceRecordActions {{ background: transparent; border: none; }}
 QCheckBox#settingsMainCheckBox, QCheckBox#settingsInlineCheckBox {{
     color: {tokens.text_primary};
     background: transparent;
@@ -438,16 +480,12 @@ QCheckBox#settingsMainCheckBox::indicator, QCheckBox#settingsInlineCheckBox::ind
 QCheckBox#settingsMainCheckBox::indicator:checked, QCheckBox#settingsInlineCheckBox::indicator:checked {{
     background: {tokens.primary_button_background};
     border-color: {tokens.primary_button_background};
+    image: url("{checkmark_path}");
 }}
 QWidget#voiceModePanel QRadioButton {{ color: {tokens.text_primary}; }}
 QWidget#voiceModePanel QRadioButton::indicator {{ border-color: {tokens.border_strong}; background: {tokens.input_background}; }}
-QWidget#voiceModePanel QRadioButton::indicator:checked {{
-    border-color: {tokens.primary_button_background};
-    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
-        stop:0 {tokens.primary_button_background}, stop:0.42 {tokens.primary_button_background},
-        stop:0.46 {tokens.input_background}, stop:1 {tokens.input_background});
-}}
-QFrame#voiceRecordRow {{ background: {tokens.surface}; border: none; }}
+QWidget#voiceModePanel QRadioButton::indicator:checked {{ border: 5px solid {tokens.primary_button_background}; background: {tokens.input_background}; }}
+QFrame#voiceRecordRow {{ background: transparent; border: none; }}
 QFrame#voiceRecordRow:hover {{ background: {tokens.hover}; }}
 QFrame#voiceRecordSeparator {{ background: {tokens.border}; }}
 QPushButton#voiceUploadButton, QPushButton#voicePreviewButton, QPushButton#voiceResetButton {{
@@ -469,7 +507,11 @@ QLabel#authStatusTag[status="ok"] {{ background: {"#173824" if is_dark else "#f0
 QDialog#importantMarkDialog, QDialog#recordDetailDialog, QDialog#duplicateRecordsDialog,
 QDialog#netdiskHistoryDialog, QDialog#statsDetailDialog, QDialog#packagingStatsDialog,
 QDialog#helpDialog {{ background: {tokens.window_background}; }}
-QScrollArea#recordDetailScrollArea, QWidget#recordDetailContent {{ background: transparent; }}
+QScrollArea#recordDetailScrollArea, QScrollArea#recordDetailScrollArea::viewport,
+QScrollArea#recordDetailScrollArea > QWidget > QWidget, QWidget#recordDetailContent {{
+    background: {tokens.window_background};
+    border: none;
+}}
 QFrame#recordDetailCard, QFrame#statsPanelCard, QFrame#statsMetricCard {{
     background: {tokens.surface}; border: 1px solid {tokens.border}; border-radius: 12px;
 }}
@@ -484,6 +526,8 @@ QLineEdit#detailPathInput, QLineEdit#detailCustomReasonInput, QTextEdit#detailRe
 QLineEdit#detailPathInput:read-only {{ background: {tokens.surface_secondary}; color: {tokens.text_primary}; }}
 QTextEdit#detailRemarkEdit {{ padding: 7px 9px; }}
 QCheckBox#detailImportantCheckbox {{ background: transparent; color: {tokens.text_primary}; }}
+QCheckBox#detailImportantCheckbox::indicator, QCheckBox#duplicateRowCheckbox::indicator {{ background: {tokens.input_background}; border-color: {tokens.border_strong}; }}
+QCheckBox#detailImportantCheckbox::indicator:checked, QCheckBox#duplicateRowCheckbox::indicator:checked {{ background: {tokens.primary_button_background}; border-color: {tokens.primary_button_background}; image: url("{checkmark_path}"); }}
 QComboBox#detailRecordTypeCombo, QComboBox#detailImportantReasonCombo {{
     background: {tokens.input_background}; color: {tokens.text_primary}; border-color: {tokens.border_strong};
 }}
@@ -498,7 +542,7 @@ QLabel#duplicateDialogTitle, QLabel#historyDialogTitle {{ color: {tokens.text_pr
 QLabel#duplicateDialogSubtitle, QLabel#duplicateSelectedLabel, QLabel#historyDialogHint {{ color: {tokens.text_secondary}; }}
 QCheckBox#duplicateRowCheckbox {{ background: transparent; padding: 0; margin: 0; }}
 QCheckBox#duplicateRowCheckbox::indicator {{ background: {tokens.input_background}; border-color: {tokens.border_strong}; }}
-QCheckBox#duplicateRowCheckbox::indicator:checked {{ background: {tokens.primary_button_background}; border-color: {tokens.primary_button_background}; }}
+QCheckBox#duplicateRowCheckbox::indicator:checked {{ background: {tokens.primary_button_background}; border-color: {tokens.primary_button_background}; image: url("{checkmark_path}"); }}
 QWidget#netdiskProgressPanel {{ background: {tokens.surface}; border: 1px solid {tokens.border}; border-radius: 10px; }}
 QProgressBar#netdiskProgressBar {{ background: {tokens.surface_secondary}; border: 1px solid {tokens.border}; border-radius: 5px; }}
 QProgressBar#netdiskProgressBar::chunk {{ background: {tokens.primary_button_background}; border-radius: 4px; }}
@@ -565,7 +609,16 @@ QTabWidget#mainNavigation QTabBar::tab:hover:!selected {{
 QWidget#navigationBrand {{ background: transparent; }}
 QWidget#navigationActions {{ background: {tokens.topbar_background}; }}
 QLabel#navigationBrandTitle {{ color: {tokens.text_primary}; font-weight: 700; font-size: 11pt; }}
-QLabel#navigationBrandIcon {{ background: transparent; min-width: 20px; min-height: 20px; }}
+QLabel#navigationBrandIcon {{
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    min-width: 22px;
+    min-height: 22px;
+    max-width: 22px;
+    max-height: 22px;
+}}
 
 QWidget#monitorPage, QWidget#videoQueryPage {{ background: {tokens.window_background}; }}
 QFrame#previewContainer {{
@@ -609,6 +662,10 @@ QRadioButton#recordTypeRadio::indicator:checked {{
         stop:0 {tokens.focus_border}, stop:0.40 {tokens.focus_border},
         stop:0.44 {tokens.input_background}, stop:1 {tokens.input_background});
 }}
+QRadioButton#recordTypeRadio[recordType="ship"]:checked {{ color: {"#86efac" if is_dark else "#047857"}; }}
+QRadioButton#recordTypeRadio[recordType="return"]:checked {{ color: {"#fde68a" if is_dark else "#c2410c"}; }}
+QRadioButton#recordTypeRadio[recordType="ship"]::indicator:checked {{ border: 5px solid {"#4b9b61" if is_dark else "#16a34a"}; background: {tokens.input_background}; }}
+QRadioButton#recordTypeRadio[recordType="return"]::indicator:checked {{ border: 5px solid {"#c79435" if is_dark else "#d97706"}; background: {tokens.input_background}; }}
 QLineEdit#scanInput {{ min-height: 38px; padding: 5px 10px; border-radius: 8px; }}
 QPushButton#stopButton {{
     background: {"#5b3035" if is_dark else "#fef2f2"};

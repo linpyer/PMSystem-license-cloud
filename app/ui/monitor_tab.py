@@ -564,6 +564,8 @@ class MonitorTab(QWidget):
         self.return_record_type_radio = QRadioButton("退货")
         self.ship_record_type_radio.setObjectName("recordTypeRadio")
         self.return_record_type_radio.setObjectName("recordTypeRadio")
+        self.ship_record_type_radio.setProperty("recordType", "ship")
+        self.return_record_type_radio.setProperty("recordType", "return")
         self.ship_record_type_radio.setChecked(True)
         self.record_type_button_group = QButtonGroup(self)
         self.record_type_button_group.setExclusive(True)

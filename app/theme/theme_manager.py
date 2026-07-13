@@ -3,8 +3,8 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtWidgets import QApplication, QWidget
 
 from app.theme.theme_styles import build_theme_styles
 from app.theme.theme_tokens import ThemeTokens, normalize_theme_mode, tokens_for
@@ -26,6 +26,7 @@ class ThemeManager(QObject):
         self._mode = self._configured_mode()
         self._preview_origin_mode: str | None = None
         self._system_signal_connected = False
+        self._app.installEventFilter(self)
         self._connect_system_theme_signal()
 
     def current_mode(self) -> str:
@@ -123,7 +124,36 @@ class ThemeManager(QObject):
         for widget in self._app.topLevelWidgets():
             if not widget.isVisible():
                 continue
+            self._apply_native_window_chrome(widget)
             style = widget.style()
             style.unpolish(widget)
             style.polish(widget)
             widget.update()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # type: ignore[override]
+        if event.type() == QEvent.Show and isinstance(watched, QWidget) and watched.isWindow():
+            self._apply_native_window_chrome(watched)
+        return super().eventFilter(watched, event)
+
+    def _apply_native_window_chrome(self, widget: QWidget) -> None:
+        """Apply the current palette to Windows-managed dialog title bars when available."""
+        if sys.platform != "win32" or not widget.isWindow():
+            return
+        try:
+            import ctypes
+
+            tokens = self.current_tokens()
+
+            def color_ref(value: str) -> int:
+                value = value.lstrip("#")
+                red, green, blue = int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+                return red | (green << 8) | (blue << 16)
+
+            hwnd = int(widget.winId())
+            dark = ctypes.c_int(1 if self.resolved_theme() == "dark" else 0)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(dark), ctypes.sizeof(dark))
+            for attribute, value in ((35, tokens.topbar_background), (36, tokens.text_primary), (34, tokens.border)):
+                color = ctypes.c_uint(color_ref(value))
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attribute, ctypes.byref(color), ctypes.sizeof(color))
+        except (AttributeError, OSError, ValueError):
+            return

@@ -345,7 +345,12 @@ class MainWindow(QMainWindow):
         icon_label = QLabel(brand)
         self.navigation_brand_icon = icon_label
         icon_label.setObjectName("navigationBrandIcon")
-        icon_path = resource_path("app/assets/app_icon.ico")
+        icon_label.setFixedSize(22, 22)
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.clear()
+        icon_path = resource_path("app/assets/app_icon_transparent.png")
+        if not icon_path.exists():
+            icon_path = resource_path("app/assets/app_icon.ico")
         if icon_path.exists():
             icon_label.setPixmap(QPixmap(str(icon_path)).scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         title_label = QLabel(APP_TITLE, brand)
