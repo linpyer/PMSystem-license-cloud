@@ -516,4 +516,157 @@ QToolButton#helpPrevButton:hover, QToolButton#helpNextButton:hover {{ background
 QFrame#emptyStateContainer, QFrame#errorStateContainer, QFrame#loadingStateContainer {{ background: transparent; }}
 QLabel#emptyStateTitle, QLabel#errorStateTitle {{ color: {tokens.text_secondary}; }}
 QLabel#emptyStateHint, QLabel#errorStateHint {{ color: {tokens.text_disabled}; }}
+
+/* Phase 5A: main-window and core-page visual reconstruction. */
+QWidget#mainWindowRoot {{ background: {tokens.window_background}; }}
+QTabWidget#mainNavigation {{ background: {tokens.window_background}; }}
+QTabWidget#mainNavigation::pane {{
+    background: {tokens.window_background};
+    border: none;
+    border-top: 1px solid {tokens.border};
+}}
+QTabWidget#mainNavigation QTabBar {{ background: {tokens.topbar_background}; }}
+QTabWidget#mainNavigation QTabBar::tab {{
+    background: transparent;
+    color: {tokens.text_secondary};
+    min-width: 0;
+    min-height: 34px;
+    margin: 8px 3px;
+    padding: 0 14px;
+    border: none;
+    border-radius: 9px;
+    font-weight: 500;
+}}
+QTabWidget#mainNavigation QTabBar::tab:selected {{
+    background: {tokens.selected};
+    color: {tokens.text_primary};
+    border: none;
+    font-weight: 700;
+}}
+QTabWidget#mainNavigation QTabBar::tab:hover:!selected {{
+    background: {tokens.hover};
+    color: {tokens.text_primary};
+}}
+QWidget#navigationBrand {{ background: {tokens.topbar_background}; }}
+QLabel#navigationBrandTitle {{ color: {tokens.text_primary}; font-weight: 700; font-size: 11pt; }}
+QLabel#navigationBrandIcon {{ background: transparent; min-width: 20px; min-height: 20px; }}
+
+QWidget#monitorPage, QWidget#videoQueryPage {{ background: {tokens.window_background}; }}
+QFrame#previewContainer {{
+    background: {tokens.surface};
+    border: 1px solid {tokens.border};
+    border-radius: 12px;
+}}
+QLabel#previewLabel {{ border: 1px solid {tokens.border_strong}; border-radius: 10px; }}
+QScrollArea#rightOperationScroll {{ background: transparent; border: none; }}
+QScrollArea#rightOperationScroll > QWidget > QWidget, QWidget#rightOperationPanel {{
+    background: {tokens.surface};
+    border: 1px solid {tokens.border};
+    border-radius: 12px;
+}}
+QGroupBox#plainRightCard, QGroupBox#recentCard {{
+    background: transparent;
+    border: none;
+    margin: 0;
+    padding: 10px 14px;
+}}
+QGroupBox#plainRightCard::title, QGroupBox#recentCard::title {{ background: transparent; padding: 0; }}
+QFrame#recordingStatusBlock {{
+    background: {tokens.surface_secondary};
+    border: 1px solid {tokens.border};
+    border-radius: 10px;
+}}
+QFrame#recordingStatusBlock[state="idle"] {{ background: {tokens.surface_secondary}; border-color: {tokens.border}; }}
+QLabel#recordingStatusTitle {{ color: {tokens.text_primary}; font-size: 12pt; font-weight: 700; }}
+QLabel#recordingStatusDetail, QLabel#cameraStatusValue {{ color: {tokens.text_secondary}; }}
+QLabel#durationValue {{ color: {tokens.text_primary}; font-size: 11pt; font-weight: 700; }}
+QLabel#recBadge {{ background: #dc2626; color: #ffffff; border-radius: 6px; padding: 3px 7px; }}
+QLabel#recordTypeTitle, QLabel#sectionTitle, QLabel#recentCardTitle {{ color: {tokens.text_primary}; font-weight: 700; }}
+QFrame#recordTypeSeparator {{ background: {tokens.border}; max-height: 1px; }}
+QRadioButton#recordTypeRadio {{ background: transparent; color: {tokens.text_primary}; }}
+QRadioButton#recordTypeRadio::indicator:checked {{
+    border-color: {tokens.focus_border};
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.55, fx:0.5, fy:0.5,
+        stop:0 {tokens.focus_border}, stop:0.40 {tokens.focus_border},
+        stop:0.44 {tokens.input_background}, stop:1 {tokens.input_background});
+}}
+QLineEdit#scanInput {{ min-height: 38px; padding: 5px 10px; border-radius: 8px; }}
+QPushButton#stopButton {{
+    background: {"#5b3035" if is_dark else "#fef2f2"};
+    color: {"#fecaca" if is_dark else "#b91c1c"};
+    border: 1px solid {"#9f4048" if is_dark else "#fca5a5"};
+}}
+QPushButton#stopButton:hover {{ background: {"#6f363d" if is_dark else "#fee2e2"}; }}
+QFrame#recentTitleAccent {{ background: {tokens.border_strong}; border: none; }}
+QWidget#recentRecordingRow {{ background: transparent; border: none; border-bottom: 1px solid {tokens.border}; }}
+QWidget#recentRecordingRow:hover {{ background: {tokens.hover}; }}
+QLabel#recentOrderText {{ color: {tokens.text_primary}; }}
+QLabel#recentMetaText {{ color: {tokens.text_secondary}; }}
+QLabel#recentTypeTag {{ border-radius: 6px; padding: 1px 6px; font-size: 9pt; font-weight: 600; }}
+QLabel#recentTypeTag[recordType="ship"] {{ background: {"#203429" if is_dark else "#f0fdf4"}; border: 1px solid {"#356344" if is_dark else "#bbf7d0"}; color: {"#86efac" if is_dark else "#047857"}; }}
+QLabel#recentTypeTag[recordType="return"] {{ background: {"#3a301f" if is_dark else "#fff7ed"}; border: 1px solid {"#80652b" if is_dark else "#fed7aa"}; color: {"#fde68a" if is_dark else "#c2410c"}; }}
+QPushButton#recentDeleteButton {{
+    background: transparent; border: 1px solid transparent; color: {"#fecaca" if is_dark else "#b91c1c"};
+    min-width: 76px; max-width: 76px; min-height: 34px; max-height: 34px;
+}}
+QPushButton#recentDeleteButton:hover {{ background: {"#44272b" if is_dark else "#fef2f2"}; border-color: {"#9f4048" if is_dark else "#fca5a5"}; }}
+
+QWidget#videoQueryPage QLineEdit#videoSearchInput {{ min-height: 38px; padding: 5px 10px; }}
+QWidget#videoQueryPage QPushButton#filterButton, QWidget#videoQueryPage QPushButton#datePickerButton {{
+    min-height: 34px; border-radius: 8px; padding: 4px 12px; background: {tokens.surface}; color: {tokens.text_primary}; border-color: {tokens.border};
+}}
+QWidget#videoQueryPage QPushButton#filterButton:hover, QWidget#videoQueryPage QPushButton#datePickerButton:hover {{ background: {tokens.hover}; border-color: {tokens.border_strong}; }}
+QWidget#videoQueryPage QPushButton#filterButton:checked {{ background: {tokens.selected}; color: {tokens.text_primary}; border-color: transparent; font-weight: 700; }}
+QWidget#videoQueryPage QToolButton#extendedFilterToggleButton {{ background: transparent; border-color: transparent; color: {tokens.text_secondary}; }}
+QWidget#videoQueryPage QToolButton#extendedFilterToggleButton:hover {{ background: {tokens.hover}; border-color: {tokens.border}; color: {tokens.text_primary}; }}
+QWidget#videoQueryPage QWidget#netdiskFilterRow, QWidget#videoQueryPage QWidget#videoDetailFilterRow {{ background: transparent; }}
+QWidget#videoQueryPage QTableWidget#videoQueryTable {{
+    background: {tokens.surface};
+    alternate-background-color: {tokens.surface};
+    border: 1px solid {tokens.border};
+    border-radius: 10px;
+    gridline-color: transparent;
+    selection-background-color: {tokens.selected};
+    selection-color: {tokens.text_primary};
+}}
+QWidget#videoQueryPage QTableWidget#videoQueryTable::item {{
+    padding: 8px 10px;
+    border: none;
+    border-bottom: 1px solid {tokens.border};
+    color: {tokens.text_primary};
+}}
+QWidget#videoQueryPage QTableWidget#videoQueryTable::item:hover {{ background: {tokens.hover}; color: {tokens.text_primary}; }}
+QWidget#videoQueryPage QTableWidget#videoQueryTable::item:selected {{ background: {tokens.selected}; color: {tokens.text_primary}; }}
+QWidget#videoQueryPage QTableWidget#videoQueryTable QWidget {{ background: transparent; border: none; }}
+QWidget#videoQueryPage QTableWidget#videoQueryTable QHeaderView::section {{
+    background: {tokens.surface_secondary};
+    color: {tokens.text_secondary};
+    border: none;
+    border-bottom: 1px solid {tokens.border};
+    padding: 9px 8px;
+    font-weight: 700;
+}}
+QWidget#videoQueryPage QLabel#tablePrimaryText {{ color: {tokens.text_primary}; background: transparent; }}
+QWidget#videoQueryPage QLabel#tableSubText {{ color: {tokens.text_secondary}; background: transparent; }}
+QWidget#videoQueryPage QLabel#tableSubText[state="warning"] {{ color: {"#fecaca" if is_dark else "#dc2626"}; }}
+QWidget#videoQueryPage QLabel#recordTypeTag {{ border-radius: 6px; padding: 1px 6px; min-height: 18px; font-weight: 600; }}
+QWidget#videoQueryPage QLabel#recordTypeTag[recordType="ship"] {{ background: {"#203429" if is_dark else "#f0fdf4"}; border: 1px solid {"#356344" if is_dark else "#bbf7d0"}; color: {"#86efac" if is_dark else "#047857"}; }}
+QWidget#videoQueryPage QLabel#recordTypeTag[recordType="return"] {{ background: {"#3a301f" if is_dark else "#fff7ed"}; border: 1px solid {"#80652b" if is_dark else "#fed7aa"}; color: {"#fde68a" if is_dark else "#c2410c"}; }}
+QWidget#videoQueryPage QLabel#statusText[statusState="normal"] {{ color: {tokens.text_secondary}; }}
+QWidget#videoQueryPage QLabel#statusText[statusState="error"], QWidget#videoQueryPage QLabel#uploadStatusText[uploadState="failed"] {{ color: {"#fecaca" if is_dark else "#b91c1c"}; }}
+QWidget#videoQueryPage QLabel#uploadStatusText[uploadState="done"] {{ color: {"#86efac" if is_dark else "#047857"}; }}
+QWidget#videoQueryPage QLabel#uploadStatusText[uploadState="pending"] {{ color: {"#fde68a" if is_dark else "#b45309"}; }}
+QWidget#videoQueryPage QLabel#uploadStatusText[uploadState="uploading"] {{ color: {"#bfdbfe" if is_dark else "#2563eb"}; }}
+QWidget#videoQueryPage QPushButton#openSceneLinkButton, QWidget#videoQueryPage QPushButton#revealSceneLinkButton, QWidget#videoQueryPage QPushButton#tableUploadButton {{
+    background: transparent; border: none; color: {tokens.text_primary}; min-height: 26px; padding: 0 4px;
+}}
+QWidget#videoQueryPage QPushButton#revealSceneLinkButton {{ color: {tokens.text_secondary}; }}
+QWidget#videoQueryPage QPushButton#openSceneLinkButton:hover, QWidget#videoQueryPage QPushButton#revealSceneLinkButton:hover, QWidget#videoQueryPage QPushButton#tableUploadButton:hover {{ background: {tokens.hover}; text-decoration: underline; border-radius: 5px; }}
+QWidget#videoQueryPage QPushButton#tableDangerButton {{ background: transparent; border: none; color: {"#fecaca" if is_dark else "#b91c1c"}; min-height: 26px; padding: 0 4px; }}
+QWidget#videoQueryPage QPushButton#tableDangerButton:hover {{ background: {"#44272b" if is_dark else "#fef2f2"}; text-decoration: underline; border-radius: 5px; }}
+QWidget#videoQueryPage QWidget#paginationBar {{ background: transparent; }}
+QWidget#videoQueryPage QPushButton#paginationButton, QWidget#videoQueryPage QPushButton#paginationPageButton {{ background: transparent; border-color: transparent; color: {tokens.text_secondary}; min-height: 32px; min-width: 32px; padding: 2px 7px; }}
+QWidget#videoQueryPage QPushButton#paginationButton:hover, QWidget#videoQueryPage QPushButton#paginationPageButton:hover {{ background: {tokens.hover}; color: {tokens.text_primary}; }}
+QWidget#videoQueryPage QPushButton#paginationPageButton:checked {{ background: {tokens.selected}; color: {tokens.text_primary}; border-color: transparent; }}
+QWidget#videoQueryPage QComboBox#paginationCombo, QWidget#videoQueryPage QLineEdit#paginationJumpInput {{ min-height: 32px; border-color: {tokens.border}; }}
 """

@@ -1934,6 +1934,7 @@ class QueryTab(QWidget):
 
     def __init__(self, config_manager: ConfigManager, logger: logging.Logger, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("videoQueryPage")
         self.config_manager = config_manager
         self.logger = logger
         self.video_dir = self._initial_query_dir()
@@ -2309,6 +2310,7 @@ class QueryTab(QWidget):
         layout.addWidget(self.empty_label)
 
         self.table = QTableWidget(0, 10)
+        self.table.setObjectName("videoQueryTable")
         self.table.setHorizontalHeaderLabels(
             [
                 "序号",

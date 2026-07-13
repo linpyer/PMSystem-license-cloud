@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QTableWidget
 
 from app.core.config_manager import ConfigManager
@@ -60,6 +61,7 @@ def main() -> int:
                 window.grab().save(str(Path(capture_dir) / "theme-light.png"))
 
             window.tabs.setCurrentIndex(1)
+            QTest.qWait(600)
             app.processEvents()
             assert window.tabs.currentWidget() is window.query_tab
             if capture_dir:

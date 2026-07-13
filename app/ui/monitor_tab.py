@@ -246,6 +246,7 @@ class MonitorTab(QWidget):
 
     def __init__(self, config_manager: ConfigManager, logger: logging.Logger, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("monitorPage")
         self.config_manager = config_manager
         self.logger = logger
         self.config = self.config_manager.config

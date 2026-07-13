@@ -5,7 +5,7 @@ import time
 import traceback
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter
+from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -161,11 +161,14 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(icon_path)))
 
         central = QWidget(self)
+        central.setObjectName("mainWindowRoot")
         central_layout = QVBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
 
         self.tabs = QTabWidget(self)
+        self.tabs.setObjectName("mainNavigation")
+        self.tabs.setDocumentMode(True)
         self.monitor_tab = MonitorTab(config_manager=config_manager, logger=logger, parent=self)
         self.query_tab = QueryTab(config_manager=config_manager, logger=logger, parent=self)
 
@@ -328,6 +331,22 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._restore_monitor_focus)
 
     def _setup_help_entry(self) -> None:
+        brand = QWidget(self)
+        brand.setObjectName("navigationBrand")
+        brand_layout = QHBoxLayout(brand)
+        brand_layout.setContentsMargins(14, 0, 16, 0)
+        brand_layout.setSpacing(8)
+        icon_label = QLabel(brand)
+        icon_label.setObjectName("navigationBrandIcon")
+        icon_path = resource_path("app/assets/app_icon.ico")
+        if icon_path.exists():
+            icon_label.setPixmap(QPixmap(str(icon_path)).scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        title_label = QLabel(APP_TITLE, brand)
+        title_label.setObjectName("navigationBrandTitle")
+        brand_layout.addWidget(icon_label)
+        brand_layout.addWidget(title_label)
+        self.tabs.setCornerWidget(brand, Qt.TopLeftCorner)
+
         corner = QWidget(self)
         corner_layout = QHBoxLayout(corner)
         corner_layout.setContentsMargins(0, 0, 12, 0)
