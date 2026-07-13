@@ -11,7 +11,7 @@ from typing import Any
 
 import cv2
 
-from app.core.database_paths import legacy_database_candidates
+from app.core.database_paths import validate_runtime_database_path
 from app.core.file_indexer import VIDEO_EXTENSIONS
 from app.core.important_reasons import (
     DEFAULT_IMPORTANT_REASON_TYPE,
@@ -56,6 +56,7 @@ def normalize_file_path(path: str | Path | None) -> str:
 class DatabaseManager:
     def __init__(self, db_path: str | Path, logger: logging.Logger | None = None) -> None:
         self.db_path = Path(db_path)
+        self.db_path = validate_runtime_database_path(self.db_path)
         self.logger = logger
         self._connection: sqlite3.Connection | None = None
         self._lock = threading.RLock()
@@ -74,6 +75,8 @@ class DatabaseManager:
             self.repair_duplicate_video_records()
             self.reset_interrupted_uploads()
             if self.logger:
+                if not self._database_existed_before_init:
+                    self.logger.info("[Database] database created: %s", self.db_path)
                 self.logger.info(
                     "SQLite 数据库初始化成功：database_path=%s, database_exists=%s, database_created=%s",
                     self.db_path,
@@ -83,6 +86,7 @@ class DatabaseManager:
         except Exception:
             if self.logger:
                 self.logger.exception("SQLite 数据库初始化失败：%s", self.db_path)
+            self.close()
             raise
 
     def get_connection(self) -> sqlite3.Connection:
@@ -152,12 +156,6 @@ class DatabaseManager:
                     CREATE INDEX IF NOT EXISTS idx_videos_file_name ON videos(file_name);
                     CREATE INDEX IF NOT EXISTS idx_videos_status ON videos(status);
 
-                    CREATE TABLE IF NOT EXISTS database_migrations (
-                        source_path TEXT PRIMARY KEY,
-                        source_size INTEGER DEFAULT 0,
-                        source_mtime REAL DEFAULT 0,
-                        migrated_at TEXT
-                    );
                     """
                 )
                 self._ensure_upload_columns(connection)
@@ -172,7 +170,6 @@ class DatabaseManager:
                 )
                 connection.commit()
                 self._log_video_query_plans(connection)
-                self._migrate_legacy_databases(connection)
                 if self.logger:
                     self.logger.info("创建 videos 表和索引成功")
             except Exception:
@@ -180,120 +177,6 @@ class DatabaseManager:
                 if self.logger:
                     self.logger.exception("创建 videos 表或索引失败")
                 raise
-
-    def _migrate_legacy_databases(self, connection: sqlite3.Connection) -> None:
-        target_key = os.path.normcase(os.path.normpath(str(self.db_path.resolve())))
-        candidates = [
-            path
-            for path in legacy_database_candidates(self.db_path.parent.parent)
-            if path.exists()
-            and path.is_file()
-            and os.path.normcase(os.path.normpath(str(path.resolve()))) != target_key
-        ]
-        if not candidates:
-            return
-
-        total_inserted = 0
-        total_updated = 0
-        for source_path in candidates:
-            try:
-                source_stat = source_path.stat()
-                source_key = normalize_file_path(source_path)
-                history = connection.execute(
-                    """
-                    SELECT source_size, source_mtime
-                    FROM database_migrations
-                    WHERE source_path = ?
-                    """,
-                    (source_key,),
-                ).fetchone()
-                if (
-                    history is not None
-                    and int(history["source_size"] or 0) == int(source_stat.st_size)
-                    and float(history["source_mtime"] or 0.0) == float(source_stat.st_mtime)
-                ):
-                    continue
-                inserted, updated = self._merge_legacy_database(connection, source_path)
-                connection.execute(
-                    """
-                    INSERT INTO database_migrations (source_path, source_size, source_mtime, migrated_at)
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(source_path) DO UPDATE SET
-                        source_size = excluded.source_size,
-                        source_mtime = excluded.source_mtime,
-                        migrated_at = excluded.migrated_at
-                    """,
-                    (source_key, int(source_stat.st_size), float(source_stat.st_mtime), format_datetime()),
-                )
-                connection.commit()
-            except Exception:
-                if self.logger:
-                    self.logger.exception("旧 SQLite 数据库迁移失败：source=%s, target=%s", source_path, self.db_path)
-                continue
-            total_inserted += inserted
-            total_updated += updated
-            if (inserted or updated) and self.logger:
-                self.logger.warning(
-                    "旧 SQLite 数据库已合并：source=%s, target=%s, inserted=%s, updated=%s",
-                    source_path,
-                    self.db_path,
-                    inserted,
-                    updated,
-                )
-        if (total_inserted or total_updated) and self.logger:
-            self.logger.warning(
-                "旧 SQLite 数据库迁移汇总：database_path=%s, inserted=%s, updated=%s",
-                self.db_path,
-                total_inserted,
-                total_updated,
-            )
-
-    def _merge_legacy_database(self, connection: sqlite3.Connection, source_path: Path) -> tuple[int, int]:
-        with sqlite3.connect(str(source_path)) as source:
-            source.row_factory = sqlite3.Row
-            table = source.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='videos'"
-            ).fetchone()
-            if table is None:
-                return 0, 0
-            rows = [dict(row) for row in source.execute("SELECT * FROM videos").fetchall()]
-        if not rows:
-            return 0, 0
-
-        columns = self._video_column_names(connection)
-        inserted = 0
-        updated = 0
-        for row in rows:
-            normalized_path = normalize_file_path(row.get("normalized_file_path") or row.get("file_path"))
-            if not normalized_path:
-                continue
-            row["normalized_file_path"] = normalized_path
-            if not str(row.get("file_path") or "").strip():
-                row["file_path"] = normalized_path
-            existing = connection.execute(
-                "SELECT * FROM videos WHERE normalized_file_path = ? OR file_path = ? LIMIT 1",
-                (normalized_path, str(row.get("file_path") or "")),
-            ).fetchone()
-            if existing:
-                target_row = dict(existing)
-                merged = self._merge_duplicate_rows([target_row, row], target_row, columns)
-                update_fields = [key for key in merged if key in columns and key != "id"]
-                assignments = ", ".join(f"{key} = ?" for key in update_fields)
-                values = [merged[key] for key in update_fields] + [int(target_row["id"])]
-                connection.execute(f"UPDATE videos SET {assignments} WHERE id = ?", values)
-                updated += 1
-                continue
-
-            insert_fields = [key for key in columns if key != "id" and key in row]
-            if "file_path" not in insert_fields or "order_no" not in insert_fields or "file_name" not in insert_fields:
-                continue
-            placeholders = ", ".join("?" for _ in insert_fields)
-            field_sql = ", ".join(insert_fields)
-            values = [row.get(key) for key in insert_fields]
-            connection.execute(f"INSERT INTO videos ({field_sql}) VALUES ({placeholders})", values)
-            inserted += 1
-        connection.commit()
-        return inserted, updated
 
     def _ensure_upload_columns(self, connection: sqlite3.Connection) -> None:
         existing_columns = {

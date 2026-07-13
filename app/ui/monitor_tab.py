@@ -6,8 +6,8 @@ import time
 from pathlib import Path
 
 import cv2
-from PySide6.QtCore import QEvent, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QSize, QTimer, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QImage, QLinearGradient, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
@@ -44,14 +44,55 @@ from PySide6.QtWidgets import (
 
 from app.core.config_manager import ConfigManager
 from app.core.camera import list_camera_devices
-from app.core.database import DatabaseManager
+from app.core.database import DatabaseManager, UPLOAD_DONE
 from app.core.recorder import RecorderThread
 from app.core.scanner import normalize_scan_text
 from app.core.scanner_guard import ScannerGuard
 from app.core.video_player import open_folder, open_video, reveal_in_file_manager
 from app.core.voice_prompt import VoicePrompt
+from app.ui.confirm_dialog import ConfirmActionDialog
+from app.ui.themed_line_edit import ThemedClearableLineEdit
 from app.utils.file_utils import ensure_directory
+from app.utils.runtime_paths import resource_path
 from app.utils.time_utils import format_duration
+
+
+CAMERA_STATUS_TOAST_PHRASES = (
+    "摄像头连接异常",
+    "摄像头已恢复",
+    "摄像头断开",
+    "正在重新连接摄像头",
+    "重新连接摄像头",
+    "摄像头读取失败",
+    "摄像头状态",
+    "摄像头打开失败",
+    "摄像头已打开",
+    "摄像头不可用",
+    "摄像头正常",
+    "摄像头初始化",
+    "等待摄像头画面",
+    "摄像头画面尚未就绪",
+    "检测到正常帧",
+    "iVCam 已连接",
+    "iVCam 已断开",
+    "iVCam 未启动或未连接",
+    "摄像头已刷新",
+)
+
+
+def is_camera_status_message(message: str) -> bool:
+    text = str(message or "").strip()
+    if not text:
+        return False
+    user_action_messages = (
+        "录制中不能刷新摄像头",
+        "录制中不能修改摄像头配置",
+        "摄像头已刷新",
+        "摄像头刷新失败",
+    )
+    if any(message in text for message in user_action_messages):
+        return False
+    return any(phrase in text for phrase in CAMERA_STATUS_TOAST_PHRASES) or "摄像头" in text or "ivcam" in text.lower()
 
 
 FPS_OPTIONS = [15, 20, 25, 30, 60]
@@ -255,6 +296,7 @@ class MonitorTab(QWidget):
         self._pending_voice_action: str | None = None
         self._pending_scan_feedback: dict[str, str] | None = None
         self._event_filter_installed = False
+        self._theme_manager = None
         self.scan_feedback_timer = QTimer(self)
         self.scan_feedback_timer.setSingleShot(True)
         self.scan_feedback_timer.timeout.connect(self._reset_scan_feedback)
@@ -285,6 +327,9 @@ class MonitorTab(QWidget):
         if app is not None:
             app.installEventFilter(self)
             self._event_filter_installed = True
+            self._theme_manager = app.property("theme_manager")
+            if self._theme_manager is not None:
+                self._theme_manager.theme_changed.connect(self._refresh_action_icons)
         self.focus_scan_input()
         QTimer.singleShot(0, self.refresh_recent_recordings)
 
@@ -545,8 +590,7 @@ class MonitorTab(QWidget):
         scan_group.setObjectName("plainRightCard")
         scan_layout = QVBoxLayout(scan_group)
         scan_layout.setSpacing(6)
-        self.scan_input = QLineEdit()
-        self.scan_input.setClearButtonEnabled(True)
+        self.scan_input = ThemedClearableLineEdit()
         self.scan_input.setObjectName("scanInput")
         self.scan_input.setPlaceholderText("请输入或扫描单号")
 
@@ -660,6 +704,7 @@ class MonitorTab(QWidget):
 
         self.recorder.frame_ready.connect(self._on_frame_ready)
         self.recorder.camera_status_changed.connect(self._on_camera_status_changed)
+        self.recorder.camera_refresh_finished.connect(self._on_manual_camera_refresh_finished)
         self.recorder.recording_state_changed.connect(self._on_recording_state_changed)
         self.recorder.duration_changed.connect(self._on_duration_changed)
         self.recorder.message.connect(self._on_recorder_message)
@@ -1102,8 +1147,19 @@ class MonitorTab(QWidget):
             self.warning_message.emit("录制中不能刷新摄像头。")
             self.focus_scan_input(80)
             return
-        self.recorder.restart_camera()
-        self.status_message.emit("摄像头已刷新")
+        self.refresh_camera_button.setEnabled(False)
+        self.refresh_camera_button.setText("刷新中…")
+        self.recorder.restart_camera(report_result=True)
+        self.focus_scan_input(100)
+
+    def _on_manual_camera_refresh_finished(self, success: bool, reason: str) -> None:
+        self.refresh_camera_button.setText("刷新摄像头")
+        self.refresh_camera_button.setEnabled(not self.is_recording)
+        if success:
+            self.status_message.emit("摄像头已刷新")
+        else:
+            detail = str(reason or "摄像头不可用").strip()
+            self.warning_message.emit(f"摄像头刷新失败：{detail}")
         self.focus_scan_input(100)
 
     def _apply_config(self) -> None:
@@ -1185,9 +1241,11 @@ class MonitorTab(QWidget):
         else:
             self._camera_error_active = False
             self._camera_error_reason = ""
+            self._last_recording_alert_reason = ""
+            self._last_recording_alert_at = 0.0
             self._clear_recording_alert()
             self.refresh_status_card()
-        self.status_message.emit(message)
+        self.logger.info("摄像头状态仅更新持续状态区域，不发送 Toast：%s", message)
 
     def _set_status_badge(self, recording: bool) -> None:
         if self._camera_error_active:
@@ -1300,8 +1358,10 @@ class MonitorTab(QWidget):
         return text or "录制异常"
 
     def _on_recorder_message(self, message: str) -> None:
-        self.status_message.emit(message)
-        if self._is_recording_alert_message(message):
+        camera_status = is_camera_status_message(message)
+        if not camera_status:
+            self.status_message.emit(message)
+        if not camera_status and self._is_recording_alert_message(message):
             self.show_recording_alert(self._recording_alert_reason(message))
         if self._is_recording_save_complete_message(message):
             self.logger.info("新视频保存后刷新最近录制模块")
@@ -1323,16 +1383,20 @@ class MonitorTab(QWidget):
         self.focus_scan_input()
 
     def _on_warning_message(self, message: str) -> None:
-        self.warning_message.emit(message)
-        self.status_message.emit(message)
-        if self._is_recording_alert_message(message):
+        camera_status = is_camera_status_message(message)
+        if not camera_status:
+            self.warning_message.emit(message)
+            self.status_message.emit(message)
+        if not camera_status and self._is_recording_alert_message(message):
             self.show_recording_alert(self._recording_alert_reason(message))
         self.focus_scan_input()
 
     def _on_critical_message(self, message: str) -> None:
-        self.critical_message.emit(message)
-        self.status_message.emit(message)
-        if self._is_recording_alert_message(message):
+        camera_status = is_camera_status_message(message)
+        if not camera_status:
+            self.critical_message.emit(message)
+            self.status_message.emit(message)
+        if not camera_status and self._is_recording_alert_message(message):
             self.show_recording_alert(self._recording_alert_reason(message))
         self.focus_scan_input()
 
@@ -1399,11 +1463,14 @@ class MonitorTab(QWidget):
             meta_layout.setContentsMargins(0, 0, 0, 0)
             meta_layout.setSpacing(8)
 
-            delete_button = QPushButton("删除")
-            delete_button.setObjectName("recentDeleteButton")
+            delete_button = QToolButton()
+            delete_button.setObjectName("recentDeleteIconButton")
+            delete_button.setProperty("actionIcon", "trash")
             delete_button.setCursor(Qt.PointingHandCursor)
-            delete_button.setFixedSize(76, 36)
-            delete_button.setToolTip("删除这条最近录制视频")
+            delete_button.setFixedSize(30, 30)
+            delete_button.setAccessibleName("删除")
+            delete_button.setToolTip("删除")
+            self._apply_action_icon(delete_button, "trash")
             delete_button.clicked.connect(
                 lambda _checked=False, row_entry=dict(item): self._delete_recent_recording(row_entry)
             )
@@ -1416,6 +1483,21 @@ class MonitorTab(QWidget):
             row_layout.addLayout(info_layout, 1)
             row_layout.addWidget(delete_button, 0, Qt.AlignVCenter)
             self.recent_recordings_layout.addWidget(row_widget)
+
+    def _apply_action_icon(self, button: QToolButton, icon_name: str) -> None:
+        resolved_theme = "light"
+        if self._theme_manager is not None:
+            resolved_theme = self._theme_manager.resolved_theme()
+        suffix = "-light" if resolved_theme == "dark" else ""
+        icon_path = resource_path(f"app/assets/icons/{icon_name}{suffix}.svg")
+        button.setIcon(QIcon(str(icon_path)) if icon_path.exists() else QIcon())
+        button.setIconSize(QSize(17, 17))
+
+    def _refresh_action_icons(self, _mode: str = "system", _resolved_theme: str = "light") -> None:
+        for button in self.findChildren(QToolButton):
+            icon_name = button.property("actionIcon")
+            if icon_name:
+                self._apply_action_icon(button, str(icon_name))
 
     @staticmethod
     def _clear_layout(layout: QVBoxLayout) -> None:
@@ -1461,8 +1543,37 @@ class MonitorTab(QWidget):
                 return
 
             file_exists = path.exists()
-            confirm = self._confirm_recent_delete(order_no, path, file_exists, record)
-            if not confirm:
+            dialog = self._confirm_recent_delete(order_no, path, file_exists, record)
+
+            def delete_action() -> tuple[bool, str]:
+                if self._is_current_recording_path(path):
+                    return False, "当前视频正在录制中，不能删除"
+                current_file_exists = path.exists()
+                if current_file_exists:
+                    try:
+                        path.unlink()
+                    except PermissionError as exc:
+                        self.logger.exception(
+                            "最近录制文件删除失败：文件被占用或权限不足，record_id=%s, path=%s",
+                            record_id or "-",
+                            path,
+                        )
+                        return False, f"视频删除失败：文件被占用或权限不足（{exc}）"
+                    except OSError as exc:
+                        self.logger.exception("最近录制文件删除失败：record_id=%s, path=%s", record_id or "-", path)
+                        return False, f"视频删除失败：{exc}"
+                deleted_record = database.delete_video_record(path)
+                if not deleted_record:
+                    self.logger.warning(
+                        "最近录制 SQLite 记录删除失败：record_id=%s, path=%s, file_deleted=%s",
+                        record_id or "-",
+                        path,
+                        current_file_exists,
+                    )
+                    return False, "视频删除失败：未找到对应数据库记录"
+                return True, ""
+
+            if not dialog.run_action(delete_action):
                 self.logger.info(
                     "打包监控页最近录制取消删除：record_id=%s, order_no=%s, path=%s",
                     record_id or "-",
@@ -1471,58 +1582,16 @@ class MonitorTab(QWidget):
                 )
                 return
 
-            if self._is_current_recording_path(path):
-                self.warning_message.emit("当前视频正在录制中，不能删除")
-                return
-
-            file_deleted = False
-            if file_exists:
-                try:
-                    path.unlink()
-                    file_deleted = True
-                except PermissionError as exc:
-                    self.logger.exception(
-                        "打包监控页最近录制删除文件失败：权限不足或文件被占用，record_id=%s, order_no=%s, path=%s",
-                        record_id or "-",
-                        order_no,
-                        path,
-                    )
-                    self.critical_message.emit(f"删除失败：文件被占用或权限不足（{exc}）")
-                    return
-                except OSError as exc:
-                    self.logger.exception(
-                        "打包监控页最近录制删除文件失败：record_id=%s, order_no=%s, path=%s",
-                        record_id or "-",
-                        order_no,
-                        path,
-                    )
-                    self.critical_message.emit(f"删除失败：{exc}")
-                    return
-
-            deleted_record = database.delete_video_record(path)
-            if not deleted_record:
-                self.logger.warning(
-                    "打包监控页最近录制删除 SQLite 记录失败：record_id=%s, order_no=%s, path=%s, file_exists=%s, file_deleted=%s",
-                    record_id or "-",
-                    order_no,
-                    path,
-                    file_exists,
-                    file_deleted,
-                )
-                self.warning_message.emit("删除失败：未找到视频记录")
-                return
-
             self.logger.info(
-                "打包监控页最近录制删除成功：record_id=%s, order_no=%s, path=%s, file_exists=%s, file_deleted=%s",
+                "打包监控页最近录制删除成功：record_id=%s, order_no=%s, path=%s, file_exists=%s",
                 record_id or "-",
                 order_no,
                 path,
                 file_exists,
-                file_deleted,
             )
             self.refresh_recent_recordings()
             self._refresh_query_tab_after_recent_delete()
-            self.status_message.emit("视频已删除" if file_exists else "记录已移除")
+            self.status_message.emit("视频已删除")
         except Exception as exc:
             self.logger.exception(
                 "打包监控页最近录制删除未知异常：record_id=%s, order_no=%s, path=%s",
@@ -1554,41 +1623,44 @@ class MonitorTab(QWidget):
         except OSError:
             return str(temp_path) == str(path)
 
-    def _confirm_recent_delete(self, order_no: str, path: Path, file_exists: bool, record: dict | None = None) -> bool:
+    def _confirm_recent_delete(
+        self,
+        order_no: str,
+        path: Path,
+        file_exists: bool,
+        record: dict | None = None,
+    ) -> ConfirmActionDialog:
         is_important = self._is_important_record(record or {})
         important_note = str((record or {}).get("important_note") or "").strip()
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("删除最近录制" if file_exists else "删除最近录制记录")
+        uploaded = str((record or {}).get("upload_status") or "") == UPLOAD_DONE
         if file_exists:
-            if is_important:
-                box.setText("该视频已标记为重要，可能涉及售后争议。\n确定仍要删除吗？")
-            else:
-                box.setText("确定要删除这条录制视频吗？")
-            detail = (
-                f"单号：{order_no}\n"
-                "删除后将从列表中移除，并删除本地视频文件。\n"
-                "如该视频已上传网盘，本次仅删除本地记录和本地文件，不会删除网盘文件。"
-            )
-            if important_note:
-                detail += f"\n重要原因：{important_note}"
-            box.setInformativeText(detail)
-            confirm_text = "仍然删除" if is_important else "确认删除"
+            heading = "确定删除这条录制视频吗？"
+            description = "删除后，本地记录与本地视频文件将无法恢复。"
+            removed = ("本地视频记录", "本地视频文件")
         else:
-            if is_important:
-                box.setText("该视频已标记为重要，可能涉及售后争议。\n当前视频文件已不存在，确定仍要从列表中移除此记录吗？")
-            else:
-                box.setText("当前视频文件已不存在，是否从列表中移除此记录？")
-            detail = f"单号：{order_no}\n记录路径：{path}"
-            if important_note:
-                detail += f"\n重要原因：{important_note}"
-            box.setInformativeText(detail)
-            confirm_text = "仍然移除" if is_important else "移除记录"
-        cancel_button = box.addButton("取消", QMessageBox.RejectRole)
-        confirm_button = box.addButton(confirm_text, QMessageBox.AcceptRole)
-        box.setDefaultButton(cancel_button)
-        box.exec()
-        return box.clickedButton() is confirm_button
+            heading = "确定移除这条录制记录吗？"
+            description = "本地视频文件已不存在，移除后该记录将不再显示。"
+            removed = ("本地视频记录",)
+        if is_important:
+            description += " 该记录已标记为重要，请确认不再需要本地证据。"
+        sections: list[tuple[str, tuple[str, ...]]] = [("将删除：", removed)]
+        if uploaded:
+            sections.append(("不会删除：", ("已上传至网盘的视频文件",)))
+        else:
+            sections.append(("提示：", ("此视频尚未上传至网盘，删除后无法从网盘恢复",)))
+        if important_note:
+            sections.append(("重要原因：", (important_note,)))
+        return ConfirmActionDialog(
+            title="删除最近录制",
+            heading=heading,
+            description=description,
+            info_label="单号",
+            info_value=order_no or path.name,
+            sections=sections,
+            confirm_text="删除本地视频" if file_exists else "移除本地记录",
+            destructive=True,
+            parent=self,
+        )
 
     @staticmethod
     def _is_important_record(record: dict) -> bool:

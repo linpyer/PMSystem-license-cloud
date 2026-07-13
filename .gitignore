@@ -23,7 +23,12 @@ videos/
 *.sqlite-wal
 *.sqlite3-shm
 *.sqlite3-wal
+*-wal
+*-shm
 pm_system.db
+retired_legacy_databases/
+database backups/
+test_databases/
 video_index.json
 config.json
 

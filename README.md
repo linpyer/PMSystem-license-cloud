@@ -54,7 +54,7 @@ packing-monitor/
 - 正式视频命名为 `单号_YYYYMMDD_HHMMSS.mp4`，旧格式视频仍可查询和播放。
 - 录制完成后自动做视频完整性校验，异常视频只提示和写日志，不自动删除。
 - 扫码内容只做清洗、防抖和软提示，不做快递规则校验，不联网，不阻止录制。
-- 查询页使用本地 SQLite 文件 `pm_system.db` 保存视频索引、备注、发货/退货类型和重复录制序号；刷新列表时会重新扫描当前查询目录并同步数据库。
+- 查询页使用唯一正式 SQLite 文件 `%LOCALAPPDATA%\PMSystem\data\pmsystem.db` 保存视频索引、备注、发货/退货类型和重复录制序号；刷新列表时会重新扫描当前查询目录并同步数据库。
 - 查询页支持关键词搜索、今天、昨天、最近 7 天、全部日期筛选，并支持分页显示。
 - 查询页分页支持每页 10 / 20 / 50 / 100 条、上一页 / 下一页、页码按钮和指定页跳转；搜索、日期筛选、类型筛选会自动刷新分页。
 - 设置中可开启百度网盘手动同步；开启并完成授权后，查询页可批量同步未上传视频，也可对未上传或上传失败的视频单条重试，本地视频不会因上传成功或失败被删除。
@@ -134,9 +134,9 @@ python main.py
 
 ## SQLite 本地数据库
 
-程序会自动创建本地 SQLite 数据库文件 `pm_system.db`，用于保存视频索引、视频元数据、备注、发货/退货类型和重复录制序号等信息。SQLite 使用 Python 内置 `sqlite3` 模块，不需要用户安装 MySQL、SQL Server、PostgreSQL 或任何数据库服务。
+程序会自动创建本地 SQLite 数据库文件 `%LOCALAPPDATA%\PMSystem\data\pmsystem.db`，用于保存视频索引、视频元数据、备注、发货/退货类型和重复录制序号等信息。SQLite 使用 Python 内置 `sqlite3` 模块，不需要用户安装 MySQL、SQL Server、PostgreSQL 或任何数据库服务。
 
-数据库只保存索引和业务信息，视频文件仍然保存在软件配置的视频保存目录中。开发环境运行时，`pm_system.db` 位于项目目录；安装后运行时，`pm_system.db` 位于用户数据目录，和 `config.json`、`logs`、`videos` 同级，避免安装到 `C:\Program Files` 后出现写入权限问题。
+数据库只保存索引和业务信息，视频文件仍然保存在软件配置的视频保存目录中。开发版和安装版始终使用同一个正式数据库 `%LOCALAPPDATA%\PMSystem\data\pmsystem.db`，不根据项目目录、安装目录或当前工作目录改变路径，也不会扫描、复制或合并旧数据库。
 
 点击“刷新列表”会扫描当前查询目录下的真实视频文件，并把文件大小、时长、分辨率、编码、文件状态等信息同步到 SQLite。SQLite 是本地文件数据库，不联网，不上传数据。
 
@@ -194,7 +194,7 @@ cd "E:\PM System"
 
 ## 打包和制作安装包
 
-当前版本：`v1.0.3`。软件可以使用 PyInstaller 打包为 onedir 程序目录，再使用 Inno Setup 制作 Windows 安装包。目标电脑不需要安装 Python，不需要安装 SQLite，也不需要部署任何数据库服务。
+当前版本由 `app/core/version.py` 中的 `APP_VERSION` 统一维护。软件可以使用 PyInstaller 打包为 onedir 程序目录，再使用 Inno Setup 制作 Windows 安装包。目标电脑不需要安装 Python，不需要安装 SQLite，也不需要部署任何数据库服务。
 
 安装依赖：
 
@@ -261,7 +261,7 @@ installer\PMSystem.iss
 也可以手动打开这个 `.iss` 文件并点击 Compile。最终安装包位置：
 
 ```text
-installer\output\PMSystem_Setup_v1.0.3.exe
+installer\output\PMSystem_Setup_v<APP_VERSION>.exe
 ```
 
 安装包界面使用简体中文，支持选择安装位置、创建桌面快捷方式、开始菜单快捷方式、卸载，以及安装完成后立即运行。
@@ -294,7 +294,7 @@ C:\Program Files (x86)\PMSystem
 %LOCALAPPDATA%\PMSystem\
 ```
 
-其中包括 `config.json`、`pm_system.db`、`logs`、`videos` 等。SQLite 使用 Python 内置 `sqlite3`，软件首次启动会自动创建数据库文件和必要目录。这样安装到 `C:\Program Files` 时不会因为普通用户无写入权限导致配置、数据库、日志或视频保存失败。
+其中数据库固定为 `data\pmsystem.db`。SQLite 使用 Python 内置 `sqlite3`，软件首次启动会自动创建数据库文件和必要目录。这样安装到 `C:\Program Files` 时不会因为普通用户无写入权限导致数据库保存失败。
 
 卸载软件只移除安装目录中的程序文件，不会自动删除已录制视频、日志和配置，避免误删证据文件。
 
@@ -307,7 +307,7 @@ C:\Program Files (x86)\PMSystem
 5. 双击 `dist\电商打包发货监控溯源系统\电商打包发货监控溯源系统.exe`，测试摄像头预览、扫码录制、视频保存、SQLite 查询、播放定位、备注、发货/退货筛选和语音提示。
 6. 运行 `.\build_installer.bat`，或使用 Inno Setup 手动编译 `installer\PMSystem.iss`。
 7. 在干净电脑或干净用户环境安装测试，确认桌面快捷方式、开始菜单快捷方式、图标、启动和卸载正常。
-8. 卸载后确认用户数据目录中的视频、`pm_system.db`、`config.json` 和 `logs` 未被删除。
+8. 卸载后确认用户数据目录中的视频、`data\pmsystem.db`、`config.json` 和 `logs` 未被删除。
 
 ## 使用注意
 
@@ -316,6 +316,6 @@ C:\Program Files (x86)\PMSystem
 - 如果程序异常退出，可能留下 `.recording.mp4`、`.temp.mp4` 或 `_temp.mp4` 临时文件；下次启动会提示人工检查，不会自动删除。
 - 程序不会自动删除正式视频。查询页删除按钮需要人工确认后才会删除物理文件。
 - 安装包卸载程序不会自动删除用户数据目录中的视频、日志和配置。
-- `pm_system.db` 保存视频索引、备注、发货/退货类型和重复录制序号。如果需要完整备份，请同时备份视频目录、`pm_system.db` 和 `config.json`。
+- `%LOCALAPPDATA%\PMSystem\data\pmsystem.db` 保存视频索引、备注、发货/退货类型和重复录制序号。如果需要完整备份，请同时备份视频目录、该正式数据库和 `config.json`。
 - 当前版本不使用 MySQL、SQL Server、PostgreSQL 或云数据库；不支持面单图片、不支持自动截图、不支持面单识别。
 - OpenCV 在少数机器上可能无法使用某些 mp4 编码；程序会优先尝试 `mp4v`，失败时再尝试其它编码。

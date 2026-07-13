@@ -58,7 +58,22 @@ QComboBox QAbstractItemView {{
     selection-background-color: {tokens.selected};
     selection-color: {tokens.text_primary};
 }}
-QComboBox::drop-down {{ border: none; width: 26px; background: transparent; }}
+QComboBox {{ padding-right: 30px; }}
+QComboBox:hover, QComboBox:focus, QComboBox:on {{
+    background: {tokens.input_background};
+    color: {tokens.text_primary};
+    border-color: {tokens.focus_border};
+}}
+QComboBox::drop-down {{
+    border: none;
+    border-left: 1px solid {tokens.border};
+    width: 26px;
+    background: {tokens.input_background};
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+}}
+QComboBox::drop-down:hover, QComboBox::drop-down:on {{ background: {tokens.surface_secondary}; }}
+QComboBox:disabled::drop-down {{ background: {tokens.surface_secondary}; border-left-color: {tokens.border}; }}
 QComboBox::down-arrow {{ width: 10px; height: 10px; }}
 QComboBox QAbstractItemView::item {{ min-height: 30px; padding: 4px 8px; }}
 QComboBox QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:selected {{ background: {tokens.selected}; color: {tokens.text_primary}; }}
@@ -81,6 +96,15 @@ QPushButton#primaryButton:hover {{
     background: {tokens.primary_button_hover};
     border-color: {tokens.primary_button_hover};
 }}
+QPushButton[buttonRole="primary"] {{
+    background: {tokens.primary_button_background};
+    border-color: {tokens.primary_button_background};
+    color: {tokens.primary_button_text};
+}}
+QPushButton[buttonRole="primary"]:hover {{
+    background: {tokens.primary_button_hover};
+    border-color: {tokens.primary_button_hover};
+}}
 QPushButton#secondaryButton {{
     background: {tokens.surface};
     border-color: {tokens.border_strong};
@@ -95,6 +119,12 @@ QPushButton[buttonRole="danger"]:enabled:hover {{
     background: {"#6f363d" if is_dark else "#fee2e2"};
 }}
 QPushButton:disabled, QToolButton:disabled {{
+    background: {tokens.surface_secondary};
+    color: {tokens.text_disabled};
+    border-color: {tokens.border};
+}}
+QPushButton#primaryButton:disabled, QPushButton[buttonRole="primary"]:disabled, QPushButton#secondaryButton:disabled,
+QPushButton#stopButton:disabled, QPushButton[buttonRole="danger"]:disabled {{
     background: {tokens.surface_secondary};
     color: {tokens.text_disabled};
     border-color: {tokens.border};
@@ -118,8 +148,11 @@ QCheckBox::indicator:checked {{
     image: url("{checkmark_path}");
 }}
 QRadioButton::indicator:checked {{
-    border: 5px solid {tokens.primary_button_background};
-    background: {tokens.input_background};
+    border: 2px solid {tokens.primary_button_background};
+    border-radius: 9px;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+        stop:0 {tokens.primary_button_background}, stop:0.36 {tokens.primary_button_background},
+        stop:0.42 {tokens.input_background}, stop:1 {tokens.input_background});
 }}
 QCheckBox:disabled, QRadioButton:disabled {{ color: {tokens.text_disabled}; }}
 QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {{
@@ -132,8 +165,11 @@ QCheckBox::indicator:checked:disabled {{
     image: url("{checkmark_path}");
 }}
 QRadioButton::indicator:checked:disabled {{
-    border-color: {tokens.border_strong};
-    background: {tokens.surface_secondary};
+    border: 2px solid {tokens.border};
+    border-radius: 9px;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+        stop:0 {tokens.border_strong}, stop:0.36 {tokens.border_strong},
+        stop:0.42 {tokens.surface_secondary}, stop:1 {tokens.surface_secondary});
 }}
 QTabWidget::pane {{
     background: {tokens.window_background};
@@ -222,6 +258,30 @@ QMessageBox QLabel {{ color: {tokens.text_primary}; }}
 QMessageBox QPushButton {{ min-width: 76px; }}
 QMessageBox QPushButton#dangerButton {{ background: {"#5b3035" if is_dark else "#fef2f2"}; color: {"#fecaca" if is_dark else "#b91c1c"}; border-color: {"#9f4048" if is_dark else "#fca5a5"}; }}
 QMessageBox QPushButton#dangerButton:hover {{ background: {"#6f363d" if is_dark else "#fee2e2"}; }}
+QDialog#confirmActionDialog {{ background: transparent; }}
+QFrame#confirmDialogSurface {{
+    background: {tokens.surface}; border: 1px solid {tokens.border_strong}; border-radius: 12px;
+}}
+QWidget#confirmDialogHeader, QWidget#confirmDialogFooter, QWidget#confirmDialogContent,
+QScrollArea#confirmDialogScrollArea, QScrollArea#confirmDialogScrollArea::viewport {{
+    background: transparent; border: none;
+}}
+QWidget#confirmDialogHeader {{ border-bottom: 1px solid {tokens.border}; }}
+QWidget#confirmDialogFooter {{ border-top: 1px solid {tokens.border}; }}
+QLabel#confirmDialogTitle, QLabel#confirmDialogHeading {{ color: {tokens.text_primary}; font-weight: 700; }}
+QLabel#confirmDialogTitle {{ font-size: 15px; }}
+QLabel#confirmDialogHeading {{ font-size: 16px; }}
+QLabel#confirmDialogDescription, QLabel#confirmDialogSectionItem {{ color: {tokens.text_secondary}; }}
+QLabel#confirmDialogSectionTitle {{ color: {tokens.text_primary}; font-weight: 700; margin-top: 4px; }}
+QFrame#confirmDialogInfo {{ background: {tokens.surface_secondary}; border: 1px solid {tokens.border}; border-radius: 8px; }}
+QLabel#confirmDialogInfoLabel {{ color: {tokens.text_secondary}; }}
+QLabel#confirmDialogInfoValue {{ color: {tokens.text_primary}; font-weight: 600; }}
+QToolButton#confirmDialogCloseButton {{
+    background: transparent; color: {tokens.text_secondary}; border: none; border-radius: 7px;
+    min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0;
+}}
+QToolButton#confirmDialogCloseButton:hover {{ background: {danger_hover}; color: {danger_hover_text}; }}
+QPushButton#confirmDialogCancelButton, QPushButton#confirmDialogConfirmButton {{ min-width: 92px; min-height: 36px; }}
 QCalendarWidget {{ background: {tokens.surface}; color: {tokens.text_primary}; border: 1px solid {tokens.border}; border-radius: 8px; }}
 QCalendarWidget QWidget {{ background: {tokens.surface}; color: {tokens.text_primary}; }}
 QCalendarWidget QToolButton {{ background: transparent; color: {tokens.text_primary}; border: none; min-height: 28px; padding: 2px 6px; }}
@@ -333,6 +393,18 @@ QLineEdit#scanInput, QLineEdit#videoSearchInput {{
     border-color: {tokens.border_strong};
 }}
 QLineEdit#scanInput:focus, QLineEdit#videoSearchInput:focus {{ border-color: {tokens.focus_border}; }}
+QToolButton#clearInputButton {{
+    min-width: 30px; max-width: 30px;
+    min-height: 30px; max-height: 30px;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+}}
+QToolButton#clearInputButton:hover {{ background: {tokens.hover}; border: none; }}
+QToolButton#clearInputButton:pressed {{ background: {tokens.selected}; border: none; }}
+QToolButton#clearInputButton:disabled {{ background: transparent; border: none; }}
 QFrame#recordTypeSeparator {{ background: {tokens.border}; }}
 QLabel#recentCardTitle, QLabel#recordTypeTitle, QLabel#sectionTitle {{ color: {tokens.text_primary}; }}
 QFrame#recentTitleAccent {{ background: {tokens.border_strong}; }}
@@ -446,7 +518,9 @@ QFrame#videoSkeletonBlock {{ background: {tokens.border}; }}
 QDialog#settingsDialog {{ background: {tokens.window_background}; }}
 QWidget#settingsBasicTab, QScrollArea#settingsBasicScrollArea,
 QScrollArea#settingsBasicScrollArea::viewport, QWidget#settingsBasicScrollContent,
-QWidget#settingsBasicActionBar, QWidget#settingsVoiceTab {{
+QWidget#settingsBasicActionBar, QWidget#settingsVoiceTab,
+QScrollArea#settingsVoiceScrollArea, QScrollArea#settingsVoiceScrollArea::viewport,
+QWidget#settingsVoiceScrollContent {{
     background: {tokens.window_background};
     border: none;
 }}
@@ -454,7 +528,7 @@ QWidget#settingsBasicActionBar, QWidget#settingsVoiceActionBar, QWidget#settings
     background: {tokens.window_background};
     border: none;
     border-top: 1px solid {tokens.border};
-    min-height: 46px;
+    min-height: 60px;
     padding: 0;
     margin: 0;
 }}
@@ -464,10 +538,9 @@ QFrame#settingsCard, QFrame#customVoicePanel, QFrame#configManagementCard, QFram
 }}
 QLabel#settingsCardTitle, QLabel#configManagementTitle, QLabel#changelogVersion {{ color: {tokens.text_primary}; }}
 QLabel#configManagementHint, QLabel#changelogItem, QLabel#changelogSection {{ color: {tokens.text_secondary}; }}
-QWidget#voiceModePanel, QWidget#transparentSettingsRow, QWidget#voiceTableWidget, QScrollArea#voiceTableScroll {{
+QWidget#voiceModePanel, QWidget#transparentSettingsRow, QWidget#voiceTableWidget {{
     background: transparent;
 }}
-QScrollArea#voiceTableScroll::viewport, QScrollArea#voiceTableScroll > QWidget > QWidget,
 QWidget#voiceRecordActions {{ background: transparent; border: none; }}
 QCheckBox#settingsMainCheckBox, QCheckBox#settingsInlineCheckBox {{
     color: {tokens.text_primary};
@@ -484,24 +557,42 @@ QCheckBox#settingsMainCheckBox::indicator:checked, QCheckBox#settingsInlineCheck
 }}
 QWidget#voiceModePanel QRadioButton {{ color: {tokens.text_primary}; }}
 QWidget#voiceModePanel QRadioButton::indicator {{ border-color: {tokens.border_strong}; background: {tokens.input_background}; }}
-QWidget#voiceModePanel QRadioButton::indicator:checked {{ border: 5px solid {tokens.primary_button_background}; background: {tokens.input_background}; }}
+QWidget#voiceModePanel QRadioButton::indicator:checked {{
+    border: 2px solid {tokens.primary_button_background};
+    border-radius: 9px;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+        stop:0 {tokens.primary_button_background}, stop:0.36 {tokens.primary_button_background},
+        stop:0.42 {tokens.input_background}, stop:1 {tokens.input_background});
+}}
 QFrame#voiceRecordRow {{ background: transparent; border: none; }}
 QFrame#voiceRecordRow:hover {{ background: {tokens.hover}; }}
 QFrame#voiceRecordSeparator {{ background: {tokens.border}; }}
-QPushButton#voiceUploadButton, QPushButton#voicePreviewButton, QPushButton#voiceResetButton {{
-    background: {tokens.surface};
-    color: {tokens.text_primary};
-    border-color: {tokens.border_strong};
+QToolButton#voiceUploadIconButton, QToolButton#voicePreviewIconButton, QToolButton#voiceResetIconButton {{
+    background: transparent;
+    color: {tokens.text_secondary};
+    border: none;
+    border-radius: 6px;
+    padding: 0;
 }}
-QPushButton#voiceUploadButton:hover, QPushButton#voicePreviewButton:hover, QPushButton#voiceResetButton:hover {{
+QToolButton#voiceUploadIconButton:hover, QToolButton#voicePreviewIconButton:hover, QToolButton#voiceResetIconButton:hover {{
     background: {tokens.hover};
     color: {tokens.text_primary};
 }}
+QToolButton#voiceUploadIconButton:pressed, QToolButton#voicePreviewIconButton:pressed, QToolButton#voiceResetIconButton:pressed {{ background: {tokens.selected}; }}
+QToolButton#voiceUploadIconButton:disabled, QToolButton#voicePreviewIconButton:disabled, QToolButton#voiceResetIconButton:disabled {{ color: {tokens.text_disabled}; background: transparent; }}
 QLabel#authStatusLabel {{ color: {tokens.text_secondary}; font-weight: 700; }}
+QLabel#settingsCurrentVersion {{ color: {tokens.text_secondary}; font-weight: 600; }}
 QLabel#authStatusLabel[status="ok"] {{ color: #22c55e; }}
 QLabel#authStatusLabel[status="none"] {{ color: {tokens.text_secondary}; }}
 QLabel#authStatusTag {{ background: {tokens.surface_secondary}; border-color: {tokens.border}; color: {tokens.text_secondary}; }}
 QLabel#authStatusTag[status="ok"] {{ background: {"#173824" if is_dark else "#f0fdf4"}; border-color: {"#2d6a42" if is_dark else "#bbf7d0"}; color: {"#86efac" if is_dark else "#047857"}; }}
+QToolButton#netdiskAuthIconButton, QToolButton#netdiskTestIconButton {{
+    background: transparent; border: none; border-radius: 6px; padding: 0;
+    min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px;
+}}
+QToolButton#netdiskAuthIconButton:hover, QToolButton#netdiskTestIconButton:hover {{ background: {tokens.hover}; }}
+QToolButton#netdiskAuthIconButton:pressed, QToolButton#netdiskTestIconButton:pressed {{ background: {tokens.selected}; }}
+QToolButton#netdiskAuthIconButton:disabled, QToolButton#netdiskTestIconButton:disabled {{ background: transparent; color: {tokens.text_disabled}; }}
 
 /* Detail, history and drilldown dialogs. */
 QDialog#importantMarkDialog, QDialog#recordDetailDialog, QDialog#duplicateRecordsDialog,
@@ -568,10 +659,30 @@ QPushButton#statsQuickButton:checked, QPushButton#statsSegmentButton:checked {{ 
 QLabel#statsSummaryLabel {{ color: {tokens.text_secondary}; }}
 
 /* Help, menus and common state containers. */
-QTextBrowser#helpContent {{ background: {tokens.surface}; color: {tokens.text_primary}; border: 1px solid {tokens.border}; border-radius: 10px; padding: 8px; }}
-QTabWidget#helpTabs::pane {{ background: transparent; border-color: {tokens.border}; }}
-QToolButton#helpPrevButton, QToolButton#helpNextButton {{ background: transparent; color: {tokens.text_primary}; border: 1px solid transparent; border-radius: 8px; }}
-QToolButton#helpPrevButton:hover, QToolButton#helpNextButton:hover {{ background: {tokens.hover}; border-color: {tokens.border}; }}
+QDialog#helpDialog {{ background: {tokens.window_background}; }}
+QWidget#helpNavigation {{ background: transparent; border: none; }}
+QStackedWidget#helpPages {{ background: transparent; border: none; }}
+QTabBar#helpTabBar {{ background: transparent; }}
+QTabBar#helpTabBar::tab {{
+    background: transparent; color: {tokens.text_secondary}; border: none; border-radius: 8px;
+    min-height: 32px; padding: 4px 12px; margin-right: 4px;
+}}
+QTabBar#helpTabBar::tab:hover:!selected {{ background: {tokens.hover}; color: {tokens.text_primary}; }}
+QTabBar#helpTabBar::tab:selected {{ background: {tokens.selected}; color: {tokens.text_primary}; font-weight: 600; }}
+QTabWidget#helpTabs {{ background: transparent; border: none; }}
+QTabWidget#helpTabs::pane {{ background: transparent; border: none; margin-top: 8px; }}
+QTabWidget#helpTabs QTabBar {{ background: transparent; }}
+QTabWidget#helpTabs QTabBar::tab {{
+    background: transparent; color: {tokens.text_secondary}; border: none; border-radius: 8px;
+    min-height: 32px; padding: 4px 12px; margin-right: 4px;
+}}
+QTabWidget#helpTabs QTabBar::tab:hover:!selected {{ background: {tokens.hover}; color: {tokens.text_primary}; }}
+QTabWidget#helpTabs QTabBar::tab:selected {{ background: {tokens.selected}; color: {tokens.text_primary}; font-weight: 600; }}
+QTextBrowser#helpContent {{ background: {tokens.surface}; color: {tokens.text_primary}; border: 1px solid {tokens.border}; border-radius: 12px; padding: 14px; }}
+QToolButton#helpPrevButton, QToolButton#helpNextButton {{ background: transparent; color: {tokens.text_primary}; border: none; border-radius: 8px; padding: 0; }}
+QToolButton#helpPrevButton:hover, QToolButton#helpNextButton:hover {{ background: {tokens.hover}; }}
+QToolButton#helpPrevButton:pressed, QToolButton#helpNextButton:pressed {{ background: {tokens.selected}; }}
+QToolButton#helpPrevButton:disabled, QToolButton#helpNextButton:disabled {{ background: transparent; color: {tokens.text_disabled}; }}
 QFrame#emptyStateContainer, QFrame#errorStateContainer, QFrame#loadingStateContainer {{ background: transparent; }}
 QLabel#emptyStateTitle, QLabel#errorStateTitle {{ color: {tokens.text_secondary}; }}
 QLabel#emptyStateHint, QLabel#errorStateHint {{ color: {tokens.text_disabled}; }}
@@ -606,19 +717,7 @@ QTabWidget#mainNavigation QTabBar::tab:hover:!selected {{
     background: {tokens.hover};
     color: {tokens.text_primary};
 }}
-QWidget#navigationBrand {{ background: transparent; }}
 QWidget#navigationActions {{ background: {tokens.topbar_background}; }}
-QLabel#navigationBrandTitle {{ color: {tokens.text_primary}; font-weight: 700; font-size: 11pt; }}
-QLabel#navigationBrandIcon {{
-    background: transparent;
-    border: none;
-    padding: 0;
-    margin: 0;
-    min-width: 22px;
-    min-height: 22px;
-    max-width: 22px;
-    max-height: 22px;
-}}
 
 QWidget#monitorPage, QWidget#videoQueryPage {{ background: {tokens.window_background}; }}
 QFrame#previewContainer {{
@@ -656,16 +755,22 @@ QLabel#recBadge {{ background: #dc2626; color: #ffffff; border-radius: 6px; padd
 QLabel#recordTypeTitle, QLabel#sectionTitle, QLabel#recentCardTitle {{ color: {tokens.text_primary}; font-weight: 700; }}
 QFrame#recordTypeSeparator {{ background: {tokens.border}; max-height: 1px; }}
 QRadioButton#recordTypeRadio {{ background: transparent; color: {tokens.text_primary}; }}
-QRadioButton#recordTypeRadio::indicator:checked {{
-    border-color: {tokens.focus_border};
-    background: qradialgradient(cx:0.5, cy:0.5, radius:0.55, fx:0.5, fy:0.5,
-        stop:0 {tokens.focus_border}, stop:0.40 {tokens.focus_border},
-        stop:0.44 {tokens.input_background}, stop:1 {tokens.input_background});
-}}
 QRadioButton#recordTypeRadio[recordType="ship"]:checked {{ color: {"#86efac" if is_dark else "#047857"}; }}
 QRadioButton#recordTypeRadio[recordType="return"]:checked {{ color: {"#fde68a" if is_dark else "#c2410c"}; }}
-QRadioButton#recordTypeRadio[recordType="ship"]::indicator:checked {{ border: 5px solid {"#4b9b61" if is_dark else "#16a34a"}; background: {tokens.input_background}; }}
-QRadioButton#recordTypeRadio[recordType="return"]::indicator:checked {{ border: 5px solid {"#c79435" if is_dark else "#d97706"}; background: {tokens.input_background}; }}
+QRadioButton#recordTypeRadio[recordType="ship"]::indicator:checked {{
+    border: 2px solid {"#4b9b61" if is_dark else "#16a34a"};
+    border-radius: 9px;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+        stop:0 {"#4b9b61" if is_dark else "#16a34a"}, stop:0.36 {"#4b9b61" if is_dark else "#16a34a"},
+        stop:0.42 {tokens.input_background}, stop:1 {tokens.input_background});
+}}
+QRadioButton#recordTypeRadio[recordType="return"]::indicator:checked {{
+    border: 2px solid {"#c79435" if is_dark else "#d97706"};
+    border-radius: 9px;
+    background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+        stop:0 {"#c79435" if is_dark else "#d97706"}, stop:0.36 {"#c79435" if is_dark else "#d97706"},
+        stop:0.42 {tokens.input_background}, stop:1 {tokens.input_background});
+}}
 QLineEdit#scanInput {{ min-height: 38px; padding: 5px 10px; border-radius: 8px; }}
 QPushButton#stopButton {{
     background: {"#5b3035" if is_dark else "#fef2f2"};
@@ -682,11 +787,12 @@ QLabel#recentMetaText {{ color: {tokens.text_secondary}; }}
 QLabel#recentTypeTag {{ border-radius: 6px; padding: 1px 6px; font-size: 9pt; font-weight: 600; }}
 QLabel#recentTypeTag[recordType="ship"] {{ background: {"#203429" if is_dark else "#f0fdf4"}; border: 1px solid {"#356344" if is_dark else "#bbf7d0"}; color: {"#86efac" if is_dark else "#047857"}; }}
 QLabel#recentTypeTag[recordType="return"] {{ background: {"#3a301f" if is_dark else "#fff7ed"}; border: 1px solid {"#80652b" if is_dark else "#fed7aa"}; color: {"#fde68a" if is_dark else "#c2410c"}; }}
-QPushButton#recentDeleteButton {{
-    background: transparent; border: 1px solid transparent; color: {"#fecaca" if is_dark else "#b91c1c"};
-    min-width: 76px; max-width: 76px; min-height: 34px; max-height: 34px;
+QToolButton#recentDeleteIconButton {{
+    background: transparent; border: none; border-radius: 6px;
+    min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; padding: 0;
 }}
-QPushButton#recentDeleteButton:hover {{ background: {"#44272b" if is_dark else "#fef2f2"}; border-color: {"#9f4048" if is_dark else "#fca5a5"}; }}
+QToolButton#recentDeleteIconButton:hover {{ background: {"#44272b" if is_dark else "#fef2f2"}; }}
+QToolButton#recentDeleteIconButton:pressed {{ background: {"#5b3035" if is_dark else "#fee2e2"}; }}
 
 QWidget#videoQueryPage QLineEdit#videoSearchInput {{ min-height: 38px; padding: 5px 10px; }}
 QWidget#videoQueryPage QWidget#querySegmentControl {{
@@ -757,18 +863,28 @@ QWidget#videoQueryPage QLabel#statusText[statusState="error"], QWidget#videoQuer
 QWidget#videoQueryPage QLabel#uploadStatusText[uploadState="done"] {{ color: {"#86efac" if is_dark else "#047857"}; }}
 QWidget#videoQueryPage QLabel#uploadStatusText[uploadState="pending"] {{ color: {"#fde68a" if is_dark else "#b45309"}; }}
 QWidget#videoQueryPage QLabel#uploadStatusText[uploadState="uploading"] {{ color: {"#bfdbfe" if is_dark else "#2563eb"}; }}
-QWidget#videoQueryPage QPushButton#openSceneLinkButton, QWidget#videoQueryPage QPushButton#revealSceneLinkButton, QWidget#videoQueryPage QPushButton#tableUploadButton {{
-    background: transparent; border: none; color: {tokens.text_primary}; min-height: 26px; padding: 0 4px;
+QWidget#videoQueryPage QToolButton#sceneOpenIconButton, QWidget#videoQueryPage QToolButton#sceneRevealIconButton {{
+    background: transparent; border: none; border-radius: 6px; min-width: 30px; max-width: 30px;
+    min-height: 30px; max-height: 30px; padding: 0;
 }}
-QWidget#videoQueryPage QPushButton#revealSceneLinkButton {{ color: {tokens.text_secondary}; }}
-QWidget#videoQueryPage QPushButton#openSceneLinkButton:hover, QWidget#videoQueryPage QPushButton#revealSceneLinkButton:hover, QWidget#videoQueryPage QPushButton#tableUploadButton:hover {{ background: {tokens.hover}; text-decoration: underline; border-radius: 5px; }}
-QWidget#videoQueryPage QPushButton#tableDangerButton {{ background: transparent; border: none; color: {"#fecaca" if is_dark else "#b91c1c"}; min-height: 26px; padding: 0 4px; }}
-QWidget#videoQueryPage QPushButton#tableDangerButton:hover {{ background: {"#44272b" if is_dark else "#fef2f2"}; text-decoration: underline; border-radius: 5px; }}
+QWidget#videoQueryPage QToolButton#sceneOpenIconButton:hover, QWidget#videoQueryPage QToolButton#sceneRevealIconButton:hover {{ background: {tokens.hover}; }}
+QWidget#videoQueryPage QToolButton#sceneOpenIconButton:pressed, QWidget#videoQueryPage QToolButton#sceneRevealIconButton:pressed {{ background: {tokens.selected}; }}
+QWidget#videoQueryPage QToolButton#tableUploadIconButton, QWidget#videoQueryPage QToolButton#tableDangerIconButton {{
+    background: transparent; border: none; border-radius: 6px; min-width: 30px; max-width: 30px;
+    min-height: 30px; max-height: 30px; padding: 0;
+}}
+QWidget#videoQueryPage QToolButton#tableUploadIconButton:hover {{ background: {tokens.hover}; }}
+QWidget#videoQueryPage QToolButton#tableUploadIconButton:pressed {{ background: {tokens.selected}; }}
+QWidget#videoQueryPage QToolButton#tableDangerIconButton:hover {{ background: {"#44272b" if is_dark else "#fef2f2"}; }}
+QWidget#videoQueryPage QToolButton#tableDangerIconButton:pressed {{ background: {"#5b3035" if is_dark else "#fee2e2"}; }}
+QWidget#videoQueryPage QToolButton#tableUploadIconButton:disabled, QWidget#videoQueryPage QToolButton#tableDangerIconButton:disabled {{
+    background: transparent; color: {tokens.text_disabled};
+}}
 QWidget#videoQueryPage QWidget#paginationBar {{ background: transparent; border-top: 1px solid {tokens.border}; }}
-QWidget#videoQueryPage QPushButton#paginationButton, QWidget#videoQueryPage QPushButton#paginationPageButton {{ background: transparent; border-color: transparent; color: {tokens.text_secondary}; min-height: 32px; min-width: 32px; padding: 2px 7px; }}
+QWidget#videoQueryPage QPushButton#paginationButton, QWidget#videoQueryPage QPushButton#paginationPageButton {{ background: transparent; border-color: transparent; color: {tokens.text_secondary}; min-height: 34px; min-width: 32px; padding: 2px 7px; }}
 QWidget#videoQueryPage QPushButton#paginationButton:hover, QWidget#videoQueryPage QPushButton#paginationPageButton:hover {{ background: {tokens.hover}; color: {tokens.text_primary}; }}
 QWidget#videoQueryPage QPushButton#paginationPageButton:checked {{ background: {tokens.selected}; color: {tokens.text_primary}; border-color: transparent; }}
-QWidget#videoQueryPage QComboBox#paginationCombo, QWidget#videoQueryPage QLineEdit#paginationJumpInput {{ min-height: 32px; border-color: {tokens.border}; }}
+QWidget#videoQueryPage QComboBox#paginationCombo, QWidget#videoQueryPage QLineEdit#paginationJumpInput {{ min-height: 34px; border-color: {tokens.border}; }}
 
 /* The generic filter rule is declared above, so apply the segmented state last. */
 QWidget#videoQueryPage QWidget#querySegmentControl QPushButton#filterButton:hover {{ background: {tokens.hover}; border-color: {tokens.border}; }}

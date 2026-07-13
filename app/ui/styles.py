@@ -1417,51 +1417,6 @@ QTextBrowser#helpContent {
     padding: 14px;
 }
 
-QTabBar#helpTabBar::scroller {
-    width: 88px;
-}
-
-QToolButton#helpPrevButton,
-QToolButton#helpNextButton,
-QTabBar#helpTabBar QToolButton {
-    width: 36px;
-    height: 36px;
-    min-width: 36px;
-    max-width: 36px;
-    min-height: 36px;
-    max-height: 36px;
-    border: 1px solid #cbd5e1;
-    border-radius: 9px;
-    background: #ffffff;
-    color: #475569;
-    padding: 0px;
-    margin: 0px;
-}
-
-QToolButton#helpPrevButton:hover,
-QToolButton#helpNextButton:hover,
-QTabBar#helpTabBar QToolButton:hover {
-    border-color: #14b8a6;
-    background: #f0fdfa;
-    color: #0f766e;
-}
-
-QToolButton#helpPrevButton:pressed,
-QToolButton#helpNextButton:pressed,
-QTabBar#helpTabBar QToolButton:pressed {
-    border-color: #0f766e;
-    background: #ccfbf1;
-    color: #0f766e;
-}
-
-QToolButton#helpPrevButton:disabled,
-QToolButton#helpNextButton:disabled,
-QTabBar#helpTabBar QToolButton:disabled {
-    border-color: #e2e8f0;
-    background: #f8fafc;
-    color: #94a3b8;
-}
-
 QDialog#packagingStatsDialog {
     background: #f8fafc;
 }

@@ -59,7 +59,9 @@ from app.core.important_reasons import (
 )
 from app.core.netdisk_sync import NetdiskUploadWorker, normalize_netdisk_config
 from app.core.video_player import open_folder, open_video, reveal_in_file_manager
+from app.ui.confirm_dialog import ConfirmActionDialog, confirm_action
 from app.ui.dialog_utils import DialogSizeManager
+from app.ui.themed_line_edit import ThemedClearableLineEdit
 from app.ui.toast import show_toast
 from app.utils.runtime_paths import resource_path
 from app.utils.time_utils import format_duration
@@ -906,14 +908,13 @@ class RecordDetailDialog(QDialog):
             return
 
         if self._text(self.record.get("file_hash"), ""):
-            box = QMessageBox(self)
-            box.setWindowTitle("重新生成校验码")
-            box.setText("重新生成校验码会覆盖当前哈希记录，是否继续？")
-            cancel = box.addButton("取消", QMessageBox.RejectRole)
-            confirm = box.addButton("继续生成", QMessageBox.AcceptRole)
-            box.setDefaultButton(cancel)
-            box.exec()
-            if box.clickedButton() is not confirm:
+            if not confirm_action(
+                self,
+                title="重新生成校验码",
+                heading="重新生成校验码会覆盖当前哈希记录，是否继续？",
+                confirm_text="继续生成",
+                destructive=True,
+            ):
                 return
 
         _enabled, algorithm = self._current_hash_config()
@@ -1030,10 +1031,7 @@ class RecordDetailDialog(QDialog):
                 return
             except Exception:
                 self.logger.exception("详情弹窗提示失败：%s", message)
-        if level == "error":
-            QMessageBox.warning(self, "提示", message)
-        else:
-            QMessageBox.information(self, "提示", message)
+        show_toast(self, message, level, 3500 if level == "error" else 2400, self.logger)
 
     def _status_badge(self, text: str, color: str) -> QLabel:
         badge = QLabel(text)
@@ -1426,40 +1424,36 @@ class DuplicateRecordsDialog(QDialog):
     def _confirm_delete(self, records: list[dict[str, Any]], batch: bool) -> bool:
         if not records:
             return False
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
         if batch:
-            box.setWindowTitle("批量删除重复录制记录")
-            box.setText(f"确定要删除选中的 {len(records)} 条录制记录吗？")
-            detail = "删除后将删除本地视频文件和数据库记录。\n如其中部分视频已上传网盘，本次不会删除网盘文件。"
             missing_count = sum(1 for record in records if not Path(str(record.get("file_path") or "")).exists())
+            description = "删除后将删除本地视频文件和数据库记录；已上传的网盘文件不会删除。"
             if missing_count:
-                detail += f"\n其中 {missing_count} 条本地视频文件已不存在，确认后仅移除数据库记录。"
+                description += f" 其中 {missing_count} 条本地文件已不存在，将仅移除数据库记录。"
+            info_label = "选中记录"
+            info_value = f"{len(records)} 条"
         else:
             record = records[0]
-            box.setWindowTitle("删除重复录制记录")
-            box.setText("确定要删除这条录制记录吗？")
-            detail = (
-                f"单号：{self.order_no}\n"
-                f"录制时间：{self._recording_time(record)}\n"
-                "删除后将删除本地视频文件和数据库记录。"
-            )
+            description = f"录制时间：{self._recording_time(record)}。删除后将删除本地视频文件和数据库记录。"
             if str(record.get("upload_status") or "") == UPLOAD_DONE:
-                detail += "\n如该视频已上传网盘，本次仅删除本地文件和本地记录，不会删除网盘文件。"
+                description += " 已上传的网盘文件不会删除。"
             if not Path(str(record.get("file_path") or "")).exists():
-                detail += "\n当前视频文件已不存在，确认后仅移除数据库记录。"
+                description += " 当前视频文件已不存在，将仅移除数据库记录。"
+            info_label = "单号"
+            info_value = self.order_no
         important_count = sum(1 for record in records if self._is_important(record))
         if important_count:
-            if batch:
-                detail += f"\n选中记录中包含 {important_count} 条已标记为重要的记录，请谨慎删除。"
-            else:
-                detail += "\n该记录已标记为重要，可能涉及售后争议，是否仍要删除？"
-        box.setInformativeText(detail)
-        confirm_button = box.addButton("仍然删除" if important_count else "确认删除", QMessageBox.AcceptRole)
-        cancel_button = box.addButton("取消", QMessageBox.RejectRole)
-        box.setDefaultButton(cancel_button)
-        box.exec()
-        return box.clickedButton() is confirm_button
+            description += f" 其中 {important_count} 条记录已标记为重要，请谨慎删除。"
+        return confirm_action(
+            self,
+            title="批量删除重复录制记录" if batch else "删除重复录制记录",
+            heading=f"确定删除选中的 {len(records)} 条录制记录吗？" if batch else "确定删除这条录制记录吗？",
+            description=description,
+            info_label=info_label,
+            info_value=info_value,
+            sections=(("将删除：", ("本地数据库记录", "本地视频文件")),),
+            confirm_text="仍然删除" if important_count else "删除本地视频",
+            destructive=True,
+        )
 
     def _delete_records(self, records: list[dict[str, Any]]) -> tuple[int, list[str]]:
         success = 0
@@ -1868,13 +1862,13 @@ class NetdiskHistoryDialog(QDialog):
 
     def reject(self) -> None:
         if self._retry_running:
-            QMessageBox.information(self, "正在重试上传失败", "当前正在重试上传失败，请等待任务完成。")
+            show_toast(self, "当前正在重试上传失败，请等待任务完成", "info", 2600, self.logger)
             return
         super().reject()
 
     def closeEvent(self, event) -> None:
         if self._retry_running:
-            QMessageBox.information(self, "正在重试上传失败", "当前正在重试上传失败，请等待任务完成。")
+            show_toast(self, "当前正在重试上传失败，请等待任务完成", "info", 2600, self.logger)
             event.ignore()
             return
         super().closeEvent(event)
@@ -1921,6 +1915,8 @@ class NetdiskHistoryDialog(QDialog):
 
 
 class QueryTab(QWidget):
+    video_list_changed = Signal(str)
+
     PAGE_SIZE_OPTIONS = (10, 20, 50, 100)
     UPLOAD_STATUS_FILTER_OPTIONS = ("全部", UPLOAD_PENDING, UPLOAD_DONE, UPLOAD_FAILED, UPLOAD_UPLOADING)
     RECORD_TYPE_COLUMN = 5
@@ -1964,6 +1960,7 @@ class QueryTab(QWidget):
         self._pending_load = False
         self._pending_load_rebuild = False
         self._pending_load_show_notice = False
+        self._restore_scroll_after_load: int | None = None
         self._table_state = "content"
         self._skeleton_active = False
         self._skeleton_blocks: list[QFrame] = []
@@ -2073,6 +2070,25 @@ class QueryTab(QWidget):
             self._clear_query_cache()
         self._request_video_load(rebuild=rebuild, show_notice=show_notice)
 
+    def reload_current_query(
+        self,
+        *,
+        preserve_filters: bool = True,
+        preserve_page: bool = True,
+        preserve_scroll: bool = True,
+    ) -> None:
+        """Reload the visible query without disturbing the user's current context."""
+        del preserve_filters  # Filters live in their controls and remain unchanged by a refresh.
+        if not preserve_page:
+            self.current_page = 1
+        if preserve_scroll:
+            self._restore_scroll_after_load = self.table.verticalScrollBar().value()
+        self.refresh(rebuild=False, show_notice=False)
+
+    def _notify_video_list_changed(self, reason: str) -> None:
+        self.reload_current_query(preserve_filters=True, preserve_page=True, preserve_scroll=True)
+        self.video_list_changed.emit(reason)
+
     def _clear_query_cache(self) -> None:
         if hasattr(self, "_query_cache"):
             self._query_cache.clear()
@@ -2114,10 +2130,9 @@ class QueryTab(QWidget):
         layout.setSpacing(10)
 
         toolbar = QHBoxLayout()
-        self.search_input = QLineEdit()
+        self.search_input = ThemedClearableLineEdit()
         self.search_input.setObjectName("videoSearchInput")
         self.search_input.setPlaceholderText("输入单号、视频名称或备注搜索。")
-        self.search_input.setClearButtonEnabled(True)
         self.refresh_button = QPushButton("刷新列表")
         self.refresh_button.setObjectName("primaryButton")
         self.open_location_button = QPushButton("打开所在文件夹")
@@ -2350,7 +2365,7 @@ class QueryTab(QWidget):
         self.table.setTextElideMode(Qt.ElideRight)
         self.table.setWordWrap(False)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.table.setColumnWidth(self.ACTION_COLUMN, 112)
+        self.table.setColumnWidth(self.ACTION_COLUMN, 80)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(72)
         self.table.verticalHeader().setMinimumSectionSize(68)
@@ -2376,8 +2391,8 @@ class QueryTab(QWidget):
         self.table.setColumnWidth(4, 118)
         self.table.setColumnWidth(5, 92)
         self.table.setColumnWidth(self.STATUS_COLUMN, 152)
-        self.table.setColumnWidth(self.SCENE_COLUMN, 118)
-        self.table.setColumnWidth(self.ACTION_COLUMN, 112)
+        self.table.setColumnWidth(self.SCENE_COLUMN, 80)
+        self.table.setColumnWidth(self.ACTION_COLUMN, 80)
         self.video_table_container = QFrame()
         self.video_table_container.setObjectName("videoTableContainer")
         video_table_layout = QVBoxLayout(self.video_table_container)
@@ -2388,15 +2403,19 @@ class QueryTab(QWidget):
 
         self.pagination_container = QWidget()
         self.pagination_container.setObjectName("paginationBar")
+        self.pagination_container.setMinimumHeight(56)
+        self.pagination_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         pagination_layout = QHBoxLayout(self.pagination_container)
-        pagination_layout.setContentsMargins(2, 6, 2, 0)
+        pagination_layout.setContentsMargins(10, 8, 10, 8)
         pagination_layout.setSpacing(8)
+        pagination_layout.setAlignment(Qt.AlignVCenter)
 
         self.total_count_label = QLabel("共 0 条")
         self.total_count_label.setObjectName("paginationTotalLabel")
         self.page_size_combo = QComboBox()
         self.page_size_combo.setObjectName("paginationCombo")
         self.page_size_combo.setFixedWidth(76)
+        self.page_size_combo.setMinimumHeight(34)
         self.page_size_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         for size in self.PAGE_SIZE_OPTIONS:
             self.page_size_combo.addItem(f"{size}条/页", size)
@@ -2405,9 +2424,11 @@ class QueryTab(QWidget):
 
         self.prev_page_button = QPushButton("<")
         self.prev_page_button.setObjectName("paginationButton")
+        self.prev_page_button.setMinimumHeight(34)
         self.prev_page_button.setToolTip("上一页")
         self.next_page_button = QPushButton(">")
         self.next_page_button.setObjectName("paginationButton")
+        self.next_page_button.setMinimumHeight(34)
         self.next_page_button.setToolTip("下一页")
 
         self.page_buttons_host = QWidget()
@@ -2421,6 +2442,7 @@ class QueryTab(QWidget):
         self.jump_page_input.setValidator(self.jump_page_validator)
         self.jump_page_input.setAlignment(Qt.AlignCenter)
         self.jump_page_input.setFixedWidth(56)
+        self.jump_page_input.setMinimumHeight(34)
 
         pagination_layout.addWidget(self.total_count_label)
         pagination_layout.addWidget(self.page_size_combo)
@@ -2599,6 +2621,20 @@ class QueryTab(QWidget):
         self._skeleton_colors = self._skeleton_palette()
         if self._skeleton_active:
             self._on_loading_animation_tick()
+        self._refresh_table_action_icons()
+
+    def _apply_table_action_icon(self, button: QToolButton, icon_name: str) -> None:
+        resolved_theme = self._theme_manager.resolved_theme() if self._theme_manager is not None else "light"
+        suffix = "-light" if resolved_theme == "dark" else ""
+        icon_path = resource_path(f"app/assets/icons/{icon_name}{suffix}.svg")
+        button.setIcon(QIcon(str(icon_path)) if icon_path.exists() else QIcon())
+        button.setIconSize(QSize(17, 17))
+
+    def _refresh_table_action_icons(self) -> None:
+        for button in self.table.findChildren(QToolButton):
+            icon_name = button.property("actionIcon")
+            if icon_name:
+                self._apply_table_action_icon(button, str(icon_name))
 
     def _show_skeleton_rows(self, row_count: int = 7) -> None:
         self._skeleton_active = True
@@ -2740,6 +2776,15 @@ class QueryTab(QWidget):
         rebuild = bool(result.get("rebuild"))
         render_started = time.perf_counter()
         self._render_rows(rows, offset)
+        if self._restore_scroll_after_load is not None:
+            scroll_value = self._restore_scroll_after_load
+            self._restore_scroll_after_load = None
+            QTimer.singleShot(
+                0,
+                lambda value=scroll_value: self.table.verticalScrollBar().setValue(
+                    min(value, self.table.verticalScrollBar().maximum())
+                ),
+            )
         render_ms = (time.perf_counter() - render_started) * 1000
         cache_key = self._request_cache_keys.pop(request_id, None)
         if cache_key is not None and not rebuild:
@@ -3004,19 +3049,30 @@ class QueryTab(QWidget):
         self.table.setItem(row, self.SCENE_COLUMN, item)
 
         container = QWidget()
+        container.setObjectName("tableSceneActionCell")
         layout = QHBoxLayout(container)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(10)
+        layout.setSpacing(6)
         layout.setAlignment(Qt.AlignCenter)
 
-        open_button = QPushButton("打开")
-        open_button.setObjectName("openSceneLinkButton")
+        open_button = QToolButton()
+        open_button.setObjectName("sceneOpenIconButton")
+        open_button.setProperty("actionIcon", "play")
+        open_button.setFixedSize(30, 30)
         open_button.setCursor(Qt.PointingHandCursor)
+        open_button.setToolTip("打开视频")
+        open_button.setAccessibleName("打开视频")
+        self._apply_table_action_icon(open_button, "play")
         open_button.clicked.connect(lambda _checked=False, video_path=path: self._open_scene_video(video_path))
 
-        reveal_button = QPushButton("定位")
-        reveal_button.setObjectName("revealSceneLinkButton")
+        reveal_button = QToolButton()
+        reveal_button.setObjectName("sceneRevealIconButton")
+        reveal_button.setProperty("actionIcon", "folder-open")
+        reveal_button.setFixedSize(30, 30)
         reveal_button.setCursor(Qt.PointingHandCursor)
+        reveal_button.setToolTip("定位文件")
+        reveal_button.setAccessibleName("定位文件")
+        self._apply_table_action_icon(reveal_button, "folder-open")
         reveal_button.clicked.connect(lambda _checked=False, video_path=path: self._reveal_scene_video(video_path))
 
         layout.addWidget(open_button)
@@ -3141,20 +3197,27 @@ class QueryTab(QWidget):
 
         if self._should_show_upload_action(entry, path):
             upload_status = str(entry.get("upload_status") or UPLOAD_PENDING)
-            upload_button = QPushButton("上传" if upload_status != UPLOAD_UPLOADING else "上传中")
-            upload_button.setObjectName("tableUploadButton")
-            upload_button.setFixedSize(48, 26)
+            upload_button = QToolButton()
+            upload_button.setObjectName("tableUploadIconButton")
+            upload_button.setProperty("actionIcon", "upload")
+            upload_button.setFixedSize(30, 30)
             upload_button.setEnabled(upload_status != UPLOAD_UPLOADING)
             upload_button.setCursor(Qt.PointingHandCursor)
-            upload_button.setToolTip("上传该视频到百度网盘")
+            upload_button.setAccessibleName("上传" if upload_status != UPLOAD_UPLOADING else "上传中")
+            upload_button.setToolTip("上传" if upload_status != UPLOAD_UPLOADING else "上传中")
+            self._apply_table_action_icon(upload_button, "upload")
             upload_button.clicked.connect(lambda _checked=False, row_entry=dict(entry): self._upload_single_video(row_entry))
             layout.addWidget(upload_button)
 
-        button = QPushButton("删除")
-        button.setObjectName("tableDangerButton")
-        button.setFixedSize(48, 26)
+        button = QToolButton()
+        button.setObjectName("tableDangerIconButton")
+        button.setProperty("actionIcon", "trash")
+        button.setFixedSize(30, 30)
+        button.setCursor(Qt.PointingHandCursor)
         button.setProperty("video_path", str(path))
-        button.setToolTip("删除该视频物理文件")
+        button.setAccessibleName("删除")
+        button.setToolTip("删除")
+        self._apply_table_action_icon(button, "trash")
         button.clicked.connect(lambda _checked=False, video_path=path: self._delete_video(video_path))
         layout.addWidget(button)
         self.table.setCellWidget(row, self.ACTION_COLUMN, container)
@@ -3219,7 +3282,7 @@ class QueryTab(QWidget):
             self.upload_status_filter = "全部"
             self._sync_upload_status_filter_buttons()
         self.table.setColumnWidth(self.STATUS_COLUMN, 170 if enabled else 152)
-        self.table.setColumnWidth(self.ACTION_COLUMN, 124 if enabled else 112)
+        self.table.setColumnWidth(self.ACTION_COLUMN, 80 if enabled else 56)
         if not enabled and not self.is_netdisk_syncing():
             self._hide_netdisk_progress()
             self._cancel_auto_sync_countdown(update_controls=False)
@@ -3391,6 +3454,15 @@ class QueryTab(QWidget):
 
     def _stop_netdisk_sync(self) -> None:
         if self.auto_sync_state == "countdown":
+            if not confirm_action(
+                self,
+                title="停止同步",
+                heading="确定停止本次自动同步吗？",
+                description="已完成的状态会保留，尚未开始的文件不会上传。",
+                confirm_text="停止同步",
+                destructive=True,
+            ):
+                return
             self._cancel_auto_sync_countdown("自动同步：已停止")
             self.auto_sync_state = "stopped"
             self._set_auto_sync_status("自动同步：已停止")
@@ -3398,6 +3470,15 @@ class QueryTab(QWidget):
             self._update_netdisk_controls()
             return
         if self.upload_worker is None:
+            return
+        if not confirm_action(
+            self,
+            title="停止同步",
+            heading="确定安全停止当前同步任务吗？",
+            description="当前文件会按现有安全停止规则处理，尚未完成的文件可稍后重试。",
+            confirm_text="停止同步",
+            destructive=True,
+        ):
             return
         self.auto_sync_state = "stopping"
         self._auto_sync_stop_requested = True
@@ -3458,16 +3539,14 @@ class QueryTab(QWidget):
                 return
             order_no = str(latest.get("order_no") or "-")
             if self._is_important_entry(latest):
-                box = QMessageBox(self)
-                box.setIcon(QMessageBox.Question)
-                box.setWindowTitle("取消重要标记")
-                box.setText("确定要取消该视频的重要标记吗？")
-                box.setInformativeText(f"单号：{order_no}")
-                cancel_button = box.addButton("取消", QMessageBox.RejectRole)
-                confirm_button = box.addButton("确认取消", QMessageBox.AcceptRole)
-                box.setDefaultButton(cancel_button)
-                box.exec()
-                if box.clickedButton() is not confirm_button:
+                if not confirm_action(
+                    self,
+                    title="取消重要标记",
+                    heading="确定要取消该视频的重要标记吗？",
+                    info_label="单号",
+                    info_value=order_no,
+                    confirm_text="确认取消",
+                ):
                     return
                 affected = self.database.update_video_importance(record_id, False)
                 if affected != 1:
@@ -3560,14 +3639,13 @@ class QueryTab(QWidget):
         message = f"即将重试上传 {len(upload_entries)} 条失败记录，是否继续？"
         if skipped_count:
             message += f"\n已跳过 {skipped_count} 条本地文件不可用的记录。"
-        answer = QMessageBox.question(
+        if not confirm_action(
             self,
-            "重试上传失败",
-            message,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
+            title="重试上传失败",
+            heading=f"即将重试上传 {len(upload_entries)} 条失败记录，是否继续？",
+            description=f"已跳过 {skipped_count} 条本地文件不可用的记录。" if skipped_count else "",
+            confirm_text="开始重试",
+        ):
             return
         self._start_netdisk_upload(upload_entries, mode="retry")
 
@@ -3612,14 +3690,13 @@ class QueryTab(QWidget):
         message = f"即将重试上传 {len(upload_entries)} 条失败记录，是否继续？"
         if skipped_count:
             message += f"\n已跳过 {skipped_count} 条本地文件不可用的记录。"
-        answer = QMessageBox.question(
+        if not confirm_action(
             dialog,
-            "重试上传失败",
-            message,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
+            title="重试上传失败",
+            heading=f"即将重试上传 {len(upload_entries)} 条失败记录，是否继续？",
+            description=f"已跳过 {skipped_count} 条本地文件不可用的记录。" if skipped_count else "",
+            confirm_text="开始重试",
+        ):
             return
         self.netdisk_history_dialog = dialog
         dialog.set_retry_running(True)
@@ -3678,7 +3755,7 @@ class QueryTab(QWidget):
             0,
         )
         worker.progress_changed.connect(self._on_netdisk_upload_progress)
-        worker.row_changed.connect(lambda _path: self.refresh(rebuild=False, show_notice=False))
+        worker.row_changed.connect(self._on_upload_status_changed)
         worker.upload_failed.connect(self._on_netdisk_upload_failed)
         worker.tokens_refreshed.connect(self._save_netdisk_tokens)
         worker.finished_summary.connect(self._on_netdisk_upload_finished)
@@ -3715,6 +3792,33 @@ class QueryTab(QWidget):
         if self.netdisk_task_mode == "retry" and self.netdisk_history_dialog is not None:
             self.netdisk_history_dialog.show_retry_progress(current, total, file_name, success_count, fail_count)
 
+    def _on_upload_status_changed(self, file_path: str) -> None:
+        """Update one visible row in the UI thread, then invalidate stale query cache entries."""
+        path = Path(file_path)
+        self._clear_query_cache()
+        try:
+            record = self.database.get_video_by_path(path)
+        except Exception:
+            self.logger.exception("读取上传状态更新失败：path=%s", path)
+            record = None
+
+        # A status filter can add or remove the current row, so it needs a full query.
+        if record is None or self._current_upload_status_filter() is not None:
+            self.reload_current_query(preserve_filters=True, preserve_page=True, preserve_scroll=True)
+        else:
+            for row in range(self.table.rowCount()):
+                if self._path_from_row(row) != path:
+                    continue
+                self.table.setUpdatesEnabled(False)
+                try:
+                    self._set_status_item(row, record, path)
+                    self._set_delete_button(row, record)
+                finally:
+                    self.table.setUpdatesEnabled(True)
+                self.table.viewport().update()
+                break
+        self.video_list_changed.emit("upload_status_changed")
+
     def _hide_netdisk_progress(self) -> None:
         if hasattr(self, "netdisk_progress_container") and not self.is_netdisk_syncing():
             self.netdisk_progress_container.hide()
@@ -3740,7 +3844,8 @@ class QueryTab(QWidget):
         self.logger.info("网盘%s任务结束：success=%s, failed=%s", task_name, success_count, fail_count)
         self.upload_worker = None
         self._update_netdisk_controls()
-        self.refresh(rebuild=False, show_notice=False)
+        self.reload_current_query(preserve_filters=True, preserve_page=True, preserve_scroll=True)
+        self.video_list_changed.emit("sync_batch_finished")
         if finished_mode == "retry" and self.netdisk_history_dialog is not None:
             self.netdisk_history_dialog.show_retry_finished(success_count, fail_count)
 
@@ -3754,7 +3859,6 @@ class QueryTab(QWidget):
                 self.netdisk_progress_title.setText(f"自动同步已暂停：已完成 {success_count} 个，失败 {fail_count} 个")
                 self.netdisk_progress_current.setText("录制中，当前文件完成后已暂停剩余队列。")
                 self._set_auto_sync_status("自动同步：录制中，已暂停")
-                self._show_notice("自动同步已暂停，正在录制", "info", 4000)
             else:
                 self.netdisk_progress_title.setText(f"同步已停止：已完成 {success_count} 个，失败 {fail_count} 个")
                 self.netdisk_progress_current.setText("尚未开始上传的记录保持未上传。")
@@ -4136,99 +4240,69 @@ class QueryTab(QWidget):
             record = None
         is_important = self._is_important_entry(record or {})
         important_note = self._important_reason_text(record or {})
-        if not path.exists():
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Warning)
-            box.setWindowTitle("删除记录")
-            if is_important:
-                box.setText("该记录已标记为重要，可能涉及售后争议。\n当前视频文件已不存在，确定仍要从列表中移除此记录吗？")
-            else:
-                box.setText("当前视频文件已不存在，是否从列表中移除此记录？")
-            detail = f"记录路径：{path}"
-            if important_note:
-                detail += f"\n重要原因：{important_note}"
-            box.setInformativeText(detail)
-            confirm_button = box.addButton("仍然移除" if is_important else "确认", QMessageBox.AcceptRole)
-            cancel_button = box.addButton("取消", QMessageBox.RejectRole)
-            box.setDefaultButton(cancel_button)
-            box.exec()
-
-            if box.clickedButton() is not confirm_button:
-                return
-
-            try:
-                deleted = self.database.delete_video_record(path)
-                if deleted:
-                    self.logger.info(
-                        "file missing, remove db record only: dir=%s, path=%s",
-                        self.video_dir,
-                        path,
-                    )
-                    self._show_notice("记录已移除", "success")
-                else:
-                    self.logger.warning("文件不存在记录移除失败：SQLite 记录不存在，dir=%s, path=%s", self.video_dir, path)
-                    self._show_notice("记录不存在，列表已刷新", "warning")
-                self.refresh(rebuild=False, show_notice=False)
-            except Exception as exc:
-                self.logger.exception("文件不存在记录移除失败：dir=%s, path=%s", self.video_dir, path)
-                self._show_notice(f"记录移除失败：{exc}", "error")
-            return
-
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("确认删除")
+        file_exists = path.exists()
+        uploaded = str((record or {}).get("upload_status") or "") == UPLOAD_DONE
+        order_no = str((record or {}).get("order_no") or path.name or "-")
+        description = (
+            "删除后，本地数据库记录与本地视频文件将无法恢复。"
+            if file_exists
+            else "本地视频文件已不存在，移除后该记录将不再显示。"
+        )
         if is_important:
-            box.setText("该记录已标记为重要，可能涉及售后争议。\n确定仍要删除吗？")
+            description += " 该记录已标记为重要，请确认不再需要本地证据。"
+        removed = ("本地数据库记录", "本地视频文件") if file_exists else ("本地数据库记录",)
+        sections: list[tuple[str, tuple[str, ...]]] = [("将删除：", removed)]
+        if uploaded:
+            sections.append(("不会删除：", ("已上传至网盘的视频文件",)))
         else:
-            box.setText("确定要删除该视频文件吗？")
-        detail = f"文件名：{path.name}\n位置：{path}"
+            sections.append(("提示：", ("此视频尚未上传至网盘，删除后无法从网盘恢复",)))
         if important_note:
-            detail += f"\n重要原因：{important_note}"
-        box.setInformativeText(detail)
-        confirm_button = box.addButton("仍然删除" if is_important else "确认", QMessageBox.AcceptRole)
-        cancel_button = box.addButton("取消", QMessageBox.RejectRole)
-        box.setDefaultButton(cancel_button)
-        box.exec()
+            sections.append(("重要原因：", (important_note,)))
+        dialog = ConfirmActionDialog(
+            title="删除视频",
+            heading="确定删除这条视频记录吗？" if file_exists else "确定移除这条视频记录吗？",
+            description=description,
+            info_label="单号",
+            info_value=order_no,
+            sections=sections,
+            confirm_text="删除本地视频" if file_exists else "移除本地记录",
+            destructive=True,
+            parent=self,
+        )
 
-        if box.clickedButton() is not confirm_button:
-            return
-
-        try:
-            path.unlink()
-            self.logger.info("视频存储目录下删除视频：dir=%s, path=%s", self.video_dir, path)
-            deleted = self.database.delete_video_record(path)
-            if deleted:
-                self.logger.info("删除后 SQLite 记录同步更新：%s", path)
-            else:
-                self.logger.warning("删除视频文件后未找到 SQLite 记录：%s", path)
-            self._show_notice("视频已删除", "success")
-            self.refresh(rebuild=False, show_notice=False)
-        except FileNotFoundError:
+        def delete_action() -> tuple[bool, str]:
             try:
-                deleted = self.database.delete_video_record(path)
-                if deleted:
-                    self.logger.info(
-                        "file missing during unlink, remove db record only: dir=%s, path=%s",
-                        self.video_dir,
-                        path,
-                    )
-                    self._show_notice("记录已移除", "success")
-                else:
-                    self.logger.warning("删除时文件已不存在且 SQLite 记录不存在：dir=%s, path=%s", self.video_dir, path)
-                    self._show_notice("记录不存在，列表已刷新", "warning")
-                self.refresh(rebuild=False, show_notice=False)
+                removed_file = False
+                if path.exists():
+                    path.unlink()
+                    removed_file = True
+                    self.logger.info("视频存储目录下删除视频：dir=%s, path=%s", self.video_dir, path)
+                deleted_record = self.database.delete_video_record(path)
+                if not deleted_record and record is not None:
+                    self.logger.warning("删除视频后未找到 SQLite 记录：path=%s", path)
+                    return False, "视频删除失败：未找到对应数据库记录"
+                self.logger.info(
+                    "视频删除完成：id=%s, path=%s, file_deleted=%s, record_deleted=%s",
+                    (record or {}).get("id") or "-",
+                    path,
+                    removed_file,
+                    bool(deleted_record),
+                )
+                return True, ""
+            except PermissionError as exc:
+                self.logger.exception("视频删除失败：权限不足或文件被占用，path=%s", path)
+                return False, f"视频删除失败：权限不足或文件正在被占用（{exc}）"
+            except OSError as exc:
+                self.logger.exception("视频删除失败：path=%s", path)
+                return False, f"视频删除失败：{exc}"
             except Exception as exc:
-                self.logger.exception("删除时文件已不存在，移除 SQLite 记录失败：dir=%s, path=%s", self.video_dir, path)
-                self._show_notice(f"记录移除失败：{exc}", "error")
-        except PermissionError as exc:
-            self.logger.exception("视频存储目录下删除视频失败：权限不足，dir=%s, path=%s", self.video_dir, path)
-            self._show_notice(f"删除失败：权限不足或文件正在被占用（{exc}）", "error")
-        except OSError as exc:
-            self.logger.exception("视频存储目录下删除视频失败：dir=%s, path=%s", self.video_dir, path)
-            self._show_notice(f"删除失败：{exc}", "error")
-        except Exception as exc:
-            self.logger.exception("视频存储目录下删除视频未知异常：dir=%s, path=%s", self.video_dir, path)
-            self._show_notice(f"删除失败：未知异常（{exc}）", "error")
+                self.logger.exception("视频删除未知异常：path=%s", path)
+                return False, f"视频删除失败：{exc}"
+
+        if not dialog.run_action(delete_action):
+            return
+        self._show_notice("视频已删除", "success")
+        self._notify_video_list_changed("deleted")
 
     def _edit_remark(self, row: int) -> None:
         path = self._path_from_row(row)

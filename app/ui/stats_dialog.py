@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,9 @@ from app.core.important_reasons import IMPORTANT_REASON_OPTIONS, remark_display_
 from app.core.video_player import open_video, reveal_in_file_manager
 from app.theme.theme_tokens import LIGHT_TOKENS, ThemeTokens
 from app.ui.dialog_utils import DialogSizeManager
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 CORE_METRICS = (
@@ -941,9 +945,8 @@ class PackagingStatsDialog(QDialog):
                 ]
             )
             self.reason_widget.set_data(stats.get("important_reasons", {}))
-            self._notice("统计数据已刷新", "success")
         except Exception as exc:
-            self._notice(f"统计数据加载失败：{exc}", "error")
+            LOGGER.exception("统计数据加载失败：%s", exc)
 
     def _show_metric_detail(self, metric_key: str) -> None:
         metric_map = {key: title for key, title, _short, _color, _hint in CORE_METRICS}
@@ -1016,9 +1019,8 @@ class PackagingStatsDialog(QDialog):
                 card.value_label.style().polish(card.value_label)
             self._refresh_compare_chart()
             self.compare_summary.setText(self._summary_text(diff, names[0], names[1]))
-            self._notice("对比统计已刷新", "success")
         except Exception as exc:
-            self._notice(f"对比统计加载失败：{exc}", "error")
+            LOGGER.exception("对比统计加载失败：%s", exc)
 
     def _set_compare_chart_mode(self, mode: str) -> None:
         self._compare_chart_mode = mode

@@ -10,7 +10,13 @@ from pathlib import Path
 from posixpath import normpath
 from typing import Any
 
-from app.core.database_paths import database_path, local_app_data_dir, source_app_dir
+from app.core.database_paths import (
+    database_test_mode_enabled,
+    get_canonical_database_path,
+    local_app_data_dir,
+    source_app_dir,
+    validate_test_database_path,
+)
 from app.core.version import APP_DATA_DIR_NAME
 
 
@@ -197,14 +203,24 @@ def normalize_cloud_sync_config(raw: dict[str, Any] | None) -> dict[str, Any]:
 
 
 class ConfigManager:
-    def __init__(self, base_dir: Path) -> None:
+    def __init__(self, base_dir: Path, *, database_path_override: str | Path | None = None) -> None:
         self.base_dir = Path(base_dir)
         self.config_path = self.base_dir / "config.json"
-        self.database_path = database_path(self.base_dir)
+        if database_path_override is None:
+            self.database_path = get_canonical_database_path()
+        else:
+            if not database_test_mode_enabled():
+                raise RuntimeError("正式运行不允许覆盖数据库路径")
+            self.database_path = Path(database_path_override).expanduser().resolve()
+        if database_test_mode_enabled():
+            if database_path_override is None:
+                raise RuntimeError("测试模式必须显式注入临时数据库路径")
+            self.database_path = validate_test_database_path(self.database_path)
         self.config: dict[str, Any] = deepcopy(DEFAULT_CONFIG)
 
     def load(self) -> dict[str, Any]:
-        self._migrate_legacy_config_if_needed()
+        if not database_test_mode_enabled():
+            self._migrate_legacy_config_if_needed()
         if not self.config_path.exists():
             self.config = deepcopy(DEFAULT_CONFIG)
             self._normalize_video_root_dir_config(self.config)

@@ -15,7 +15,7 @@ from PySide6.QtCore import QThread, Signal
 
 from app.core.camera import apply_capture_settings, get_capture_size, list_camera_devices, open_camera
 from app.core.database import DatabaseManager
-from app.core.database_paths import database_path
+from app.core.database_paths import get_canonical_database_path
 from app.core.disk_space_checker import DiskSpaceChecker
 from app.core.file_hash import calculate_file_hash, normalize_hash_algorithm
 from app.core.video_checker import VideoChecker
@@ -237,6 +237,7 @@ class RecordingWriterWorker:
 class RecorderThread(QThread):
     frame_ready = Signal(object)
     camera_status_changed = Signal(bool, str)
+    camera_refresh_finished = Signal(bool, str)
     recording_state_changed = Signal(bool, str, str)
     duration_changed = Signal(int)
     message = Signal(str)
@@ -253,7 +254,7 @@ class RecorderThread(QThread):
         super().__init__()
         self.config = dict(config)
         self.base_dir = Path(base_dir)
-        self.database_path = Path(db_path) if db_path is not None else database_path(self.base_dir)
+        self.database_path = Path(db_path) if db_path is not None else get_canonical_database_path()
         self.logger = logger
 
         self._commands: queue.Queue[tuple[str, Any]] = queue.Queue()
@@ -342,8 +343,8 @@ class RecorderThread(QThread):
     def manual_stop(self) -> None:
         self._commands.put(("manual_stop", None))
 
-    def restart_camera(self) -> None:
-        self._commands.put(("restart_camera", None))
+    def restart_camera(self, *, report_result: bool = False) -> None:
+        self._commands.put(("restart_camera", bool(report_result)))
 
     def camera_health(self) -> dict[str, Any]:
         now_perf = time.perf_counter()
@@ -1057,7 +1058,7 @@ class RecorderThread(QThread):
                 elif command == "manual_stop":
                     self._handle_manual_stop()
                 elif command == "restart_camera":
-                    self._handle_restart_camera()
+                    self._handle_restart_camera(bool(payload))
                 elif command == "update_config":
                     self._handle_update_config(payload)
             except Exception as exc:
@@ -1111,11 +1112,26 @@ class RecorderThread(QThread):
             return
         self._stop_recording()
 
-    def _handle_restart_camera(self) -> None:
+    def _handle_restart_camera(self, report_result: bool = False) -> None:
         if self._recording:
             self.message.emit("录制中不能刷新摄像头")
+            if report_result:
+                self.camera_refresh_finished.emit(False, "录制中不能刷新摄像头")
             return
-        self._open_camera()
+        try:
+            self._open_camera()
+        except Exception as exc:
+            self.logger.exception("手动刷新摄像头失败")
+            if report_result:
+                self.camera_refresh_finished.emit(False, str(exc))
+            else:
+                self.message.emit(f"摄像头刷新失败：{exc}")
+            return
+        if not report_result:
+            return
+        opened = bool(self._capture is not None and self._capture.isOpened())
+        reason = "" if opened else str(self._camera_last_error or "摄像头不可用")
+        self.camera_refresh_finished.emit(opened, reason)
 
     def _handle_update_config(self, config: dict[str, Any]) -> None:
         self.config = dict(config)

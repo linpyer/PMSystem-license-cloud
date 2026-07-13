@@ -1,12 +1,21 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QDialog, QTabWidget, QTextBrowser, QToolButton, QVBoxLayout
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QHBoxLayout,
+    QStackedWidget,
+    QTabBar,
+    QTextBrowser,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from app.theme.theme_tokens import LIGHT_TOKENS
 from app.ui.dialog_utils import DialogSizeManager
-from app.utils.runtime_paths import resource_path
+from app.ui.theme_icons import themed_svg_icon
 
 
 def build_help_style() -> str:
@@ -14,13 +23,11 @@ def build_help_style() -> str:
     app = QApplication.instance()
     manager = app.property("theme_manager") if app is not None else None
     tokens = manager.current_tokens() if manager is not None else LIGHT_TOKENS
-    note_background = "#3b3020" if tokens.window_background.lower() == "#212121" else "#fffbeb"
-    note_border = "#8a6d30" if tokens.window_background.lower() == "#212121" else "#fde68a"
-    note_text = "#fde68a" if tokens.window_background.lower() == "#212121" else "#78350f"
     return f"""
 body {{
     font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
     color: {tokens.text_primary};
+    background: transparent;
     line-height: 1.72;
     font-size: 14px;
     margin: 0;
@@ -51,12 +58,12 @@ p {{
     margin-top: 13px;
 }}
 .note {{
-    background: {note_background};
-    border: 1px solid {note_border};
-    border-radius: 6px;
-    padding: 8px 10px;
-    color: {note_text};
-    margin-top: 8px;
+    background: {tokens.surface_secondary};
+    border: 1px solid {tokens.border};
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: {tokens.text_secondary};
+    margin-top: 10px;
 }}
 """
 
@@ -233,19 +240,54 @@ class HelpDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        self.tabs = QTabWidget(self)
-        self.tabs.setObjectName("helpTabs")
-        self.tabs.setUsesScrollButtons(True)
-        self.tabs.tabBar().setExpanding(False)
-        self.tabs.tabBar().setObjectName("helpTabBar")
+        navigation = QWidget(self)
+        navigation.setObjectName("helpNavigation")
+        navigation.setMinimumHeight(56)
+        navigation_layout = QHBoxLayout(navigation)
+        navigation_layout.setContentsMargins(0, 0, 0, 0)
+        navigation_layout.setSpacing(8)
+        navigation_layout.setAlignment(Qt.AlignVCenter)
+
+        self.previous_button = QToolButton(navigation)
+        self.previous_button.setObjectName("helpPrevButton")
+        self.previous_button.setToolTip("上一页")
+        self.previous_button.setAccessibleName("上一页")
+        self.previous_button.setFixedSize(36, 36)
+        self.previous_button.setIconSize(QSize(17, 17))
+        self.previous_button.clicked.connect(lambda: self._change_page(-1))
+
+        self.help_tab_bar = QTabBar(navigation)
+        self.help_tab_bar.setObjectName("helpTabBar")
+        self.help_tab_bar.setUsesScrollButtons(False)
+        self.help_tab_bar.setExpanding(False)
+        self.help_tab_bar.setElideMode(Qt.ElideRight)
+
+        self.next_button = QToolButton(navigation)
+        self.next_button.setObjectName("helpNextButton")
+        self.next_button.setToolTip("下一页")
+        self.next_button.setAccessibleName("下一页")
+        self.next_button.setFixedSize(36, 36)
+        self.next_button.setIconSize(QSize(17, 17))
+        self.next_button.clicked.connect(lambda: self._change_page(1))
+
+        navigation_layout.addWidget(self.previous_button, 0, Qt.AlignVCenter)
+        navigation_layout.addWidget(self.help_tab_bar, 1, Qt.AlignVCenter)
+        navigation_layout.addWidget(self.next_button, 0, Qt.AlignVCenter)
+        layout.addWidget(navigation)
+
+        self.tabs = QStackedWidget(self)
+        self.tabs.setObjectName("helpPages")
         for title, html in HELP_TABS:
-            self.tabs.addTab(self._create_tab(html), title)
+            self.help_tab_bar.addTab(title)
+            self.tabs.addWidget(self._create_tab(html))
+        self.help_tab_bar.currentChanged.connect(self._set_current_page)
         layout.addWidget(self.tabs, 1)
         app = QApplication.instance()
         manager = app.property("theme_manager") if app is not None else None
         if manager is not None:
             manager.theme_changed.connect(self._refresh_theme)
-        QTimer.singleShot(0, self._style_tab_scroll_buttons)
+        self._refresh_navigation_icons()
+        self._update_navigation_buttons()
 
     def _create_tab(self, html: str) -> QTextBrowser:
         browser = QTextBrowser(self)
@@ -261,36 +303,26 @@ class HelpDialog(QDialog):
             position = browser.verticalScrollBar().value()
             browser.setHtml(f'<!doctype html><html><head><meta charset="utf-8"><style>{build_help_style()}</style></head><body>{html}</body></html>')
             browser.verticalScrollBar().setValue(position)
-        self._style_tab_scroll_buttons()
+        self._refresh_navigation_icons()
 
-    def _style_tab_scroll_buttons(self) -> None:
-        left_icon = QIcon(str(resource_path("app/assets/icons/chevron-left.svg")))
-        right_icon = QIcon(str(resource_path("app/assets/icons/chevron-right.svg")))
-        for button in self.tabs.findChildren(QToolButton):
-            arrow = button.arrowType()
-            if arrow == Qt.LeftArrow:
-                button.setObjectName("helpPrevButton")
-                button.setArrowType(Qt.NoArrow)
-                button.setIcon(left_icon)
-            elif arrow == Qt.RightArrow:
-                button.setObjectName("helpNextButton")
-                button.setArrowType(Qt.NoArrow)
-                button.setIcon(right_icon)
-            elif button.objectName() not in {"helpPrevButton", "helpNextButton"}:
-                continue
-            button.setFixedSize(36, 36)
-            button.setIconSize(QSize(16, 16))
-            button.setCursor(Qt.PointingHandCursor)
-            button.style().unpolish(button)
-            button.style().polish(button)
+    def _set_current_page(self, index: int) -> None:
+        self.tabs.setCurrentIndex(index)
+        self._update_navigation_buttons()
 
-    def showEvent(self, event) -> None:  # type: ignore[override]
-        super().showEvent(event)
-        QTimer.singleShot(0, self._style_tab_scroll_buttons)
+    def _change_page(self, offset: int) -> None:
+        target = max(0, min(self.help_tab_bar.count() - 1, self.help_tab_bar.currentIndex() + offset))
+        self.help_tab_bar.setCurrentIndex(target)
 
-    def resizeEvent(self, event) -> None:  # type: ignore[override]
-        super().resizeEvent(event)
-        QTimer.singleShot(0, self._style_tab_scroll_buttons)
+    def _update_navigation_buttons(self) -> None:
+        index = self.help_tab_bar.currentIndex()
+        self.previous_button.setEnabled(index > 0)
+        self.next_button.setEnabled(index < self.help_tab_bar.count() - 1)
+
+    def _refresh_navigation_icons(self) -> None:
+        app = QApplication.instance()
+        manager = app.property("theme_manager") if app is not None else None
+        self.previous_button.setIcon(themed_svg_icon("chevron-left", manager, 17))
+        self.next_button.setIcon(themed_svg_icon("chevron-right", manager, 17))
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         DialogSizeManager.remember(self, "help")

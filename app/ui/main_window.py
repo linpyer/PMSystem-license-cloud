@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import logging
-import time
+import sys
 import traceback
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
+    QAbstractButton,
+    QAbstractItemView,
+    QAbstractSpinBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
-    QSizePolicy,
+    QScrollBar,
+    QTabBar,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -22,12 +28,14 @@ from app.core.config_manager import ConfigManager
 from app.core.disk_space_checker import DiskSpaceChecker
 from app.core.video_checker import VideoChecker
 from app.core.video_player import open_folder
-from app.core.version import APP_NAME, APP_VERSION
+from app.core.version import APP_NAME
+from app.ui.confirm_dialog import confirm_action
 from app.ui.help_dialog import HelpDialog
-from app.ui.monitor_tab import MonitorTab
+from app.ui.monitor_tab import MonitorTab, is_camera_status_message
 from app.ui.query_tab import QueryTab
 from app.ui.settings_dialog import SettingsDialog
 from app.ui.stats_dialog import PackagingStatsDialog
+from app.ui.toast import ToastManager
 from app.utils.runtime_paths import resource_path
 
 
@@ -47,101 +55,6 @@ SILENT_MONITOR_MESSAGE_PREFIXES = (
 )
 
 
-class StatusTipLabel(QWidget):
-    LEVEL_COLORS = {
-        "success": QColor("#047857"),
-        "info": QColor("#2563eb"),
-        "warning": QColor("#d97706"),
-        "error": QColor("#dc2626"),
-        "critical": QColor("#dc2626"),
-    }
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("statusTipLabel")
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.setMinimumWidth(160)
-        self._text = ""
-        self._level = "info"
-        self._offset = 0
-        self._gap = 36
-        self._is_scrolling = False
-        self._scroll_timer = QTimer(self)
-        self._scroll_timer.setInterval(45)
-        self._scroll_timer.timeout.connect(self._advance_scroll)
-
-    def sizeHint(self) -> QSize:  # type: ignore[override]
-        metrics = self.fontMetrics()
-        return QSize(360, metrics.height() + 2)
-
-    def minimumSizeHint(self) -> QSize:  # type: ignore[override]
-        metrics = self.fontMetrics()
-        return QSize(160, metrics.height() + 2)
-
-    def set_tip(self, text: str, level: str = "info") -> None:
-        self._scroll_timer.stop()
-        self._text = text
-        self._level = level if level in self.LEVEL_COLORS else "info"
-        self._offset = 0
-        self._update_scroll_state()
-        self.update()
-
-    def clear_tip(self) -> None:
-        self._scroll_timer.stop()
-        self._text = ""
-        self._offset = 0
-        self._is_scrolling = False
-        self.update()
-
-    def resizeEvent(self, event) -> None:  # type: ignore[override]
-        super().resizeEvent(event)
-        self._update_scroll_state()
-
-    def paintEvent(self, event) -> None:  # type: ignore[override]
-        super().paintEvent(event)
-        if not self._text:
-            return
-
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.TextAntialiasing, True)
-        painter.setPen(self.LEVEL_COLORS.get(self._level, self.LEVEL_COLORS["info"]))
-        metrics = painter.fontMetrics()
-        baseline = (self.height() + metrics.ascent() - metrics.descent()) // 2
-        text_width = metrics.horizontalAdvance(self._text)
-
-        if not self._is_scrolling:
-            painter.drawText(0, baseline, self._text)
-            return
-
-        x = -self._offset
-        painter.drawText(x, baseline, self._text)
-        painter.drawText(x + text_width + self._gap, baseline, self._text)
-
-    def _update_scroll_state(self) -> None:
-        if not self._text:
-            self._is_scrolling = False
-            self._scroll_timer.stop()
-            return
-
-        text_width = self.fontMetrics().horizontalAdvance(self._text)
-        available_width = max(1, self.width())
-        should_scroll = text_width > available_width
-        self._is_scrolling = should_scroll
-        if should_scroll and not self._scroll_timer.isActive():
-            self._scroll_timer.start()
-        elif not should_scroll:
-            self._scroll_timer.stop()
-            self._offset = 0
-
-    def _advance_scroll(self) -> None:
-        if not self._text:
-            self.clear_tip()
-            return
-        text_width = self.fontMetrics().horizontalAdvance(self._text)
-        self._offset = (self._offset + 2) % max(1, text_width + self._gap)
-        self.update()
-
-
 class MainWindow(QMainWindow):
     def __init__(self, config_manager: ConfigManager, logger: logging.Logger, theme_manager=None) -> None:
         super().__init__()
@@ -152,11 +65,10 @@ class MainWindow(QMainWindow):
         self.help_dialog: HelpDialog | None = None
         self.settings_dialog: SettingsDialog | None = None
         self.stats_dialog: PackagingStatsDialog | None = None
-        self._last_toast_message = ""
-        self._last_toast_time = 0.0
         self._last_video_root_dir = str(self.config_manager.get_video_dir())
         self._window_drag_offset: QPoint | None = None
         self._resolved_theme = "light"
+        self._toast_manager = ToastManager(self, self.logger)
 
         self.setWindowTitle(APP_TITLE)
         icon_path = resource_path("app/assets/app_icon.ico")
@@ -178,6 +90,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.monitor_tab, "打包监控")
         self.tabs.addTab(self.query_tab, "视频查询")
         self._setup_help_entry()
+        self._toast_manager.watch_position_sources(self.tabs.tabBar(), self.navigation_actions)
         if self.theme_manager is not None:
             self.theme_manager.theme_changed.connect(self._apply_navigation_icons)
             self._apply_navigation_icons(self.theme_manager.current_mode(), self.theme_manager.resolved_theme())
@@ -190,35 +103,34 @@ class MainWindow(QMainWindow):
         self.monitor_tab.critical_message.connect(lambda message: self._show_notice_banner(message, "critical"))
         self.monitor_tab.recorder.recording_state_changed.connect(self._sync_settings_recording_state)
         self.monitor_tab.recorder.recording_state_changed.connect(self.query_tab.on_recording_state_changed)
+        self.query_tab.video_list_changed.connect(self._on_query_video_list_changed)
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
-        self._setup_status_tip()
-        self.show_status_tip("系统已启动", "info", 2600)
         QTimer.singleShot(100, self._check_startup_disk_space)
         QTimer.singleShot(500, self._check_unfinished_recordings)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         if self.monitor_tab.is_recording:
-            result = QMessageBox.question(
+            if not confirm_action(
                 self,
-                "确认退出",
-                "当前正在录制，是否结束并保存？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
-            )
-            if result != QMessageBox.Yes:
+                title="确认退出",
+                heading="当前正在录制，是否结束并保存？",
+                description="退出程序会先结束当前录制并保存已录制内容。",
+                confirm_text="结束录制并退出",
+                destructive=True,
+            ):
                 event.ignore()
                 return
 
         if self.query_tab.is_netdisk_syncing():
-            result = QMessageBox.question(
+            if not confirm_action(
                 self,
-                "确认退出",
-                "当前正在同步网盘，关闭软件会中断上传，是否继续关闭？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if result != QMessageBox.Yes:
+                title="确认退出",
+                heading="当前正在同步网盘，是否继续关闭？",
+                description="关闭软件会安全停止当前同步任务，尚未完成的文件可稍后重试。",
+                confirm_text="停止同步并退出",
+                destructive=True,
+            ):
                 event.ignore()
                 return
 
@@ -335,35 +247,14 @@ class MainWindow(QMainWindow):
         elif self.tabs.widget(index) is self.monitor_tab:
             QTimer.singleShot(0, self._restore_monitor_focus)
 
-    def _setup_help_entry(self) -> None:
-        brand = QWidget(self)
-        self.navigation_brand = brand
-        brand.setObjectName("navigationBrand")
-        brand_layout = QHBoxLayout(brand)
-        brand_layout.setContentsMargins(14, 0, 16, 0)
-        brand_layout.setSpacing(8)
-        icon_label = QLabel(brand)
-        self.navigation_brand_icon = icon_label
-        icon_label.setObjectName("navigationBrandIcon")
-        icon_label.setFixedSize(22, 22)
-        icon_label.setAlignment(Qt.AlignCenter)
-        icon_label.clear()
-        icon_path = resource_path("app/assets/app_icon_transparent.png")
-        if not icon_path.exists():
-            icon_path = resource_path("app/assets/app_icon.ico")
-        if icon_path.exists():
-            icon_label.setPixmap(QPixmap(str(icon_path)).scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        title_label = QLabel(APP_TITLE, brand)
-        self.navigation_brand_title = title_label
-        title_label.setObjectName("navigationBrandTitle")
-        brand_layout.addWidget(icon_label)
-        brand_layout.addWidget(title_label)
-        self.tabs.setCornerWidget(brand, Qt.TopLeftCorner)
-        for widget in (brand, icon_label, title_label):
-            widget.installEventFilter(self)
+    def _on_query_video_list_changed(self, reason: str) -> None:
+        if reason == "deleted":
+            QTimer.singleShot(0, self.monitor_tab.refresh_recent_recordings)
 
+    def _setup_help_entry(self) -> None:
         corner = QWidget(self)
         corner.setObjectName("navigationActions")
+        self.navigation_actions = corner
         corner_layout = QHBoxLayout(corner)
         corner_layout.setContentsMargins(0, 0, 12, 0)
         corner_layout.setSpacing(8)
@@ -411,22 +302,91 @@ class MainWindow(QMainWindow):
         corner_layout.addWidget(self.window_close_button)
         self.tabs.setCornerWidget(corner, Qt.TopRightCorner)
 
+    def toast_titlebar_available_rect(self) -> QRect:
+        """Return the overlay-only gap between navigation tabs and title-bar actions."""
+        tab_bar = self.tabs.tabBar()
+        tab_count = tab_bar.count()
+        if tab_count:
+            left_edge = tab_bar.mapTo(self, QPoint(tab_bar.tabRect(tab_count - 1).right() + 1, 0)).x()
+        else:
+            left_edge = tab_bar.mapTo(self, QPoint(0, 0)).x()
+        actions_top_left = self.navigation_actions.mapTo(self, QPoint(0, 0))
+        tab_top_left = tab_bar.mapTo(self, QPoint(0, 0))
+        available_left = left_edge + 14
+        available_right = actions_top_left.x() - 14
+        top = min(tab_top_left.y(), actions_top_left.y())
+        bottom = max(
+            tab_top_left.y() + tab_bar.height(),
+            actions_top_left.y() + self.navigation_actions.height(),
+        )
+        return QRect(available_left, top, max(0, available_right - available_left), max(1, bottom - top))
+
     def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
-        if watched in {self.navigation_brand, self.navigation_brand_icon, self.navigation_brand_title}:
-            if event.type() == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
-                self._toggle_maximized()
-                return True
-            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-                if not self.isMaximized():
-                    self._window_drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-                return True
-            if event.type() == QEvent.MouseMove and self._window_drag_offset is not None and event.buttons() & Qt.LeftButton:
-                self.move(event.globalPosition().toPoint() - self._window_drag_offset)
-                return True
-            if event.type() == QEvent.MouseButtonRelease:
-                self._window_drag_offset = None
-                return True
         return super().eventFilter(watched, event)
+
+    def nativeEvent(self, event_type, message):  # type: ignore[override]
+        """Delegate frameless window dragging and resizing to Windows' native hit test."""
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == 0x0084:  # WM_NCHITTEST
+                    result = self._window_hit_test(self.mapFromGlobal(QCursor.pos()))
+                    if result != 1:  # HTCLIENT
+                        return True, result
+            except (AttributeError, OSError, TypeError, ValueError):
+                pass
+        return super().nativeEvent(event_type, message)
+
+    def _window_hit_test(self, point: QPoint) -> int:
+        """Return the Windows non-client hit-test result for a logical Qt position."""
+        HTCLIENT, HTCAPTION = 1, 2
+        HTLEFT, HTRIGHT, HTTOP, HTBOTTOM = 10, 11, 12, 15
+        HTTOPLEFT, HTTOPRIGHT, HTBOTTOMLEFT, HTBOTTOMRIGHT = 13, 14, 16, 17
+        if self.isMaximized():
+            return HTCLIENT
+
+        margin = 8
+        rect = self.rect()
+        on_left = point.x() < margin
+        on_right = point.x() >= rect.width() - margin
+        on_top = point.y() < margin
+        on_bottom = point.y() >= rect.height() - margin
+        if on_top and on_left:
+            return HTTOPLEFT
+        if on_top and on_right:
+            return HTTOPRIGHT
+        if on_bottom and on_left:
+            return HTBOTTOMLEFT
+        if on_bottom and on_right:
+            return HTBOTTOMRIGHT
+        if on_left:
+            return HTLEFT
+        if on_right:
+            return HTRIGHT
+        if on_top:
+            return HTTOP
+        if on_bottom:
+            return HTBOTTOM
+
+        tab_bar = self.tabs.tabBar()
+        tab_bar_bottom = self.tabs.mapTo(self, QPoint(0, 0)).y() + tab_bar.height()
+        if point.y() < tab_bar_bottom and not self._is_interactive_title_target(point):
+            return HTCAPTION
+        return HTCLIENT
+
+    def _is_interactive_title_target(self, point: QPoint) -> bool:
+        widget = self.childAt(point)
+        while widget is not None and widget is not self:
+            if isinstance(widget, QTabBar):
+                if widget.tabAt(widget.mapFrom(self, point)) >= 0:
+                    return True
+            elif isinstance(widget, (QAbstractButton, QComboBox, QLineEdit, QAbstractSpinBox, QAbstractItemView, QScrollBar)):
+                return True
+            widget = widget.parentWidget()
+        return False
 
     def _toggle_maximized(self) -> None:
         if self.isMaximized():
@@ -455,6 +415,7 @@ class MainWindow(QMainWindow):
                 button.setIcon(QIcon())
                 button.setText("?" if button is self.help_button else "")
         self._apply_window_control_icons()
+        QTimer.singleShot(0, self._toast_manager.reposition)
 
     def _apply_window_control_icons(self) -> None:
         if not hasattr(self, "window_min_button"):
@@ -574,6 +535,9 @@ class MainWindow(QMainWindow):
         self.show_status_tip(message, level, timeout_ms)
 
     def _on_monitor_status_message(self, message: str) -> None:
+        if is_camera_status_message(message):
+            self.logger.info("摄像头持续状态已从 Toast 入口过滤：%s", message)
+            return
         if self._is_video_data_changed_message(message):
             self.query_tab.mark_dirty()
         self.query_tab.on_recording_status_message(message)
@@ -604,37 +568,11 @@ class MainWindow(QMainWindow):
             )
         )
 
-    def _setup_status_tip(self) -> None:
-        self.status_tip_label = StatusTipLabel(self)
-        self.version_label = QLabel(f"v{APP_VERSION}", self)
-        self.version_label.setObjectName("statusVersionLabel")
-        self.version_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-        self.status_tip_timer = QTimer(self)
-        self.status_tip_timer.setSingleShot(True)
-        self.status_tip_timer.timeout.connect(self.status_tip_label.clear_tip)
-        self.statusBar().addWidget(self.status_tip_label, 1)
-        self.statusBar().addPermanentWidget(self.version_label)
-
     def show_status_tip(self, message: str, level: str = "info", timeout_ms: int = 3000) -> None:
         if not message:
             return
-        now = time.monotonic()
-        if message == self._last_toast_message and now - self._last_toast_time < 0.8:
-            return
-        self._last_toast_message = message
-        self._last_toast_time = now
         normalized_level = level if level in {"success", "info", "warning", "error", "critical"} else "info"
-        icon = {
-            "success": "✓",
-            "info": "i",
-            "warning": "!",
-            "error": "×",
-            "critical": "×",
-        }.get(normalized_level, "i")
-        self.status_tip_timer.stop()
-        self.status_tip_label.set_tip(f"{icon} {message}", normalized_level)
-        self.status_tip_timer.start(max(800, int(timeout_ms)))
+        self._toast_manager.show(message, normalized_level, max(2400, int(timeout_ms)))
 
     def _show_toast(self, message: str, level: str = "info", timeout_ms: int = 3000) -> None:
         self.show_status_tip(message, level, timeout_ms)

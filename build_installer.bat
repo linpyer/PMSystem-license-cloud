@@ -4,9 +4,17 @@ setlocal
 
 cd /d "%~dp0"
 
+set "PYTHON=.venv\Scripts\python.exe"
+if not exist "%PYTHON%" set "PYTHON=python"
+for /f "usebackq delims=" %%V in (`"%PYTHON%" -c "from app.core.version import APP_VERSION; print(APP_VERSION)"`) do set "APP_VERSION=%%V"
+if "%APP_VERSION%"=="" (
+    echo 无法从 app\core\version.py 读取版本号。
+    exit /b 1
+)
+
 set "APP_EXE=dist\电商打包发货监控溯源系统\电商打包发货监控溯源系统.exe"
 set "ISS_FILE=installer\PMSystem.iss"
-set "OUTPUT_EXE=installer\output\PMSystem_Setup_v1.0.3.exe"
+set "OUTPUT_EXE=installer\output\PMSystem_Setup_v%APP_VERSION%.exe"
 set "ISCC="
 
 if not exist "%APP_EXE%" (
@@ -51,7 +59,7 @@ echo.
 echo 开始编译安装包...
 echo.
 
-"%ISCC%" "%ISS_FILE%"
+"%ISCC%" /DMyAppVersion=%APP_VERSION% "%ISS_FILE%"
 
 if errorlevel 1 (
     echo.

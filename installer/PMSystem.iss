@@ -1,5 +1,7 @@
 #define MyAppName "电商打包发货监控溯源系统"
-#define MyAppVersion "1.0.3"
+#ifndef MyAppVersion
+  #error MyAppVersion must be supplied by build_installer.bat
+#endif
 #define MyAppPublisher "JsonLin"
 #define MyAppExeName "电商打包发货监控溯源系统.exe"
 
@@ -16,7 +18,7 @@ AllowNoIcons=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=output
-OutputBaseFilename=PMSystem_Setup_v1.0.3
+OutputBaseFilename=PMSystem_Setup_v{#MyAppVersion}
 SetupIconFile=..\app\assets\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma

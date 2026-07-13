@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 import webbrowser
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -43,6 +44,7 @@ from app.core.netdisk_sync import (
     normalize_netdisk_config,
     normalize_remote_root,
 )
+from app.core.version import APP_VERSION
 from app.core.video_player import open_folder
 from app.core.voice_prompt import (
     DEFAULT_SYSTEM_TEXT,
@@ -62,7 +64,9 @@ from app.ui.monitor_tab import (
     WATERMARK_FONT_HELP_TEXT,
     WATERMARK_MARGIN_HELP_TEXT,
 )
-from app.ui.toast import show_toast
+from app.ui.toast import ToastManager, show_toast
+from app.ui.confirm_dialog import confirm_action
+from app.ui.theme_icons import themed_svg_icon
 from app.ui.dialog_utils import DialogSizeManager, install_no_wheel_on_children
 from app.utils.runtime_paths import resource_path
 
@@ -103,15 +107,19 @@ class SettingsDialog(QDialog):
         self.theme_manager = theme_manager
         self._theme_preview_session_active = False
         self._theme_preview_saved = False
+        self._theme_preview_request_id = 0
+        self._close_finalized = False
         self.original_theme_mode = "system"
         self.original_resolved_theme = "light"
         self.voice_file_labels: dict[str, QLabel] = {}
-        self.voice_row_buttons: dict[str, tuple[QPushButton, QPushButton, QPushButton]] = {}
+        self.voice_row_buttons: dict[str, tuple[QToolButton, QToolButton, QToolButton]] = {}
         self.system_text_edits: dict[str, QLineEdit] = {}
 
         self.setObjectName("settingsDialog")
         self.setWindowTitle("设置")
         self._build_ui()
+        if self.theme_manager is not None:
+            self.theme_manager.theme_changed.connect(self._refresh_voice_action_icons)
         self.begin_theme_preview_session()
         self._load_basic_config_to_ui()
         self._load_voice_config_to_ui()
@@ -125,17 +133,20 @@ class SettingsDialog(QDialog):
         self.logger.info("更新日志页签初始化")
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        self._cancel_theme_preview_if_needed()
-        DialogSizeManager.remember(self, "settings")
-        self.closed.emit()
+        self._schedule_close_finalization()
+        event.accept()
         super().closeEvent(event)
 
     def reject(self) -> None:  # type: ignore[override]
-        self._cancel_theme_preview_if_needed()
+        self._schedule_close_finalization()
         super().reject()
 
     def begin_theme_preview_session(self) -> None:
         """Capture the persisted appearance before this settings session previews it."""
+        toast_manager = getattr(self, "_toast_manager", None)
+        if isinstance(toast_manager, ToastManager):
+            toast_manager.clear()
+        self._close_finalized = False
         if self.theme_manager is None:
             return
         self._theme_preview_session_active = True
@@ -148,9 +159,35 @@ class SettingsDialog(QDialog):
     def _cancel_theme_preview_if_needed(self) -> None:
         if self.theme_manager is None or not self._theme_preview_session_active:
             return
-        if not self._theme_preview_saved:
+        if not self._theme_preview_saved and self.theme_manager.current_mode() != self.original_theme_mode:
             self.theme_manager.cancel_preview()
         self._theme_preview_session_active = False
+
+    def _schedule_close_finalization(self) -> None:
+        """Defer non-visual cleanup so the settings window can hide immediately."""
+        if self._close_finalized:
+            return
+        toast_manager = getattr(self, "_toast_manager", None)
+        if isinstance(toast_manager, ToastManager):
+            toast_manager.clear()
+        self._close_finalized = True
+        QTimer.singleShot(0, self._finalize_close_session)
+
+    def _finalize_close_session(self) -> None:
+        started = time.perf_counter()
+        self._cancel_theme_preview_if_needed()
+        rollback_ms = (time.perf_counter() - started) * 1000
+        geometry_started = time.perf_counter()
+        DialogSizeManager.remember(self, "settings")
+        geometry_ms = (time.perf_counter() - geometry_started) * 1000
+        total_ms = (time.perf_counter() - started) * 1000
+        self.logger.debug(
+            "[SettingsClose] theme rollback: %.1f ms; save geometry: %.1f ms; cleanup: %.1f ms",
+            rollback_ms,
+            geometry_ms,
+            max(0.0, total_ms - rollback_ms - geometry_ms),
+        )
+        QTimer.singleShot(0, self.closed.emit)
 
     def _build_ui(self) -> None:
         root_layout = QVBoxLayout(self)
@@ -291,6 +328,10 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
+        current_version = QLabel(f"当前版本：v{APP_VERSION}")
+        current_version.setObjectName("settingsCurrentVersion")
+        layout.addWidget(current_version, 0, Qt.AlignLeft)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -332,7 +373,9 @@ class SettingsDialog(QDialog):
             card_layout.setContentsMargins(14, 12, 14, 12)
             card_layout.setSpacing(6)
 
-            version_label = QLabel(str(entry.get("version", "")))
+            version_text = str(entry.get("version", ""))
+            release_date = str(entry.get("date", "") or "")
+            version_label = QLabel(f"{version_text}  ·  {release_date}" if release_date else version_text)
             version_label.setObjectName("changelogVersion")
             card_layout.addWidget(version_label)
 
@@ -449,7 +492,7 @@ class SettingsDialog(QDialog):
         for mode, text in (("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")):
             button = QRadioButton(text)
             button.setObjectName("appearanceThemeRadio")
-            button.toggled.connect(lambda checked, value=mode: self._preview_theme_mode(value) if checked else None)
+            button.clicked.connect(lambda _checked=False, value=mode: self._queue_theme_preview(value))
             self.theme_mode_group.addButton(button)
             self.theme_mode_buttons[mode] = button
             appearance_row.addWidget(button)
@@ -596,6 +639,7 @@ class SettingsDialog(QDialog):
 
         action_bar = QWidget()
         action_bar.setObjectName("settingsBasicActionBar")
+        action_bar.setFixedHeight(60)
         action_layout = QHBoxLayout(action_bar)
         action_layout.setContentsMargins(0, 8, 0, 0)
         self.restore_recommended_button = QPushButton("恢复推荐参数")
@@ -615,38 +659,25 @@ class SettingsDialog(QDialog):
     def _build_voice_tab(self) -> QWidget:
         widget = QWidget()
         widget.setObjectName("settingsVoiceTab")
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(12, 12, 12, 12)
+        root_layout = QVBoxLayout(widget)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("settingsVoiceScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+
+        content = QWidget()
+        content.setObjectName("settingsVoiceScrollContent")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(12, 12, 12, 16)
         layout.setSpacing(14)
 
         self.voice_enabled_check = QCheckBox("开启语音提示")
         self.voice_enabled_check.setObjectName("settingsMainCheckBox")
-        checkmark_path = resource_path("app/assets/checkmark.svg").as_posix()
-        self.voice_enabled_check.setStyleSheet(
-            """
-            QCheckBox {
-                color: #1f2937;
-                font-size: 14px;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 4px;
-                border: 2px solid #cbd5e1;
-                background: #ffffff;
-            }
-            QCheckBox::indicator:checked {
-                border-color: #0f766e;
-                background: #0f766e;
-                image: url("%s");
-            }
-            QCheckBox::indicator:unchecked:hover {
-                border-color: #0f766e;
-            }
-            """
-            % checkmark_path
-        )
         self.voice_enabled_check.toggled.connect(self._sync_voice_mode_ui)
         voice_enabled_row = QHBoxLayout()
         voice_enabled_row.setContentsMargins(0, 0, 0, 0)
@@ -666,44 +697,6 @@ class SettingsDialog(QDialog):
         self.voice_mode_panel.setMinimumHeight(36)
         self.voice_mode_panel.setMaximumHeight(42)
         self.voice_mode_panel.setObjectName("voiceModePanel")
-        self.voice_mode_panel.setStyleSheet(
-            """
-            QRadioButton {
-                color: #1f2937;
-                font-size: 14px;
-                spacing: 8px;
-                padding: 2px 0;
-            }
-            QRadioButton::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 9px;
-                border: 2px solid #cbd5e1;
-                background: #ffffff;
-            }
-            QRadioButton::indicator:checked {
-                border: 2px solid #0f766e;
-                background: qradialgradient(
-                    cx: 0.5, cy: 0.5, radius: 0.5,
-                    fx: 0.5, fy: 0.5,
-                    stop: 0 #0f766e,
-                    stop: 0.42 #0f766e,
-                    stop: 0.46 #ffffff,
-                    stop: 1 #ffffff
-                );
-            }
-            QRadioButton::indicator:unchecked:hover {
-                border-color: #0f766e;
-            }
-            QRadioButton:disabled {
-                color: #94a3b8;
-            }
-            QRadioButton::indicator:disabled {
-                border-color: #cbd5e1;
-                background: #f8fafc;
-            }
-            """
-        )
         mode_row = QHBoxLayout(self.voice_mode_panel)
         mode_row.setContentsMargins(0, 0, 0, 0)
         mode_row.setSpacing(18)
@@ -726,7 +719,7 @@ class SettingsDialog(QDialog):
 
         self.voice_config_stack = QStackedWidget()
         self.voice_config_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.voice_config_stack.setMaximumHeight(520)
+        self.voice_config_stack.setMinimumHeight(0)
         self.voice_config_blank = QWidget()
         self.voice_config_stack.addWidget(self.voice_config_blank)
 
@@ -748,17 +741,10 @@ class SettingsDialog(QDialog):
         self.custom_voice_panel, custom_layout = self._settings_card("自定义语音包")
         self.custom_voice_panel.setObjectName("customVoicePanel")
 
-        scroll = QScrollArea()
-        scroll.setObjectName("voiceTableScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setMaximumHeight(430)
-
         table_widget = QWidget()
         table_widget.setObjectName("voiceTableWidget")
         grid = QGridLayout(table_widget)
-        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setContentsMargins(0, 0, 0, 12)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(0)
         grid.addWidget(self._header_label("提示场景"), 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
@@ -768,46 +754,50 @@ class SettingsDialog(QDialog):
         for item_index, (event_key, _text_label, audio_label, _file_stem) in enumerate(VOICE_SETTINGS_EVENTS, start=1):
             row_frame = QFrame()
             row_frame.setObjectName("voiceRecordRow")
+            row_frame.setMinimumHeight(44)
             row_layout = QGridLayout(row_frame)
-            row_layout.setContentsMargins(0, 6, 0, 0)
+            row_layout.setContentsMargins(0, 4, 0, 4)
             row_layout.setHorizontalSpacing(8)
-            row_layout.setVerticalSpacing(6)
+            row_layout.setVerticalSpacing(4)
             row_layout.setColumnStretch(0, 22)
-            row_layout.setColumnStretch(1, 38)
-            row_layout.setColumnStretch(2, 40)
+            row_layout.setColumnStretch(1, 1)
+            row_layout.setColumnMinimumWidth(2, 114)
 
             scene_label = QLabel(audio_label)
-            scene_label.setMinimumHeight(36)
             file_label = QLabel("未设置")
-            file_label.setMinimumHeight(36)
             file_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
             file_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             self.voice_file_labels[event_key] = file_label
 
-            upload_button = QPushButton("上传")
-            preview_button = QPushButton("试听")
-            reset_button = QPushButton("恢复默认")
-            upload_button.setObjectName("voiceUploadButton")
-            preview_button.setObjectName("voicePreviewButton")
-            reset_button.setObjectName("voiceResetButton")
-            upload_button.setFixedWidth(60)
-            preview_button.setFixedWidth(60)
-            reset_button.setFixedWidth(78)
+            upload_button = QToolButton()
+            preview_button = QToolButton()
+            reset_button = QToolButton()
+            upload_button.setObjectName("voiceUploadIconButton")
+            preview_button.setObjectName("voicePreviewIconButton")
+            reset_button.setObjectName("voiceResetIconButton")
+            upload_button.setProperty("voiceActionIcon", "upload")
+            preview_button.setProperty("voiceActionIcon", "volume")
+            reset_button.setProperty("voiceActionIcon", "restore")
+            upload_button.setToolTip("上传音频")
+            preview_button.setToolTip("试听")
+            reset_button.setToolTip("恢复默认")
+            upload_button.setAccessibleName("上传音频")
+            preview_button.setAccessibleName("试听")
+            reset_button.setAccessibleName("恢复默认")
             for button in (upload_button, preview_button, reset_button):
-                button.setMinimumHeight(28)
-                button.setMaximumHeight(30)
+                button.setFixedSize(30, 30)
+                button.setCursor(Qt.PointingHandCursor)
             upload_button.clicked.connect(lambda _checked=False, key=event_key: self._upload_voice_file(key))
             preview_button.clicked.connect(lambda _checked=False, key=event_key: self._preview_voice_event(key))
             reset_button.clicked.connect(lambda _checked=False, key=event_key: self._reset_voice_event(key))
             self.voice_row_buttons[event_key] = (upload_button, preview_button, reset_button)
 
             button_row = QHBoxLayout()
-            button_row.setContentsMargins(0, 0, 24, 0)
-            button_row.setSpacing(6)
+            button_row.setContentsMargins(0, 0, 0, 0)
+            button_row.setSpacing(8)
             button_row.addWidget(upload_button)
             button_row.addWidget(preview_button)
             button_row.addWidget(reset_button)
-            button_row.addStretch(1)
             button_widget = QWidget()
             button_widget.setObjectName("voiceRecordActions")
             button_widget.setLayout(button_row)
@@ -825,16 +815,18 @@ class SettingsDialog(QDialog):
             grid.addWidget(row_frame, item_index, 0, 1, 3)
 
         grid.setColumnStretch(0, 22)
-        grid.setColumnStretch(1, 38)
-        grid.setColumnStretch(2, 40)
-        grid.setRowStretch(len(VOICE_SETTINGS_EVENTS) + 1, 1)
-        scroll.setWidget(table_widget)
-        custom_layout.addWidget(scroll, 1)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnMinimumWidth(2, 114)
+        custom_layout.addWidget(table_widget)
         self.voice_config_stack.addWidget(self.custom_voice_panel)
-        layout.addWidget(self.voice_config_stack, 0, Qt.AlignTop)
+        layout.addWidget(self.voice_config_stack)
+        layout.addStretch(1)
+
+        scroll.setWidget(content)
+        root_layout.addWidget(scroll, 1)
 
         action_layout = QHBoxLayout()
-        action_layout.setContentsMargins(0, 8, 0, 0)
+        action_layout.setContentsMargins(0, 8, 0, 8)
         action_layout.addStretch(1)
         self.voice_action_button = QPushButton("保存设置")
         self.voice_action_button.setObjectName("primaryButton")
@@ -843,11 +835,19 @@ class SettingsDialog(QDialog):
         action_layout.addWidget(self.voice_action_button)
         action_widget = QWidget()
         action_widget.setObjectName("settingsVoiceActionBar")
-        action_widget.setFixedHeight(54)
+        action_widget.setFixedHeight(60)
         action_widget.setLayout(action_layout)
-        layout.addWidget(action_widget)
-        layout.addStretch(1)
+        root_layout.addWidget(action_widget)
+        self._refresh_voice_action_icons()
         return widget
+
+    def _refresh_voice_action_icons(self, *_args) -> None:
+        for button in self.findChildren(QToolButton):
+            icon_name = str(button.property("settingsActionIcon") or button.property("voiceActionIcon") or "")
+            if not icon_name:
+                continue
+            button.setIcon(themed_svg_icon(icon_name, self.theme_manager))
+            button.setIconSize(QSize(17, 17))
 
     def _build_netdisk_tab(self) -> QWidget:
         widget = QWidget()
@@ -857,7 +857,6 @@ class SettingsDialog(QDialog):
 
         self.netdisk_enabled_check = QCheckBox("开启网盘同步")
         self.netdisk_enabled_check.setObjectName("settingsMainCheckBox")
-        self.netdisk_enabled_check.setStyleSheet(self.voice_enabled_check.styleSheet())
         self.netdisk_enabled_check.toggled.connect(self._sync_netdisk_ui)
         enabled_row = QHBoxLayout()
         enabled_row.setContentsMargins(0, 0, 0, 0)
@@ -911,19 +910,21 @@ class SettingsDialog(QDialog):
         auth_row.setSpacing(8)
         self.netdisk_auth_status_label = QLabel("未授权")
         self.netdisk_auth_status_label.setObjectName("authStatusLabel")
-        self.netdisk_auth_button = QPushButton("登录授权")
-        self.netdisk_auth_button.setObjectName("netdiskAuthButton")
-        self.netdisk_auth_button.setMinimumHeight(32)
-        self.netdisk_auth_button.setMaximumHeight(34)
-        self.netdisk_auth_button.setMinimumWidth(96)
-        self.netdisk_auth_button.setMaximumWidth(110)
+        self.netdisk_auth_button = QToolButton()
+        self.netdisk_auth_button.setObjectName("netdiskAuthIconButton")
+        self.netdisk_auth_button.setProperty("settingsActionIcon", "refresh")
+        self.netdisk_auth_button.setToolTip("重新授权")
+        self.netdisk_auth_button.setAccessibleName("重新授权")
+        self.netdisk_auth_button.setFixedSize(30, 30)
+        self.netdisk_auth_button.setCursor(Qt.PointingHandCursor)
         self.netdisk_auth_button.clicked.connect(self._authorize_netdisk)
-        self.netdisk_test_button = QPushButton("测试连接")
-        self.netdisk_test_button.setObjectName("netdiskTestButton")
-        self.netdisk_test_button.setMinimumHeight(32)
-        self.netdisk_test_button.setMaximumHeight(34)
-        self.netdisk_test_button.setMinimumWidth(96)
-        self.netdisk_test_button.setMaximumWidth(110)
+        self.netdisk_test_button = QToolButton()
+        self.netdisk_test_button.setObjectName("netdiskTestIconButton")
+        self.netdisk_test_button.setProperty("settingsActionIcon", "link")
+        self.netdisk_test_button.setToolTip("测试连接")
+        self.netdisk_test_button.setAccessibleName("测试连接")
+        self.netdisk_test_button.setFixedSize(30, 30)
+        self.netdisk_test_button.setCursor(Qt.PointingHandCursor)
         self.netdisk_test_button.clicked.connect(self._test_netdisk_connection)
         auth_row.addWidget(self.netdisk_auth_status_label)
         auth_row.addSpacing(18)
@@ -935,6 +936,7 @@ class SettingsDialog(QDialog):
         auth_widget.setObjectName("transparentSettingsRow")
         auth_widget.setLayout(auth_row)
         form.addRow("授权状态：", auth_widget)
+        self._refresh_voice_action_icons()
 
         self.netdisk_debug_check = QCheckBox("启用调试日志")
         self.netdisk_debug_check.setObjectName("settingsInlineCheckBox")
@@ -952,7 +954,6 @@ class SettingsDialog(QDialog):
 
         self.auto_sync_enabled_check = QCheckBox("开启自动同步")
         self.auto_sync_enabled_check.setObjectName("settingsInlineCheckBox")
-        self.auto_sync_enabled_check.setStyleSheet(self.voice_enabled_check.styleSheet())
         self.auto_sync_enabled_check.toggled.connect(self._sync_netdisk_ui)
         auto_title_row = QHBoxLayout()
         auto_title_row.setContentsMargins(0, 0, 0, 0)
@@ -999,7 +1000,7 @@ class SettingsDialog(QDialog):
         action_layout.addWidget(self.netdisk_save_button)
         action_widget = QWidget()
         action_widget.setObjectName("settingsNetdiskActionBar")
-        action_widget.setFixedHeight(54)
+        action_widget.setFixedHeight(60)
         action_widget.setLayout(action_layout)
         layout.addWidget(action_widget)
         return widget
@@ -1035,7 +1036,6 @@ class SettingsDialog(QDialog):
             if warnings:
                 detail += "\n部分语音文件未导出，请查看日志。"
             self._set_status("配置已导出", "success")
-            QMessageBox.information(self, "导出配置", detail)
         except Exception as exc:
             self.logger.exception("配置导出失败：path=%s", export_path)
             self._set_status(f"配置导出失败：{exc}", "error")
@@ -1054,16 +1054,15 @@ class SettingsDialog(QDialog):
         if not selected:
             return
 
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("导入配置")
-        box.setText("导入配置将覆盖当前部分设置，是否继续？")
-        box.setInformativeText("导入前会自动备份当前 config.json。网盘授权 Token 和 Secret 不会导入，导入后需要重新授权。")
-        cancel_button = box.addButton("取消", QMessageBox.RejectRole)
-        confirm_button = box.addButton("继续导入", QMessageBox.AcceptRole)
-        box.setDefaultButton(cancel_button)
-        box.exec()
-        if box.clickedButton() is not confirm_button:
+        if not confirm_action(
+            self,
+            title="导入配置",
+            heading="导入配置将覆盖当前部分设置，是否继续？",
+            description="导入前会自动备份当前 config.json。网盘授权 Token 和 Secret 不会导入，导入后需要重新授权。",
+            sections=(("将覆盖：", ("当前可导入配置项",)), ("不会导入：", ("网盘授权 Token", "App Secret"))),
+            confirm_text="继续导入",
+            destructive=True,
+        ):
             return
 
         import_path = Path(selected)
@@ -1095,8 +1094,7 @@ class SettingsDialog(QDialog):
                 detail += "\n已导入旧版 JSON 配置，建议后续使用新版 zip 格式导出配置。"
             if warnings:
                 detail += "\n部分自定义语音文件未恢复，请查看日志。"
-            self._set_status("配置已导入，部分设置重启后生效", "success")
-            QMessageBox.information(self, "导入配置", f"配置已导入，部分设置重启后生效。\n\n{detail}")
+            self._set_status("配置已导入", "success")
         except Exception as exc:
             self.logger.exception("配置导入失败：path=%s", import_path)
             self._set_status(f"配置导入失败：{exc}", "error")
@@ -1142,10 +1140,21 @@ class SettingsDialog(QDialog):
             button.setChecked(button_mode == mode)
             button.blockSignals(False)
 
-    def _preview_theme_mode(self, mode: str) -> None:
+    def _queue_theme_preview(self, mode: str) -> None:
         if self.theme_manager is None:
             return
+        if mode not in self.theme_mode_buttons or not self.theme_mode_buttons[mode].isChecked():
+            return
         self._theme_preview_saved = False
+        self._theme_preview_request_id += 1
+        request_id = self._theme_preview_request_id
+        QTimer.singleShot(0, lambda: self._preview_theme_mode(mode, request_id))
+
+    def _preview_theme_mode(self, mode: str, request_id: int) -> None:
+        if self.theme_manager is None or request_id != self._theme_preview_request_id:
+            return
+        if self._selected_theme_mode() != mode:
+            return
         self.theme_manager.preview_theme(mode)
 
     def _set_basic_config_enabled(self, enabled: bool) -> None:
@@ -1181,7 +1190,15 @@ class SettingsDialog(QDialog):
             "不会修改摄像头设备、视频存储目录、网盘授权、自定义语音包等设备或账号相关配置。\n"
             "恢复后需要点击“保存并应用配置”才会生效。"
         )
-        if QMessageBox.question(self, "恢复推荐参数", message, QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+        if not confirm_action(
+            self,
+            title="恢复推荐参数",
+            heading="确定恢复基础配置的推荐参数吗？",
+            description="恢复后仍需点击“保存并应用配置”才会正式生效。",
+            sections=(("不会修改：", ("摄像头设备", "视频存储目录", "网盘授权", "自定义语音包")),),
+            confirm_text="恢复推荐参数",
+            destructive=True,
+        ):
             return
         self._select_combo_data(self.resolution_combo, "original", "original")
         self._select_combo_data(self.fps_combo, 30, DEFAULT_FPS)
@@ -1236,7 +1253,7 @@ class SettingsDialog(QDialog):
             if video_root_dir != current_video_dir:
                 self._set_status("视频存储目录已更新", "success")
             else:
-                self._set_status("基础配置保存成功", "success")
+                self._set_status("基础配置已保存并应用", "success")
         except Exception as exc:
             self.logger.exception("基础配置保存失败")
             self._set_status(f"基础配置保存失败：{exc}", "error")
@@ -1403,6 +1420,15 @@ class SettingsDialog(QDialog):
             self._set_status("试听失败，请查看日志。", "error")
 
     def _reset_voice_event(self, event_key: str) -> None:
+        if not confirm_action(
+            self,
+            title="恢复默认语音",
+            heading="确定恢复这个提示场景的默认语音吗？",
+            description="当前自定义音频关联将被移除，其他语音场景不受影响。",
+            confirm_text="恢复默认",
+            destructive=True,
+        ):
+            return
         try:
             voice_config = self._current_voice_config()
             custom_files = dict(voice_config.get("custom_files", {}))
@@ -1433,7 +1459,7 @@ class SettingsDialog(QDialog):
     def _save_voice_settings(self) -> None:
         try:
             self._save_voice_config(self._voice_config_from_ui())
-            self._set_status("语音设置已保存", "success")
+            self._set_status("语音提示设置已保存", "success")
         except Exception as exc:
             self.logger.exception("语音配置保存失败")
             self._set_status(f"语音配置保存失败：{exc}", "error")
@@ -1555,7 +1581,8 @@ class SettingsDialog(QDialog):
                 self.netdisk_auth_status_summary_label.setProperty("status", "ok")
                 self.netdisk_auth_status_summary_label.style().unpolish(self.netdisk_auth_status_summary_label)
                 self.netdisk_auth_status_summary_label.style().polish(self.netdisk_auth_status_summary_label)
-            self.netdisk_auth_button.setText("重新授权")
+            self.netdisk_auth_button.setToolTip("重新授权")
+            self.netdisk_auth_button.setAccessibleName("重新授权")
         else:
             self.netdisk_auth_status_label.setText("未授权")
             self.netdisk_auth_status_label.setProperty("status", "none")
@@ -1566,7 +1593,8 @@ class SettingsDialog(QDialog):
                 self.netdisk_auth_status_summary_label.setProperty("status", "none")
                 self.netdisk_auth_status_summary_label.style().unpolish(self.netdisk_auth_status_summary_label)
                 self.netdisk_auth_status_summary_label.style().polish(self.netdisk_auth_status_summary_label)
-            self.netdisk_auth_button.setText("登录授权")
+            self.netdisk_auth_button.setToolTip("重新授权")
+            self.netdisk_auth_button.setAccessibleName("重新授权")
 
     def _save_netdisk_config(self, netdisk_config: dict[str, object], cloud_sync_config: dict[str, object] | None = None) -> dict:
         normalized = normalize_netdisk_config(netdisk_config)
