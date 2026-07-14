@@ -1733,6 +1733,7 @@ class SettingsDialog(QDialog):
         box.setWindowTitle(title)
         box.setText(body)
         box.addButton("知道了", QMessageBox.AcceptRole)
+        DialogSizeManager.position_transient(box, self)
         box.exec()
 
     @staticmethod

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QDate, QPoint, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -695,19 +695,6 @@ class PackagingStatsDialog(QDialog):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         DialogSizeManager.remember(self, "statistics")
         super().closeEvent(event)
-
-    def _initial_dialog_height(self, parent: QWidget | None) -> int:
-        screen = None
-        if parent is not None:
-            screen = QGuiApplication.screenAt(parent.mapToGlobal(parent.rect().center()))
-        if screen is None:
-            screen = QGuiApplication.primaryScreen()
-
-        available_height = screen.availableGeometry().height() if screen is not None else 900
-        height_limits = [760, int(available_height * 0.85)]
-        if parent is not None and parent.height() > 0:
-            height_limits.append(int(parent.height() * 0.85))
-        return max(420, min(height_limits))
 
     def _scrollable_page(self, page: QWidget) -> QScrollArea:
         page.setObjectName("statsTabContent")

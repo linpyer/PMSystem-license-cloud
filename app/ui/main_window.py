@@ -30,6 +30,7 @@ from app.core.video_checker import VideoChecker
 from app.core.video_player import open_folder
 from app.core.version import APP_NAME
 from app.ui.confirm_dialog import confirm_action
+from app.ui.dialog_utils import DialogSizeManager
 from app.ui.help_dialog import HelpDialog
 from app.ui.monitor_tab import MonitorTab, is_camera_status_message
 from app.ui.query_tab import QueryTab
@@ -594,6 +595,7 @@ class MainWindow(QMainWindow):
         box.setInformativeText(f"{preview}\n\n程序不会自动删除这些文件，请人工确认后处理。")
         open_button = box.addButton("打开视频文件夹", QMessageBox.ActionRole)
         box.addButton("稍后处理", QMessageBox.AcceptRole)
+        DialogSizeManager.position_transient(box, self)
         box.exec()
 
         if box.clickedButton() is open_button:

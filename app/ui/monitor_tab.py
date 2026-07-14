@@ -50,7 +50,8 @@ from app.core.scanner import normalize_scan_text
 from app.core.scanner_guard import ScannerGuard
 from app.core.video_player import open_folder, open_video, reveal_in_file_manager
 from app.core.voice_prompt import VoicePrompt
-from app.ui.confirm_dialog import ConfirmActionDialog
+from app.ui.confirm_dialog import DELETE_CONFIRM_POSITION_KEY, ConfirmActionDialog
+from app.ui.dialog_utils import DialogSizeManager
 from app.ui.themed_line_edit import ThemedClearableLineEdit
 from app.utils.file_utils import ensure_directory
 from app.utils.runtime_paths import resource_path
@@ -822,6 +823,7 @@ class MonitorTab(QWidget):
         box.setWindowTitle(title)
         box.setText(body)
         box.addButton("知道了", QMessageBox.AcceptRole)
+        DialogSizeManager.position_transient(box, self)
         box.exec()
 
     def _reset_scan_feedback(self) -> None:
@@ -1659,6 +1661,7 @@ class MonitorTab(QWidget):
             sections=sections,
             confirm_text="删除本地视频" if file_exists else "移除本地记录",
             destructive=True,
+            position_key=DELETE_CONFIRM_POSITION_KEY,
             parent=self,
         )
 

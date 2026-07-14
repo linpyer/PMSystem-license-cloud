@@ -59,7 +59,7 @@ from app.core.important_reasons import (
 )
 from app.core.netdisk_sync import NetdiskUploadWorker, normalize_netdisk_config
 from app.core.video_player import open_folder, open_video, reveal_in_file_manager
-from app.ui.confirm_dialog import ConfirmActionDialog, confirm_action
+from app.ui.confirm_dialog import DELETE_CONFIRM_POSITION_KEY, ConfirmActionDialog, confirm_action
 from app.ui.dialog_utils import DialogSizeManager
 from app.ui.themed_line_edit import ThemedClearableLineEdit
 from app.ui.toast import show_toast
@@ -1453,6 +1453,7 @@ class DuplicateRecordsDialog(QDialog):
             sections=(("将删除：", ("本地数据库记录", "本地视频文件")),),
             confirm_text="仍然删除" if important_count else "删除本地视频",
             destructive=True,
+            position_key=DELETE_CONFIRM_POSITION_KEY,
         )
 
     def _delete_records(self, records: list[dict[str, Any]]) -> tuple[int, list[str]]:
@@ -4267,6 +4268,7 @@ class QueryTab(QWidget):
             sections=sections,
             confirm_text="删除本地视频" if file_exists else "移除本地记录",
             destructive=True,
+            position_key=DELETE_CONFIRM_POSITION_KEY,
             parent=self,
         )
 

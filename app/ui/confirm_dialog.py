@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-from PySide6.QtCore import QEvent, QPoint, QTimer, Qt
+from PySide6.QtCore import QEvent, QPoint, QSize, QTimer, Qt
 from PySide6.QtGui import QCloseEvent, QGuiApplication, QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -21,6 +22,7 @@ from app.ui.toast import show_toast
 
 
 ActionResult = bool | tuple[bool, str]
+DELETE_CONFIRM_POSITION_KEY = "delete_confirm"
 
 
 class ConfirmActionDialog(QDialog):
@@ -37,9 +39,11 @@ class ConfirmActionDialog(QDialog):
         sections: Sequence[tuple[str, Sequence[str]]] = (),
         confirm_text: str = "确定",
         destructive: bool = False,
+        position_key: str = "",
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(parent)
+        position_parent = parent.window() if position_key and parent is not None else parent
+        super().__init__(position_parent)
         self.setObjectName("confirmActionDialog")
         self.setModal(True)
         self.setWindowTitle(title)
@@ -49,8 +53,16 @@ class ConfirmActionDialog(QDialog):
         self._action: Callable[[], ActionResult] | None = None
         self._action_succeeded = False
         self._confirm_text = confirm_text
+        self._position_key = position_key.strip().rstrip("/")
+        self._position_parent = position_parent
+        self._position_initialized = False
+        self._last_saved_offset: tuple[int, int] | None = None
         self._drag_offset: QPoint | None = None
         self._drag_source: QWidget | None = None
+        self._system_move_active = False
+        self._system_move_poll = QTimer(self)
+        self._system_move_poll.setInterval(40)
+        self._system_move_poll.timeout.connect(self._poll_system_move)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
@@ -175,15 +187,27 @@ class ConfirmActionDialog(QDialog):
         self.exec()
         return self._action_succeeded
 
+    def exec(self) -> int:  # type: ignore[override]
+        if self._position_key:
+            self._position_initialized = False
+            self._restore_or_center_position()
+        return super().exec()
+
+    def accept(self) -> None:  # type: ignore[override]
+        self._clamp_and_save_position()
+        super().accept()
+
     def reject(self) -> None:  # type: ignore[override]
         if self._busy:
             return
+        self._clamp_and_save_position()
         super().reject()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
         if self._busy:
             event.ignore()
             return
+        self._clamp_and_save_position()
         super().closeEvent(event)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # type: ignore[override]
@@ -200,6 +224,8 @@ class ConfirmActionDialog(QDialog):
         if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
             window_handle = self.windowHandle()
             if window_handle is not None and window_handle.startSystemMove():
+                self._system_move_active = True
+                self._system_move_poll.start()
                 event.accept()
                 return True
             self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -208,7 +234,12 @@ class ConfirmActionDialog(QDialog):
             event.accept()
             return True
         if event.type() == QEvent.MouseMove and self._drag_offset is not None and event.buttons() & Qt.LeftButton:
-            self.move(self._bounded_drag_position(event.globalPosition().toPoint() - self._drag_offset))
+            candidate = event.globalPosition().toPoint() - self._drag_offset
+            self.move(candidate if self._position_key else self._bounded_drag_position(candidate))
+            event.accept()
+            return True
+        if event.type() == QEvent.MouseButtonRelease and self._system_move_active:
+            self._finish_system_move()
             event.accept()
             return True
         if event.type() == QEvent.MouseButtonRelease and self._drag_offset is not None:
@@ -239,25 +270,92 @@ class ConfirmActionDialog(QDialog):
             self._drag_source.releaseMouse()
         self._drag_source = None
         self._drag_offset = None
+        self._clamp_and_save_position()
+
+    def _poll_system_move(self) -> None:
+        if not self._system_move_active:
+            self._system_move_poll.stop()
+            return
+        if not QApplication.mouseButtons() & Qt.LeftButton:
+            self._finish_system_move()
+
+    def _finish_system_move(self) -> None:
+        self._system_move_poll.stop()
+        self._system_move_active = False
+        self._clamp_and_save_position()
 
     def showEvent(self, event: QEvent) -> None:  # type: ignore[override]
         super().showEvent(event)
-        QTimer.singleShot(0, self._fit_and_center)
+        if self._position_key:
+            if not self._position_initialized:
+                QTimer.singleShot(0, self._restore_or_center_position)
+        else:
+            QTimer.singleShot(0, self._fit_and_center)
         self.cancel_button.setFocus(Qt.OtherFocusReason)
+
+    def _parent_rect(self):
+        return DialogSizeManager.parent_rect(self, self._position_parent)
+
+    def _prepare_positioned_size(self) -> None:
+        self.adjustSize()
+        parent_rect = self._parent_rect()
+        if parent_rect is None:
+            return
+        max_width = max(1, int(parent_rect.width() * 0.90))
+        max_height = max(1, int(parent_rect.height() * 0.85))
+        minimum_width = min(430, max_width)
+        maximum_width = max(minimum_width, min(520, max_width))
+        self.setMinimumWidth(minimum_width)
+        self.setMaximumWidth(maximum_width)
+        self.setMaximumHeight(max_height)
+        hint = self.sizeHint()
+        target_width = min(max(hint.width(), minimum_width), maximum_width)
+        target_height = min(hint.height(), max_height)
+        self.resize(QSize(target_width, target_height))
+
+    def _clamped_parent_position(self, candidate: QPoint) -> QPoint:
+        return DialogSizeManager.clamp_to_parent(self, candidate, self._position_parent)
+
+    def _centered_parent_position(self) -> QPoint:
+        return DialogSizeManager.centered_position(self, self._position_parent)
+
+    def _saved_parent_position(self) -> QPoint | None:
+        return DialogSizeManager.restore_position(self, self._position_key, self._position_parent)
+
+    def _restore_or_center_position(self) -> None:
+        if not self._position_key or self._position_initialized:
+            return
+        self._prepare_positioned_size()
+        position = self._saved_parent_position() or self._centered_parent_position()
+        self.move(position)
+        self._position_initialized = True
+
+    def _clamp_and_save_position(self) -> None:
+        if not self._position_key or not self._position_initialized or not self.isVisible():
+            return
+        parent_rect = self._parent_rect()
+        if parent_rect is None:
+            return
+        safe_position = self._clamped_parent_position(self.frameGeometry().topLeft())
+        if safe_position != self.frameGeometry().topLeft():
+            self.move(safe_position)
+        offset = (safe_position.x() - parent_rect.left(), safe_position.y() - parent_rect.top())
+        if offset == self._last_saved_offset:
+            return
+        DialogSizeManager.remember(self, self._position_key, self._position_parent)
+        self._last_saved_offset = offset
 
     def _fit_and_center(self) -> None:
         self.adjustSize()
-        parent = self.parentWidget()
-        screen = DialogSizeManager._screen_for_parent(parent, self)
-        available = screen.availableGeometry() if screen is not None else None
-        if available is not None:
-            max_height = int(available.height() * 0.78)
-            if parent is not None and parent.height() > 0:
-                max_height = min(max_height, int(parent.height() * 0.80))
-            self.setMaximumHeight(max(280, max_height))
-            if self.height() > self.maximumHeight():
-                self.resize(self.width(), self.maximumHeight())
-        DialogSizeManager.center_on_parent(self, parent, available)
+        parent = DialogSizeManager.resolve_dialog_parent(self, self.parentWidget())
+        parent_rect = DialogSizeManager.parent_rect(self, parent)
+        if parent_rect is not None:
+            max_width = max(1, int(parent_rect.width() * 0.90))
+            max_height = max(1, int(parent_rect.height() * 0.85))
+            self.setMinimumWidth(min(430, max_width))
+            self.setMaximumSize(max_width, max_height)
+            self.resize(min(self.width(), max_width), min(self.height(), max_height))
+        DialogSizeManager.center_on_parent(self, parent)
 
     def _on_confirm_clicked(self) -> None:
         if self._busy:
@@ -303,6 +401,7 @@ def confirm_action(
     sections: Sequence[tuple[str, Sequence[str]]] = (),
     confirm_text: str = "确定",
     destructive: bool = False,
+    position_key: str = "",
 ) -> bool:
     dialog = ConfirmActionDialog(
         title=title,
@@ -313,6 +412,7 @@ def confirm_action(
         sections=sections,
         confirm_text=confirm_text,
         destructive=destructive,
+        position_key=position_key,
         parent=parent,
     )
     return dialog.confirm()
