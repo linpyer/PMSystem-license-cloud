@@ -3,6 +3,20 @@ from __future__ import annotations
 
 CHANGELOG_ENTRIES: list[dict[str, list[str] | str]] = [
     {
+        "version": "v1.0.5",
+        "date": "2026-07-15",
+        "features": [
+            "新增 Windows 客户端软件授权与在线激活基础能力",
+            "新增本地 Ed25519 许可证验签和 Windows DPAPI 安全存储",
+            "新增设置页软件授权、立即验证与本机解绑入口",
+        ],
+        "optimizations": [
+            "支持授权周期验证、离线宽限和受限只读模式",
+            "统一录制、上传和自动同步的授权能力检查",
+        ],
+        "fixes": [],
+    },
+    {
         "version": "v1.0.4",
         "date": "2026-07-14",
         "features": [

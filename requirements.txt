@@ -5,3 +5,4 @@ pyinstaller>=6.0
 pyttsx3>=2.90
 pywin32>=306; platform_system == "Windows"
 requests>=2.31
+cryptography>=45,<47

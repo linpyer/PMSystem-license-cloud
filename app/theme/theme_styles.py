@@ -28,6 +28,38 @@ QFrame#settingsCard, QFrame#customVoicePanel, QFrame#configManagementCard {{
     background: {tokens.surface};
     border-color: {tokens.border};
 }}
+QFrame#licenseCard {{
+    background: {tokens.surface};
+    border: 1px solid {tokens.border};
+    border-radius: 8px;
+}}
+QLabel#activationTitle {{
+    color: {tokens.text_primary};
+    font-size: 22px;
+    font-weight: 700;
+}}
+QLabel#licenseFieldLabel {{ color: {tokens.text_secondary}; font-weight: 600; }}
+QLabel#licenseFieldValue {{ color: {tokens.text_primary}; }}
+QLabel#licenseOperationStatus {{
+    color: {tokens.text_secondary};
+    min-height: 22px;
+}}
+QLabel#licenseStatusBanner {{
+    background: {tokens.surface_secondary};
+    color: {tokens.text_primary};
+    border-bottom: 1px solid {tokens.border};
+    padding: 8px 16px;
+}}
+QLabel#licenseStatusBanner[licenseState="grace"] {{
+    background: {warning_background};
+    color: {warning_text};
+    border-bottom-color: {warning_border};
+}}
+QLabel#licenseStatusBanner[licenseState="restricted"] {{
+    background: {recording_background};
+    color: {recording_text};
+    border-bottom-color: {recording_border};
+}}
 QLabel {{ color: {tokens.text_primary}; }}
 QLabel#settingsHint, QLabel#hintLabel, QLabel#subtleLabel, QLabel#recordDetailLabel {{
     color: {tokens.text_secondary};
@@ -40,6 +72,7 @@ QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox {{
     selection-background-color: {tokens.selected};
     selection-color: {tokens.text_primary};
 }}
+QLineEdit#licenseCodeInput {{ font-size: 16px; font-weight: 600; }}
 QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover, QAbstractSpinBox:hover, QComboBox:hover {{
     border-color: {tokens.focus_border};
 }}

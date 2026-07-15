@@ -250,12 +250,14 @@ class RecorderThread(QThread):
         base_dir: Path,
         logger: logging.Logger,
         db_path: str | Path | None = None,
+        recording_permission_checker=None,
     ) -> None:
         super().__init__()
         self.config = dict(config)
         self.base_dir = Path(base_dir)
         self.database_path = Path(db_path) if db_path is not None else get_canonical_database_path()
         self.logger = logger
+        self._recording_permission_checker = recording_permission_checker
 
         self._commands: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._stop_requested = threading.Event()
@@ -1233,6 +1235,14 @@ class RecorderThread(QThread):
         self._perf_last_drop_count = dropped_total
 
     def _start_recording(self, order_id: str) -> None:
+        if self._recording_permission_checker is not None:
+            record_type = str(self.config.get("current_record_type") or "发货")
+            if not bool(self._recording_permission_checker(record_type)):
+                message = "当前授权需要联网验证，暂时不能开始新的录制。"
+                self.logger.warning("录制服务层拦截未授权的新录制：record_type=%s", record_type)
+                self.warning_message.emit(message)
+                self.message.emit(message)
+                return
         health = self.camera_health()
         if not health.get("is_healthy", False):
             reason = str(health.get("last_error") or "摄像头连接异常，请检查 iVCam 或摄像头")

@@ -3,13 +3,17 @@ from __future__ import annotations
 import sys
 import ctypes
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from app.core.config_manager import ConfigManager
 from app.core.logger import setup_logging
 from app.core.version import APP_NAME, APP_VERSION
+from app.licensing.constants import LicenseStatus
+from app.licensing.license_manager import LicenseManager
 from app.theme.theme_manager import ThemeManager
+from app.ui.activation_dialog import ActivationDialog
 from app.ui.main_window import MainWindow
 from app.utils.runtime_paths import app_dir, resource_path, user_data_dir
 
@@ -17,6 +21,15 @@ from app.utils.runtime_paths import app_dir, resource_path, user_data_dir
 APP_TITLE = APP_NAME
 APP_ICON_PATH = "app/assets/app_icon.ico"
 APP_USER_MODEL_ID = "JsonLin.PMSystem"
+
+
+def _license_requires_activation(status: LicenseStatus) -> bool:
+    return status in {
+        LicenseStatus.UNLICENSED,
+        LicenseStatus.INVALID_LICENSE,
+        LicenseStatus.DEVICE_MISMATCH,
+        LicenseStatus.SERVER_UNAVAILABLE,
+    }
 
 
 def _set_windows_app_user_model_id() -> str | None:
@@ -75,10 +88,30 @@ def main() -> int:
     app.setProperty("theme_manager", theme_manager)
     theme_manager.apply_configured_theme()
 
-    window = MainWindow(config_manager=config_manager, logger=logger, theme_manager=theme_manager)
+    try:
+        license_manager = LicenseManager(logger=logger)
+        license_status = license_manager.initialize()
+    except Exception:
+        logger.exception("授权模块初始化失败")
+        return 1
+
+    if _license_requires_activation(license_status):
+        activation_dialog = ActivationDialog(license_manager)
+        if application_icon is not None:
+            activation_dialog.setWindowIcon(application_icon)
+        if activation_dialog.exec() != ActivationDialog.Accepted:
+            return 0
+
+    window = MainWindow(
+        config_manager=config_manager,
+        logger=logger,
+        theme_manager=theme_manager,
+        license_manager=license_manager,
+    )
     if application_icon is not None:
         window.setWindowIcon(application_icon)
     window.show()
+    QTimer.singleShot(0, window.start_license_background_verification)
 
     return app.exec()
 

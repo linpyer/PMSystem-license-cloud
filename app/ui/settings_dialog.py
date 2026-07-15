@@ -65,6 +65,7 @@ from app.ui.monitor_tab import (
     WATERMARK_MARGIN_HELP_TEXT,
 )
 from app.ui.toast import ToastManager, show_toast
+from app.ui.license_settings_page import LicenseSettingsPage
 from app.ui.confirm_dialog import confirm_action
 from app.ui.theme_icons import themed_svg_icon
 from app.ui.dialog_utils import DialogSizeManager, install_no_wheel_on_children
@@ -96,6 +97,7 @@ class SettingsDialog(QDialog):
         is_recording_callback=None,
         is_syncing_callback=None,
         theme_manager=None,
+        license_manager=None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -105,6 +107,7 @@ class SettingsDialog(QDialog):
         self.is_recording_callback = is_recording_callback or (lambda: False)
         self.is_syncing_callback = is_syncing_callback or (lambda: False)
         self.theme_manager = theme_manager
+        self.license_manager = license_manager
         self._theme_preview_session_active = False
         self._theme_preview_saved = False
         self._theme_preview_request_id = 0
@@ -199,6 +202,9 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(self._build_voice_tab(), "语音提示")
         self.tabs.addTab(self._build_netdisk_tab(), "网盘同步")
         self.tabs.addTab(self._build_config_management_tab(), "配置管理")
+        if self.license_manager is not None:
+            self.license_page = LicenseSettingsPage(self.license_manager, self)
+            self.tabs.addTab(self.license_page, "软件授权")
         self.tabs.addTab(self._build_changelog_tab(), "更新日志")
         root_layout.addWidget(self.tabs, 1)
         self._clear_theme_conflicting_styles()

@@ -869,6 +869,7 @@ class NetdiskUploadWorker(QThread):
         task_label: str = "同步",
         retry_failed: bool = False,
         logger: logging.Logger | None = None,
+        permission_checker=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -879,6 +880,7 @@ class NetdiskUploadWorker(QThread):
         self.task_label = str(task_label or "同步")
         self.retry_failed = bool(retry_failed)
         self.logger = logger
+        self._permission_checker = permission_checker
         self._stop_requested = False
         self._stop_after_current = False
 
@@ -889,6 +891,11 @@ class NetdiskUploadWorker(QThread):
         self._stop_after_current = True
 
     def run(self) -> None:  # type: ignore[override]
+        if self._permission_checker is not None and not bool(self._permission_checker()):
+            if self.logger:
+                self.logger.warning("网盘上传服务层拦截未授权的新任务")
+            self.finished_summary.emit(0, 0)
+            return
         database = DatabaseManager(self.database_path, self.logger)
         client = BaiduNetdiskClient(self.config, self.logger, token_refreshed_callback=self.tokens_refreshed.emit)
         success_count = 0
@@ -897,6 +904,10 @@ class NetdiskUploadWorker(QThread):
             total = len(self.entries)
             for index, entry in enumerate(self.entries, start=1):
                 if self._stop_requested or self._stop_after_current:
+                    break
+                if self._permission_checker is not None and not bool(self._permission_checker()):
+                    if self.logger:
+                        self.logger.warning("授权状态变化，停止创建后续网盘上传任务")
                     break
                 file_path = Path(str(entry.get("file_path") or ""))
                 self.progress_changed.emit(index - 1, total, file_path.name, success_count, fail_count)

@@ -11,6 +11,7 @@ from PyInstaller.utils.win32.versioninfo import (
     VarStruct,
     VSVersionInfo,
 )
+from PyInstaller.utils.hooks import collect_submodules
 
 from app.core.version import APP_NAME, APP_VERSION
 
@@ -57,7 +58,14 @@ a = Analysis(
     pathex=[str(PROJECT_ROOT)],
     binaries=[],
     datas=[(str(ASSETS_DIR), 'app\\assets')],
-    hiddenimports=['sqlite3', 'requests', 'pyttsx3', 'pyttsx3.drivers', 'pyttsx3.drivers.sapi5'],
+    hiddenimports=[
+        'sqlite3',
+        'requests',
+        'pyttsx3',
+        'pyttsx3.drivers',
+        'pyttsx3.drivers.sapi5',
+        *collect_submodules('cryptography'),
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

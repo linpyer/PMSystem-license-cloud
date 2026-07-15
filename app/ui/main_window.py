@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractSpinBox,
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -29,6 +30,9 @@ from app.core.disk_space_checker import DiskSpaceChecker
 from app.core.video_checker import VideoChecker
 from app.core.video_player import open_folder
 from app.core.version import APP_NAME
+from app.licensing.constants import LicenseStatus
+from app.licensing.license_worker import LicenseOperationWorker
+from app.ui.activation_dialog import ActivationDialog
 from app.ui.confirm_dialog import confirm_action
 from app.ui.dialog_utils import DialogSizeManager
 from app.ui.help_dialog import HelpDialog
@@ -57,12 +61,21 @@ SILENT_MONITOR_MESSAGE_PREFIXES = (
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, config_manager: ConfigManager, logger: logging.Logger, theme_manager=None) -> None:
+    def __init__(
+        self,
+        config_manager: ConfigManager,
+        logger: logging.Logger,
+        theme_manager=None,
+        license_manager=None,
+    ) -> None:
         super().__init__()
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         self.config_manager = config_manager
         self.logger = logger
         self.theme_manager = theme_manager
+        self.license_manager = license_manager
+        self._license_worker: LicenseOperationWorker | None = None
+        self._activation_dialog_open = False
         self.help_dialog: HelpDialog | None = None
         self.settings_dialog: SettingsDialog | None = None
         self.stats_dialog: PackagingStatsDialog | None = None
@@ -82,8 +95,12 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget(self)
         self.tabs.setObjectName("mainNavigation")
         self.tabs.setDocumentMode(True)
-        self.monitor_tab = MonitorTab(config_manager=config_manager, logger=logger, parent=self)
-        self.query_tab = QueryTab(config_manager=config_manager, logger=logger, parent=self)
+        self.monitor_tab = MonitorTab(
+            config_manager=config_manager, logger=logger, license_manager=license_manager, parent=self
+        )
+        self.query_tab = QueryTab(
+            config_manager=config_manager, logger=logger, license_manager=license_manager, parent=self
+        )
 
         self.tabs.addTab(self.monitor_tab, "打包监控")
         self.tabs.addTab(self.query_tab, "视频查询")
@@ -92,6 +109,12 @@ class MainWindow(QMainWindow):
         if self.theme_manager is not None:
             self.theme_manager.theme_changed.connect(self._apply_navigation_icons)
             self._apply_navigation_icons(self.theme_manager.current_mode(), self.theme_manager.resolved_theme())
+        self.license_banner = QLabel("", central)
+        self.license_banner.setObjectName("licenseStatusBanner")
+        self.license_banner.setAlignment(Qt.AlignCenter)
+        self.license_banner.setWordWrap(True)
+        self.license_banner.hide()
+        central_layout.addWidget(self.license_banner, 0)
         central_layout.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
         self._init_window_geometry()
@@ -104,6 +127,10 @@ class MainWindow(QMainWindow):
         self.monitor_tab.recorder.recording_state_changed.connect(self.query_tab.on_recording_state_changed)
         self.query_tab.video_list_changed.connect(self._on_query_video_list_changed)
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        if self.license_manager is not None:
+            self.license_manager.status_changed.connect(self._on_license_status_changed)
+            self.license_manager.license_updated.connect(self._update_license_banner)
+            self._update_license_banner()
 
         QTimer.singleShot(100, self._check_startup_disk_space)
         QTimer.singleShot(500, self._check_unfinished_recordings)
@@ -462,6 +489,7 @@ class MainWindow(QMainWindow):
                     is_recording_callback=lambda: self.monitor_tab.is_recording,
                     is_syncing_callback=lambda: self.query_tab.is_netdisk_syncing(),
                     theme_manager=self.theme_manager,
+                    license_manager=self.license_manager,
                     parent=self,
                 )
                 self.settings_dialog.config_saved.connect(self.monitor_tab.apply_external_config)
@@ -485,6 +513,64 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
             self.settings_dialog = None
             self.show_status_tip("设置窗口打开失败，请查看日志", "error", 5000)
+
+    def start_license_background_verification(self) -> None:
+        if self.license_manager is None or not self.license_manager.should_verify_in_background():
+            return
+        if self._license_worker is not None:
+            return
+        worker = LicenseOperationWorker(self.license_manager.verify_online, self)
+        self._license_worker = worker
+        worker.failed.connect(self._on_license_verify_failed)
+        worker.finished.connect(self._on_license_worker_finished)
+        worker.start()
+
+    def _on_license_verify_failed(self, code: str, _message: str) -> None:
+        self.logger.warning("后台授权验证未完成：code=%s", code)
+        self._update_license_banner()
+
+    def _on_license_worker_finished(self) -> None:
+        if self._license_worker is not None:
+            self._license_worker.deleteLater()
+        self._license_worker = None
+        self._update_license_banner()
+
+    def _on_license_status_changed(self, status_value: str) -> None:
+        self._update_license_banner()
+        if status_value == LicenseStatus.UNLICENSED.value:
+            QTimer.singleShot(0, self._show_activation_after_deactivation)
+
+    def _show_activation_after_deactivation(self) -> None:
+        if self.license_manager is None or self._activation_dialog_open:
+            return
+        self._activation_dialog_open = True
+        try:
+            dialog = ActivationDialog(self.license_manager, self)
+            dialog.exec()
+        finally:
+            self._activation_dialog_open = False
+            self._update_license_banner()
+
+    def _update_license_banner(self) -> None:
+        if self.license_manager is None or not hasattr(self, "license_banner"):
+            return
+        status = self.license_manager.get_status()
+        if status in {LicenseStatus.ACTIVE, LicenseStatus.VERIFY_RECOMMENDED}:
+            self.license_banner.hide()
+            return
+        if status == LicenseStatus.OFFLINE_GRACE:
+            deadline = self.license_manager.get_license_info().get("graceUntil")
+            deadline_text = deadline.astimezone().strftime("%Y-%m-%d %H:%M") if deadline else "宽限截止时间"
+            self.license_banner.setText(f"当前处于离线宽限期，请在 {deadline_text} 前完成在线验证。")
+            self.license_banner.setProperty("licenseState", "grace")
+        else:
+            self.license_banner.setText(
+                "当前授权需要联网验证，暂时不能开始新的录制或上传任务。查询与播放仍可使用。"
+            )
+            self.license_banner.setProperty("licenseState", "restricted")
+        self.license_banner.style().unpolish(self.license_banner)
+        self.license_banner.style().polish(self.license_banner)
+        self.license_banner.show()
 
     def _show_help_dialog(self) -> None:
         self.logger.info("用户打开使用说明页签窗口")

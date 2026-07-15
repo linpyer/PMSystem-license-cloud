@@ -1929,11 +1929,18 @@ class QueryTab(QWidget):
     COPY_TEXT_ROLE = Qt.UserRole + 1
     RECORD_ID_ROLE = Qt.UserRole + 2
 
-    def __init__(self, config_manager: ConfigManager, logger: logging.Logger, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config_manager: ConfigManager,
+        logger: logging.Logger,
+        license_manager=None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("videoQueryPage")
         self.config_manager = config_manager
         self.logger = logger
+        self.license_manager = license_manager
         self.video_dir = self._initial_query_dir()
         self.database = DatabaseManager(self.config_manager.database_path, logger)
         self.logger.info(
@@ -1993,6 +2000,8 @@ class QueryTab(QWidget):
         self.netdisk_progress_hide_timer.setSingleShot(True)
         self.netdisk_progress_hide_timer.timeout.connect(self._hide_netdisk_progress)
         self._build_ui()
+        if self.license_manager is not None:
+            self.license_manager.status_changed.connect(self._on_license_status_changed)
         if self._theme_manager is not None:
             self._theme_manager.theme_changed.connect(self._on_theme_changed)
         self._update_netdisk_controls()
@@ -3265,8 +3274,9 @@ class QueryTab(QWidget):
 
     def _update_netdisk_controls(self) -> None:
         enabled = self._netdisk_sync_enabled()
+        license_allowed = self.license_manager is None or self.license_manager.can_upload()
         self.sync_netdisk_button.setVisible(enabled)
-        self.sync_netdisk_button.setEnabled(enabled and not self.is_netdisk_syncing())
+        self.sync_netdisk_button.setEnabled(enabled and license_allowed and not self.is_netdisk_syncing())
         self.sync_netdisk_button.setText("同步中..." if self.is_netdisk_syncing() else "同步至网盘")
         self.stop_netdisk_button.setVisible(enabled)
         self.stop_netdisk_button.setEnabled(enabled and self._can_control_netdisk_stop() and self.auto_sync_state != "stopping")
@@ -3288,6 +3298,17 @@ class QueryTab(QWidget):
             self._hide_netdisk_progress()
             self._cancel_auto_sync_countdown(update_controls=False)
             self._set_auto_sync_status("")
+
+    def _license_allows_upload(self, *, auto_sync: bool = False, show_notice: bool = True) -> bool:
+        if self.license_manager is None:
+            return True
+        allowed = self.license_manager.can_auto_sync() if auto_sync else self.license_manager.can_upload()
+        if not allowed and show_notice:
+            self._show_notice("当前授权需要联网验证，暂时不能上传视频。", "warning")
+        return allowed
+
+    def _on_license_status_changed(self, _status: str) -> None:
+        self._update_netdisk_controls()
 
     def on_recording_state_changed(self, recording: bool, _order_id: str = "", _start_time: str = "") -> None:
         self._recording_active_for_auto_sync = bool(recording)
@@ -3349,6 +3370,9 @@ class QueryTab(QWidget):
             self._update_netdisk_controls()
 
     def _schedule_auto_sync_countdown(self, reason: str = "") -> None:
+        if not self._license_allows_upload(auto_sync=True, show_notice=False):
+            self._cancel_auto_sync_countdown(update_controls=True)
+            return
         if not self._auto_sync_enabled():
             self._cancel_auto_sync_countdown(update_controls=True)
             return
@@ -3426,6 +3450,11 @@ class QueryTab(QWidget):
         return upload_entries
 
     def _start_auto_sync_upload(self) -> None:
+        if not self._license_allows_upload(auto_sync=True, show_notice=False):
+            self.auto_sync_state = "idle"
+            self._set_auto_sync_status("自动同步：当前授权不可用")
+            self._update_netdisk_controls()
+            return
         if not self._auto_sync_enabled():
             self.auto_sync_state = "idle"
             self._set_auto_sync_status("")
@@ -3578,6 +3607,8 @@ class QueryTab(QWidget):
             self._show_notice(f"修改重要标记失败：{exc}", "error")
 
     def _sync_unuploaded_videos(self) -> None:
+        if not self._license_allows_upload():
+            return
         if self.auto_sync_state == "countdown":
             self._cancel_auto_sync_countdown(update_controls=False)
             self._set_auto_sync_status("")
@@ -3591,6 +3622,8 @@ class QueryTab(QWidget):
         self._start_netdisk_upload(upload_entries, mode="sync")
 
     def _upload_single_video(self, entry: dict[str, Any]) -> None:
+        if not self._license_allows_upload():
+            return
         if not self._ensure_netdisk_ready():
             return
         path = Path(str(entry.get("file_path") or ""))
@@ -3603,6 +3636,8 @@ class QueryTab(QWidget):
         self._start_netdisk_upload([entry], mode=mode)
 
     def _retry_failed_uploads(self) -> None:
+        if not self._license_allows_upload():
+            return
         if not self._ensure_netdisk_ready():
             return
         selected_upload_status = self._current_upload_status_filter()
@@ -3651,6 +3686,8 @@ class QueryTab(QWidget):
         self._start_netdisk_upload(upload_entries, mode="retry")
 
     def _retry_failed_uploads_from_history(self, dialog: NetdiskHistoryDialog) -> None:
+        if not self._license_allows_upload():
+            return
         if not self._ensure_netdisk_ready():
             return
         selected_upload_status = dialog.current_status_filter()
@@ -3721,6 +3758,8 @@ class QueryTab(QWidget):
         return True
 
     def _start_netdisk_upload(self, entries: list[dict[str, Any]], mode: str = "sync") -> None:
+        if not self._license_allows_upload(auto_sync=mode == "auto", show_notice=mode != "auto"):
+            return
         if not entries:
             return
         if self.upload_worker is not None:
@@ -3743,6 +3782,9 @@ class QueryTab(QWidget):
             task_label=task_label,
             retry_failed=self.netdisk_task_mode == "retry",
             logger=self.logger,
+            permission_checker=(
+                self.license_manager.can_upload if self.license_manager is not None else None
+            ),
             parent=self,
         )
         self.upload_worker = worker

@@ -627,11 +627,18 @@ class MonitorTab(QWidget):
     warning_message = Signal(str)
     critical_message = Signal(str)
 
-    def __init__(self, config_manager: ConfigManager, logger: logging.Logger, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config_manager: ConfigManager,
+        logger: logging.Logger,
+        license_manager=None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("monitorPage")
         self.config_manager = config_manager
         self.logger = logger
+        self.license_manager = license_manager
         self.config = self.config_manager.config
         self.is_recording = False
         self.current_order_id = ""
@@ -664,10 +671,16 @@ class MonitorTab(QWidget):
             base_dir=self.config_manager.base_dir,
             logger=logger,
             db_path=self.config_manager.database_path,
+            recording_permission_checker=(
+                self.license_manager.can_start_recording if self.license_manager is not None else None
+            ),
         )
         self._build_ui()
         self._connect_signals()
         self._load_config_to_controls()
+        if self.license_manager is not None:
+            self.license_manager.status_changed.connect(self._on_license_status_changed)
+            self._apply_license_state()
 
         self.recorder.start()
         app = QApplication.instance()
@@ -1358,6 +1371,10 @@ class MonitorTab(QWidget):
             return
         if not result.should_ignore:
             if not self.is_recording and result.cleaned_code:
+                if not self._license_allows_new_recording():
+                    self.scan_input.clear()
+                    self.focus_scan_input(80)
+                    return
                 camera_error = self._camera_start_block_reason()
                 if camera_error:
                     self._block_recording_start_for_camera_error(camera_error)
@@ -1383,6 +1400,10 @@ class MonitorTab(QWidget):
                 self.warning_message.emit("请先输入或扫描单号。")
             self.focus_scan_input(80)
             return
+        if not self.is_recording and not self._license_allows_new_recording():
+            self.scan_input.clear()
+            self.focus_scan_input(80)
+            return
         camera_error = self._camera_start_block_reason()
         if camera_error:
             self._block_recording_start_for_camera_error(camera_error)
@@ -1394,6 +1415,25 @@ class MonitorTab(QWidget):
         self.recorder.manual_start(result.cleaned_code)
         self.scan_input.clear()
         self.focus_scan_input(80)
+
+    def _license_allows_new_recording(self) -> bool:
+        if self.license_manager is None:
+            return True
+        if self.license_manager.can_start_recording(self._current_record_type()):
+            return True
+        message = "当前授权需要联网验证，暂时不能开始新的录制。"
+        self.warning_message.emit(message)
+        self.status_message.emit(message)
+        return False
+
+    def _apply_license_state(self) -> None:
+        if not hasattr(self, "manual_start_button") or self.license_manager is None:
+            return
+        allowed = self.license_manager.can_start_recording(self._current_record_type())
+        self.manual_start_button.setEnabled(bool(self.is_recording or allowed))
+
+    def _on_license_status_changed(self, _status: str) -> None:
+        self._apply_license_state()
 
     def _notify_no_order(self) -> None:
         message = "请先输入或扫描单号。"
@@ -1660,6 +1700,7 @@ class MonitorTab(QWidget):
                 self._pending_voice_action = None
             if self._pending_scan_feedback and self._pending_scan_feedback.get("event") not in {"stop", "switch"}:
                 self._pending_scan_feedback = None
+        self._apply_license_state()
         self.focus_scan_input()
 
     def _on_duration_changed(self, seconds: int) -> None:

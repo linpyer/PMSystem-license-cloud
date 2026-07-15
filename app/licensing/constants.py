@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+import os
+from enum import StrEnum
+
+
+FINGERPRINT_VERSION = "win-v1"
+LICENSE_PRODUCT = "PMSystem"
+LICENSE_EDITION = "professional"
+SUPPORTED_SCHEMA_VERSIONS = {1}
+
+
+class LicenseStatus(StrEnum):
+    UNLICENSED = "UNLICENSED"
+    ACTIVE = "ACTIVE"
+    VERIFY_RECOMMENDED = "VERIFY_RECOMMENDED"
+    OFFLINE_GRACE = "OFFLINE_GRACE"
+    RESTRICTED = "RESTRICTED"
+    EXPIRED = "EXPIRED"
+    DISABLED = "DISABLED"
+    REVOKED = "REVOKED"
+    DEVICE_MISMATCH = "DEVICE_MISMATCH"
+    INVALID_LICENSE = "INVALID_LICENSE"
+    SERVER_UNAVAILABLE = "SERVER_UNAVAILABLE"
+    CLOCK_ROLLBACK_SUSPECTED = "CLOCK_ROLLBACK_SUSPECTED"
+
+
+class LicenseCapability(StrEnum):
+    START_SHIPPING_RECORDING = "START_SHIPPING_RECORDING"
+    START_RETURN_RECORDING = "START_RETURN_RECORDING"
+    SAVE_NEW_RECORD = "SAVE_NEW_RECORD"
+    CLOUD_UPLOAD = "CLOUD_UPLOAD"
+    AUTO_SYNC = "AUTO_SYNC"
+    VIEW_HISTORY = "VIEW_HISTORY"
+    PLAY_VIDEO = "PLAY_VIDEO"
+    QUERY = "QUERY"
+    EXPORT = "EXPORT"
+    SETTINGS = "SETTINGS"
+    LICENSE_MANAGEMENT = "LICENSE_MANAGEMENT"
+
+
+FULL_ACCESS_STATUSES = {
+    LicenseStatus.ACTIVE,
+    LicenseStatus.VERIFY_RECOMMENDED,
+    LicenseStatus.OFFLINE_GRACE,
+}
+
+READ_ONLY_CAPABILITIES = {
+    LicenseCapability.VIEW_HISTORY,
+    LicenseCapability.PLAY_VIDEO,
+    LicenseCapability.QUERY,
+    LicenseCapability.EXPORT,
+    LicenseCapability.SETTINGS,
+    LicenseCapability.LICENSE_MANAGEMENT,
+}
+
+
+def license_api_base_url() -> str:
+    return os.getenv("PMSYSTEM_LICENSE_API_BASE_URL", "http://127.0.0.1:8000/api/v1").rstrip("/")
