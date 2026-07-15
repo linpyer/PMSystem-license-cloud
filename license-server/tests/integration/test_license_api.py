@@ -172,8 +172,13 @@ async def test_permanent_license_has_no_business_expiration(api) -> None:
     application, client = api
     code, _ = await create_license(application, LicenseType.PERMANENT)
     response = await activate(client, code, "device-permanent")
-    assert signed_payload(response)["expiresAt"] is None
-    assert signed_payload(response)["nextRequiredVerifyAt"] is not None
+    payload = signed_payload(response)
+    assert payload["expiresAt"] is None
+    next_required = datetime.fromisoformat(payload["nextRequiredVerifyAt"].replace("Z", "+00:00"))
+    grace_until = datetime.fromisoformat(payload["graceUntil"].replace("Z", "+00:00"))
+    last_verified = datetime.fromisoformat(payload["lastVerifiedAt"].replace("Z", "+00:00"))
+    assert next_required - last_verified == timedelta(days=7)
+    assert grace_until - last_verified == timedelta(days=21)
 
 
 async def test_fixed_date_license_keeps_configured_expiration(api) -> None:

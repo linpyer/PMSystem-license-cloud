@@ -25,6 +25,7 @@ class License(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             native_enum=False,
             create_constraint=True,
             validate_strings=True,
+            values_callable=lambda enum_type: [item.value for item in enum_type],
         ),
         nullable=False,
     )

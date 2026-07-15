@@ -57,11 +57,14 @@ class LicenseSigningService:
                 binding.last_verified_at + timedelta(days=self._settings.required_verify_days)
             ),
             "graceUntil": utc_iso(
-                binding.last_verified_at + timedelta(days=self._settings.offline_grace_days)
+                binding.last_verified_at
+                + timedelta(
+                    days=self._settings.required_verify_days
+                    + self._settings.offline_grace_days
+                )
             ),
             "features": ["recording", "videoQuery", "statistics", "netdiskSync"],
             "keyId": self._signer.key_id,
             "nonce": secrets.token_urlsafe(18),
         }
         return self._signer.sign(payload)
-

@@ -15,7 +15,7 @@ from app.core.config import get_settings
 pytestmark = pytest.mark.integration
 
 
-def test_initial_migration_upgrades_and_downgrades_dedicated_database() -> None:
+def test_initial_migration_upgrades_and_downgrades_dedicated_database(monkeypatch) -> None:
     database_url = os.getenv("LICENSE_TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("LICENSE_TEST_DATABASE_URL is not configured; Alembic test skipped")
@@ -23,6 +23,7 @@ def test_initial_migration_upgrades_and_downgrades_dedicated_database() -> None:
         pytest.fail("Alembic tests require a database name ending in _test")
 
     root = Path(__file__).resolve().parents[2]
+    monkeypatch.setenv("LICENSE_DATABASE_URL", database_url)
     config = Config(str(root / "alembic.ini"))
     config.set_main_option("script_location", str(root / "alembic"))
     get_settings.cache_clear()
