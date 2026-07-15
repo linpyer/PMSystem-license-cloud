@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+.secrets/
+.venv/
+.venv.before-path-move/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+alembic/dev.db

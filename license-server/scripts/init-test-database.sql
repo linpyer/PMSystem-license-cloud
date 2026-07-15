@@ -1,0 +1,1 @@
+CREATE DATABASE pmsystem_license_test;
