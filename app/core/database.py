@@ -5,7 +5,7 @@ import os
 import sqlite3
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1446,6 +1446,54 @@ class DatabaseManager:
             if self.logger:
                 self.logger.exception("统计视频列表总数失败：filters=%s", filters)
             return 0
+
+    def get_daily_record_counts(self, target_date: date | datetime | None = None) -> dict[str, int]:
+        """Count recorded rows for one local calendar day without de-duplicating order numbers."""
+        if isinstance(target_date, datetime):
+            day = target_date.date()
+        else:
+            day = target_date or date.today()
+        day_start = datetime.combine(day, datetime.min.time())
+        next_day_start = day_start + timedelta(days=1)
+        counts = {"ship_records": 0, "return_records": 0, "total_records": 0}
+        try:
+            row = self.get_connection().execute(
+                """
+                SELECT
+                    COALESCE(SUM(CASE WHEN record_type = ? THEN 1 ELSE 0 END), 0) AS ship_records,
+                    COALESCE(SUM(CASE WHEN record_type = ? THEN 1 ELSE 0 END), 0) AS return_records
+                FROM videos
+                WHERE recorded_at IS NOT NULL
+                  AND recorded_at <> ''
+                  AND recorded_at >= ?
+                  AND recorded_at < ?
+                """,
+                (
+                    "发货",
+                    "退货",
+                    day_start.strftime("%Y-%m-%d %H:%M:%S"),
+                    next_day_start.strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            ).fetchone()
+            ship_records = int(row["ship_records"] or 0) if row else 0
+            return_records = int(row["return_records"] or 0) if row else 0
+            counts.update(
+                ship_records=ship_records,
+                return_records=return_records,
+                total_records=ship_records + return_records,
+            )
+            if self.logger:
+                self.logger.info(
+                    "今日录制记录统计查询成功：date=%s, ship=%s, return=%s, total=%s",
+                    day.isoformat(),
+                    ship_records,
+                    return_records,
+                    ship_records + return_records,
+                )
+        except Exception:
+            if self.logger:
+                self.logger.exception("今日录制记录统计查询失败：date=%s", day.isoformat())
+        return counts
 
     def get_packaging_stats(self, start_date: date | str | None = None, end_date: date | str | None = None) -> dict[str, Any]:
         conditions, params = self._stats_recorded_at_conditions(start_date, end_date)

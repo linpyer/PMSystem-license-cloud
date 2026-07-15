@@ -726,8 +726,7 @@ QFrame#previewContainer {{
     border-radius: 12px;
 }}
 QLabel#previewLabel {{ border: 1px solid {tokens.border_strong}; border-radius: 10px; }}
-QScrollArea#rightOperationScroll {{ background: transparent; border: none; }}
-QScrollArea#rightOperationScroll > QWidget > QWidget, QWidget#rightOperationPanel {{
+QWidget#rightOperationPanel {{
     background: {tokens.surface};
     border: 1px solid {tokens.border};
     border-radius: 12px;
@@ -779,10 +778,11 @@ QPushButton#stopButton {{
 }}
 QPushButton#stopButton:hover {{ background: {"#6f363d" if is_dark else "#fee2e2"}; }}
 QFrame#monitorPanelDivider {{ background: {tokens.border}; border: none; max-height: 1px; min-height: 1px; }}
-QFrame#recentTitleAccent {{ background: transparent; border: none; max-width: 0; min-width: 0; }}
 QWidget#recentRecordingRow {{ background: transparent; border: none; border-bottom: 1px solid {tokens.border}; }}
 QWidget#recentRecordingRow:hover {{ background: {tokens.hover}; }}
+QLabel#recentCardTitle, QLabel#recentOrderText, QLabel#recentEmptyText {{ margin-left: 0; padding-left: 0; }}
 QLabel#recentOrderText {{ color: {tokens.text_primary}; }}
+QLabel#recentEmptyText {{ color: {tokens.text_secondary}; }}
 QLabel#recentMetaText {{ color: {tokens.text_secondary}; }}
 QLabel#recentTypeTag {{ border-radius: 6px; padding: 1px 6px; font-size: 9pt; font-weight: 600; }}
 QLabel#recentTypeTag[recordType="ship"] {{ background: {"#203429" if is_dark else "#f0fdf4"}; border: 1px solid {"#356344" if is_dark else "#bbf7d0"}; color: {"#86efac" if is_dark else "#047857"}; }}
@@ -793,6 +793,33 @@ QToolButton#recentDeleteIconButton {{
 }}
 QToolButton#recentDeleteIconButton:hover {{ background: {"#44272b" if is_dark else "#fef2f2"}; }}
 QToolButton#recentDeleteIconButton:pressed {{ background: {"#5b3035" if is_dark else "#fee2e2"}; }}
+QWidget#todayTopSection, QWidget#todayBottomSection, QWidget#todaySecondaryMetric {{
+    background: transparent;
+    border: none;
+}}
+QFrame#todayRecordSummaryCard {{
+    background: {tokens.surface_secondary};
+    border: 1px solid {tokens.border};
+    border-radius: 11px;
+}}
+QLabel#todaySummaryTitle {{
+    color: {tokens.text_primary};
+}}
+QLabel#todayShippingValue {{
+    color: {"#86c995" if is_dark else "#15803d"};
+}}
+QLabel#todaySummaryUnit {{
+    color: {tokens.text_secondary};
+}}
+QFrame#todaySummaryDivider {{
+    background: {tokens.border};
+    border: none;
+    min-height: 1px;
+    max-height: 1px;
+}}
+QLabel#todaySecondaryTitle {{ color: {tokens.text_secondary}; }}
+QLabel#todayReturnValue {{ color: {"#d6ad62" if is_dark else "#c2410c"}; }}
+QLabel#todayTotalValue {{ color: {tokens.text_primary}; }}
 
 QWidget#videoQueryPage QLineEdit#videoSearchInput {{ min-height: 38px; padding: 5px 10px; }}
 QWidget#videoQueryPage QWidget#querySegmentControl {{

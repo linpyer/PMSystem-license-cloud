@@ -72,9 +72,6 @@ class MainWindow(QMainWindow):
         self._toast_manager = ToastManager(self, self.logger)
 
         self.setWindowTitle(APP_TITLE)
-        icon_path = resource_path("app/assets/app_icon.ico")
-        if icon_path.exists():
-            self.setWindowIcon(QIcon(str(icon_path)))
 
         central = QWidget(self)
         central.setObjectName("mainWindowRoot")
@@ -98,6 +95,7 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self.tabs, 1)
         self.setCentralWidget(central)
         self._init_window_geometry()
+        QTimer.singleShot(0, lambda: self.monitor_tab.set_window_maximized(self.isMaximized()))
 
         self.monitor_tab.status_message.connect(self._on_monitor_status_message)
         self.monitor_tab.warning_message.connect(lambda message: self._show_notice_banner(message, "warning"))
@@ -144,6 +142,7 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
         if event.type() == QEvent.WindowStateChange:
             self._apply_window_control_icons()
+            QTimer.singleShot(0, lambda: self.monitor_tab.set_window_maximized(self.isMaximized()))
         if event.type() == QEvent.ActivationChange and self.isActiveWindow():
             QTimer.singleShot(100, self._restore_monitor_focus)
 
@@ -250,7 +249,7 @@ class MainWindow(QMainWindow):
 
     def _on_query_video_list_changed(self, reason: str) -> None:
         if reason == "deleted":
-            QTimer.singleShot(0, self.monitor_tab.refresh_recent_recordings)
+            QTimer.singleShot(0, self.monitor_tab.refresh_record_summaries)
 
     def _setup_help_entry(self) -> None:
         corner = QWidget(self)

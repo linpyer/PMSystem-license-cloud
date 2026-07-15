@@ -1,5 +1,6 @@
 build/
 dist/
+release/
 installer/output/
 
 __pycache__/
@@ -14,6 +15,10 @@ env/
 
 logs/
 videos/
+*.mp4
+*.avi
+*.mkv
+*.mov
 *.db
 *.sqlite
 *.sqlite3
@@ -28,9 +33,13 @@ videos/
 pm_system.db
 retired_legacy_databases/
 database backups/
+backups/
+migration_logs/
 test_databases/
 video_index.json
 config.json
+.env
+.env.*
 
 *.log
 *.tmp

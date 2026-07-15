@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
 from PyInstaller.utils.win32.versioninfo import (
     FixedFileInfo,
     StringFileInfo,
@@ -12,6 +14,12 @@ from PyInstaller.utils.win32.versioninfo import (
 
 from app.core.version import APP_NAME, APP_VERSION
 
+
+PROJECT_ROOT = Path(SPECPATH).resolve()
+APP_ICON = PROJECT_ROOT / 'app' / 'assets' / 'app_icon.ico'
+ASSETS_DIR = PROJECT_ROOT / 'app' / 'assets'
+if not APP_ICON.is_file():
+    raise FileNotFoundError(f'正式应用图标不存在，停止构建：{APP_ICON}')
 
 version_parts = tuple(int(part) for part in APP_VERSION.split("."))
 version_tuple = (version_parts + (0, 0, 0, 0))[:4]
@@ -45,10 +53,10 @@ version_resource = VSVersionInfo(
 
 
 a = Analysis(
-    ['main.py'],
-    pathex=[],
+    [str(PROJECT_ROOT / 'main.py')],
+    pathex=[str(PROJECT_ROOT)],
     binaries=[],
-    datas=[('app\\assets', 'app\\assets')],
+    datas=[(str(ASSETS_DIR), 'app\\assets')],
     hiddenimports=['sqlite3', 'requests', 'pyttsx3', 'pyttsx3.drivers', 'pyttsx3.drivers.sapi5'],
     hookspath=[],
     hooksconfig={},
@@ -76,7 +84,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version=version_resource,
-    icon=['app\\assets\\app_icon.ico'],
+    icon=[str(APP_ICON)],
 )
 coll = COLLECT(
     exe,

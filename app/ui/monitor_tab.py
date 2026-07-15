@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 import math
 import time
+from datetime import date, datetime, time as datetime_time, timedelta
 from pathlib import Path
 
 import cv2
 from PySide6.QtCore import QEvent, QSize, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QImage, QLinearGradient, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QImage, QLinearGradient, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
@@ -26,9 +27,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
-    QScrollArea,
     QScrollBar,
     QSizePolicy,
+    QSpacerItem,
     QSpinBox,
     QTextEdit,
     QPlainTextEdit,
@@ -101,6 +102,9 @@ DEFAULT_FPS = 25
 LONG_EDGE_OPTIONS = [0, 960, 1280, 1920]
 DEFAULT_LONG_EDGE = 1280
 ENABLE_CAMERA_ERROR_WAVE_EFFECT = True
+RIGHT_PANEL_CONTENT_MARGIN = 14
+RECENT_RECORD_CONTENT_LEFT = 0
+SUMMARY_RESIZE_DEBOUNCE_MS = 75
 
 FPS_HELP_TEXT = """帧率表示每秒录制多少张画面。
 
@@ -281,6 +285,343 @@ class PreviewAlertOverlay(QWidget):
         painter.fillRect(rect.right() - 1, rect.top(), 2, rect.height(), border)
 
 
+class MonitorRightPanel(QWidget):
+    resized = Signal(QSize)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self.resized.emit(event.size())
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self.resized.emit(self.contentsRect().size())
+
+
+class TodayRecordSummaryCard(QFrame):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("todayRecordSummaryCard")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumHeight(114)
+        self._responsive_profile = ""
+        self._available_size = QSize(0, 0)
+        self._first_show_style_applied = False
+        self._first_show_style_pending = False
+        self._theme_style_reapply_pending = False
+        self._responsive_timer = QTimer(self)
+        self._responsive_timer.setSingleShot(True)
+        self._responsive_timer.setInterval(SUMMARY_RESIZE_DEBOUNCE_MS)
+        self._responsive_timer.timeout.connect(self._apply_pending_responsive_layout)
+
+        self.outer_layout = QVBoxLayout(self)
+        self.outer_layout.setContentsMargins(14, 14, 14, 14)
+        self.outer_layout.setSpacing(0)
+
+        self.top_section = QWidget(self)
+        self.top_section.setObjectName("todayTopSection")
+        self.top_layout = QVBoxLayout(self.top_section)
+        self.top_layout.setContentsMargins(0, 0, 0, 0)
+        self.top_layout.setSpacing(0)
+        self.top_layout.addStretch(1)
+
+        self.title_label = QLabel("今日发货")
+        self.title_label.setObjectName("todaySummaryTitle")
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.top_layout.addWidget(self.title_label)
+        self.title_number_spacer = QSpacerItem(0, 9, QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.top_layout.addItem(self.title_number_spacer)
+
+        self.number_layout = QHBoxLayout()
+        self.number_layout.setContentsMargins(0, 0, 0, 0)
+        self.number_layout.setSpacing(6)
+        self.number_layout.setAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+        self.shipping_value_label = QLabel("0")
+        self.shipping_value_label.setObjectName("todayShippingValue")
+        self.shipping_value_label.setAlignment(Qt.AlignRight | Qt.AlignBottom)
+        self.unit_label = QLabel("单")
+        self.unit_label.setObjectName("todaySummaryUnit")
+        self.unit_label.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
+        self.number_layout.addWidget(self.shipping_value_label, 0, Qt.AlignBottom)
+        self.number_layout.addWidget(self.unit_label, 0, Qt.AlignBottom)
+        self.top_layout.addLayout(self.number_layout)
+        self.top_layout.addStretch(1)
+
+        self.divider = QFrame(self)
+        self.divider.setObjectName("todaySummaryDivider")
+        self.divider.setFrameShape(QFrame.HLine)
+
+        self.bottom_section = QWidget(self)
+        self.bottom_section.setObjectName("todayBottomSection")
+        self.metrics_layout = QHBoxLayout(self.bottom_section)
+        self.metrics_layout.setContentsMargins(0, 0, 0, 0)
+        self.metrics_layout.setSpacing(20)
+        (
+            return_metric,
+            return_title,
+            self.return_value_label,
+            self.return_unit_label,
+            return_number_layout,
+        ) = self._build_secondary_metric(
+            "今日退货", "todayReturnValue"
+        )
+        (
+            total_metric,
+            total_title,
+            self.total_value_label,
+            self.total_unit_label,
+            total_number_layout,
+        ) = self._build_secondary_metric(
+            "今日扫描总量", "todayTotalValue"
+        )
+        self.secondary_title_labels = (return_title, total_title)
+        self.secondary_unit_labels = (self.return_unit_label, self.total_unit_label)
+        self.secondary_metric_layouts = (return_metric.layout(), total_metric.layout())
+        self.secondary_number_layouts = (return_number_layout, total_number_layout)
+        self.metrics_layout.addWidget(return_metric, 1)
+        self.metrics_layout.addWidget(total_metric, 1)
+
+        self.outer_layout.addWidget(self.top_section, 3)
+        self.outer_layout.addWidget(self.divider, 0)
+        self.outer_layout.addWidget(self.bottom_section, 2)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self.schedule_responsive_update(self.contentsRect().size())
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        if not self._first_show_style_applied and not self._first_show_style_pending:
+            self._first_show_style_pending = True
+            self.setUpdatesEnabled(False)
+            QTimer.singleShot(0, self._apply_first_show_responsive_style)
+            return
+        self.schedule_responsive_update(self.contentsRect().size())
+
+    def _apply_first_show_responsive_style(self) -> None:
+        self._first_show_style_pending = False
+        try:
+            self.update_responsive_style(force=True)
+            self._first_show_style_applied = True
+        finally:
+            self.setUpdatesEnabled(True)
+            self.update()
+
+    def handle_theme_changed(self, _mode: str = "system", _resolved_theme: str = "light") -> None:
+        if self._theme_style_reapply_pending:
+            return
+        self._theme_style_reapply_pending = True
+        self.setUpdatesEnabled(False)
+        QTimer.singleShot(0, self._reapply_responsive_style_after_theme)
+
+    def _reapply_responsive_style_after_theme(self) -> None:
+        self._theme_style_reapply_pending = False
+        try:
+            self.update_responsive_style(force=True)
+        finally:
+            self.setUpdatesEnabled(True)
+            self.update()
+
+    @staticmethod
+    def _build_secondary_metric(
+        title: str,
+        value_object_name: str,
+    ) -> tuple[QWidget, QLabel, QLabel, QLabel, QHBoxLayout]:
+        metric = QWidget()
+        metric.setObjectName("todaySecondaryMetric")
+        metric_layout = QVBoxLayout(metric)
+        metric_layout.setContentsMargins(0, 0, 0, 0)
+        metric_layout.setSpacing(3)
+        metric_layout.addStretch(1)
+        title_label = QLabel(title)
+        title_label.setObjectName("todaySecondaryTitle")
+        title_label.setAlignment(Qt.AlignCenter)
+        value_label = QLabel("0")
+        value_label.setObjectName(value_object_name)
+        value_label.setAlignment(Qt.AlignRight | Qt.AlignBottom)
+        unit_label = QLabel("单")
+        unit_label.setObjectName("todaySummaryUnit")
+        unit_label.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
+        number_layout = QHBoxLayout()
+        number_layout.setContentsMargins(0, 0, 0, 0)
+        number_layout.setSpacing(4)
+        number_layout.setAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+        number_layout.addWidget(value_label, 0, Qt.AlignBottom)
+        number_layout.addWidget(unit_label, 0, Qt.AlignBottom)
+        metric_layout.addWidget(title_label)
+        metric_layout.addLayout(number_layout)
+        metric_layout.addStretch(1)
+        return metric, title_label, value_label, unit_label, number_layout
+
+    def set_counts(self, ship_records: int, return_records: int) -> None:
+        ship_records = max(0, int(ship_records))
+        return_records = max(0, int(return_records))
+        self.shipping_value_label.setText(str(ship_records))
+        self.return_value_label.setText(str(return_records))
+        self.total_value_label.setText(str(ship_records + return_records))
+
+    def schedule_responsive_update(self, available_size: QSize) -> None:
+        self._available_size = QSize(available_size)
+        self._responsive_timer.start()
+
+    def _apply_pending_responsive_layout(self) -> None:
+        self.update_responsive_style()
+
+    def update_responsive_style(self, force: bool = False) -> None:
+        size = self.contentsRect().size()
+        if size.width() <= 0 or size.height() <= 0:
+            size = self._available_size
+        profile = self._select_responsive_profile(max(0, size.width()), max(0, size.height()))
+        self._apply_responsive_profile(profile, force=force)
+
+    def _select_responsive_profile(self, width: int, height: int) -> str:
+        current = self._responsive_profile
+        if width <= 0 or height <= 0:
+            return current or "normal"
+        if current == "compact":
+            return "normal" if height >= 230 and width >= 320 else "compact"
+        if current == "large":
+            return "normal" if height < 285 or width < 320 else "large"
+        if current == "normal":
+            if height < 210 or width < 310:
+                return "compact"
+            if height >= 315 and width >= 330:
+                return "large"
+            return "normal"
+        if height < 220 or width < 310:
+            return "compact"
+        if height >= 300 and width >= 330:
+            return "large"
+        return "normal"
+
+    def _apply_responsive_profile(self, profile: str, force: bool = False) -> None:
+        if profile == self._responsive_profile and not force:
+            return
+        values = {
+            "compact": {
+                "margin": 9,
+                "title_gap": 6,
+                "number_spacing": 5,
+                "metrics_spacing": 16,
+                "secondary_gap": 5,
+                "title_size": 17,
+                "title_spacing": 2.0,
+                "number_size": 56,
+                "unit_size": 15,
+                "unit_bottom": 3,
+                "secondary_title_size": 13,
+                "secondary_title_spacing": 1.5,
+                "secondary_value_size": 31,
+                "secondary_unit_size": 10,
+                "secondary_unit_bottom": 2,
+                "secondary_number_spacing": 4,
+                "show_secondary": False,
+            },
+            "normal": {
+                "margin": 14,
+                "title_gap": 9,
+                "number_spacing": 6,
+                "metrics_spacing": 24,
+                "secondary_gap": 6,
+                "title_size": 18,
+                "title_spacing": 2.8,
+                "number_size": 64,
+                "unit_size": 17,
+                "unit_bottom": 4,
+                "secondary_title_size": 13,
+                "secondary_title_spacing": 2.0,
+                "secondary_value_size": 35,
+                "secondary_unit_size": 12,
+                "secondary_unit_bottom": 3,
+                "secondary_number_spacing": 5,
+                "show_secondary": True,
+            },
+            "large": {
+                "margin": 18,
+                "title_gap": 12,
+                "number_spacing": 8,
+                "metrics_spacing": 32,
+                "secondary_gap": 8,
+                "title_size": 24,
+                "title_spacing": 3.6,
+                "number_size": 88,
+                "unit_size": 22,
+                "unit_bottom": 6,
+                "secondary_title_size": 17,
+                "secondary_title_spacing": 2.5,
+                "secondary_value_size": 48,
+                "secondary_unit_size": 16,
+                "secondary_unit_bottom": 4,
+                "secondary_number_spacing": 6,
+                "show_secondary": True,
+            },
+        }[profile]
+        margin = int(values["margin"])
+        self.outer_layout.setContentsMargins(margin, margin, margin, margin)
+        self.title_number_spacer.changeSize(0, int(values["title_gap"]), QSizePolicy.Minimum, QSizePolicy.Fixed)
+        self.number_layout.setSpacing(int(values["number_spacing"]))
+        self.metrics_layout.setSpacing(int(values["metrics_spacing"]))
+        for metric_layout in self.secondary_metric_layouts:
+            metric_layout.setSpacing(int(values["secondary_gap"]))
+        for number_layout in self.secondary_number_layouts:
+            number_layout.setSpacing(int(values["secondary_number_spacing"]))
+        self._set_label_font(
+            self.title_label,
+            int(values["title_size"]),
+            QFont.Weight.Bold,
+            float(values["title_spacing"]),
+        )
+        self._set_label_font(self.shipping_value_label, int(values["number_size"]), QFont.Weight.Bold)
+        self._set_label_font(self.unit_label, int(values["unit_size"]), QFont.Weight.Normal)
+        self.unit_label.setContentsMargins(0, 0, 0, int(values["unit_bottom"]))
+        for label in self.secondary_title_labels:
+            self._set_label_font(
+                label,
+                int(values["secondary_title_size"]),
+                QFont.Weight.DemiBold,
+                float(values["secondary_title_spacing"]),
+            )
+        self._set_label_font(self.return_value_label, int(values["secondary_value_size"]), QFont.Weight.Bold)
+        self._set_label_font(self.total_value_label, int(values["secondary_value_size"]), QFont.Weight.Bold)
+        for label in self.secondary_unit_labels:
+            self._set_label_font(label, int(values["secondary_unit_size"]), QFont.Weight.Normal)
+            label.setContentsMargins(0, 0, 0, int(values["secondary_unit_bottom"]))
+        show_secondary = bool(values["show_secondary"])
+        self.divider.setVisible(show_secondary)
+        self.bottom_section.setVisible(show_secondary)
+        self.outer_layout.setStretch(0, 3 if show_secondary else 1)
+        self.outer_layout.setStretch(2, 2 if show_secondary else 0)
+        self._responsive_profile = profile
+        for label in (
+            self.title_label,
+            self.shipping_value_label,
+            self.unit_label,
+            *self.secondary_title_labels,
+            self.return_value_label,
+            self.total_value_label,
+            *self.secondary_unit_labels,
+        ):
+            label.updateGeometry()
+        self.top_layout.invalidate()
+        self.metrics_layout.invalidate()
+        self.outer_layout.invalidate()
+        self.top_section.updateGeometry()
+        self.bottom_section.updateGeometry()
+        self.updateGeometry()
+
+    @staticmethod
+    def _set_label_font(
+        label: QLabel,
+        pixel_size: int,
+        weight: QFont.Weight,
+        letter_spacing: float = 0.0,
+    ) -> None:
+        font = label.font()
+        font.setPixelSize(pixel_size)
+        font.setWeight(weight)
+        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, letter_spacing)
+        label.setFont(font)
+
+
 class MonitorTab(QWidget):
     status_message = Signal(str)
     warning_message = Signal(str)
@@ -298,6 +639,7 @@ class MonitorTab(QWidget):
         self._pending_scan_feedback: dict[str, str] | None = None
         self._event_filter_installed = False
         self._theme_manager = None
+        self._right_panel_density = ""
         self.scan_feedback_timer = QTimer(self)
         self.scan_feedback_timer.setSingleShot(True)
         self.scan_feedback_timer.timeout.connect(self._reset_scan_feedback)
@@ -309,6 +651,10 @@ class MonitorTab(QWidget):
         self._last_recording_alert_at = 0.0
         self._camera_error_active = False
         self._camera_error_reason = ""
+        self._today_summary_date = date.today()
+        self._day_rollover_timer = QTimer(self)
+        self._day_rollover_timer.setSingleShot(True)
+        self._day_rollover_timer.timeout.connect(self._handle_day_rollover)
         self._normalize_video_config_on_startup()
         self.scanner_guard = ScannerGuard(self.config, logger)
         self.voice_prompt = VoicePrompt(self.config, logger)
@@ -331,11 +677,15 @@ class MonitorTab(QWidget):
             self._theme_manager = app.property("theme_manager")
             if self._theme_manager is not None:
                 self._theme_manager.theme_changed.connect(self._refresh_action_icons)
+                self._theme_manager.theme_changed.connect(self.today_summary_card.handle_theme_changed)
         self.focus_scan_input()
-        QTimer.singleShot(0, self.refresh_recent_recordings)
+        QTimer.singleShot(0, self.refresh_record_summaries)
+        QTimer.singleShot(0, self._schedule_summary_responsive_update)
+        self._schedule_day_rollover()
 
     def shutdown(self) -> None:
         self._clear_recording_alert()
+        self._day_rollover_timer.stop()
         if self._event_filter_installed:
             app = QApplication.instance()
             if app is not None:
@@ -351,11 +701,15 @@ class MonitorTab(QWidget):
 
     def showEvent(self, event) -> None:  # type: ignore[override]
         super().showEvent(event)
+        self.set_window_maximized(self.window().isMaximized())
+        QTimer.singleShot(0, self.refresh_today_summary)
         if self._camera_error_active:
             self.refresh_status_card()
 
     def eventFilter(self, watched, event) -> bool:  # type: ignore[override]
         focus_widget = QApplication.focusWidget()
+        if event.type() == QEvent.ScreenChangeInternal:
+            QTimer.singleShot(0, self._schedule_summary_responsive_update)
         if event.type() == QEvent.MouseButtonPress and self._should_refocus_after_mouse_press(watched):
             self.focus_scan_input(80)
         if (
@@ -512,27 +866,24 @@ class MonitorTab(QWidget):
         self.preview_alert_overlay.raise_()
         content_layout.addWidget(preview_container, 0, 0)
 
-        side_scroll = QScrollArea()
-        side_scroll.setObjectName("rightOperationScroll")
-        side_scroll.setWidgetResizable(True)
-        side_scroll.setFrameShape(QFrame.NoFrame)
-        side_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        side_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        side_scroll.setMinimumWidth(400)
-        side_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-
-        side_panel_container = QWidget()
-        side_panel_container.setObjectName("rightOperationPanel")
-        side_panel_container.setMinimumWidth(380)
-        side_panel_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        side_panel = QVBoxLayout(side_panel_container)
-        side_panel.setContentsMargins(14, 14, 14, 14)
-        side_panel.setSpacing(12)
-        side_scroll.setWidget(side_panel_container)
-        content_layout.addWidget(side_scroll, 0, 1)
+        self.side_panel_container = MonitorRightPanel()
+        self.side_panel_container.setObjectName("rightOperationPanel")
+        self.side_panel_container.setMinimumWidth(400)
+        self.side_panel_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.side_panel_layout = QVBoxLayout(self.side_panel_container)
+        self.side_panel_layout.setContentsMargins(
+            RIGHT_PANEL_CONTENT_MARGIN,
+            RIGHT_PANEL_CONTENT_MARGIN,
+            RIGHT_PANEL_CONTENT_MARGIN,
+            RIGHT_PANEL_CONTENT_MARGIN,
+        )
+        self.side_panel_layout.setSpacing(12)
+        self.side_panel_container.resized.connect(self._update_right_panel_density)
+        content_layout.addWidget(self.side_panel_container, 0, 1)
 
         status_group = QGroupBox("")
         status_group.setObjectName("plainRightCard")
+        status_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         status_layout = QVBoxLayout(status_group)
         status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(8)
@@ -580,15 +931,16 @@ class MonitorTab(QWidget):
         status_info_layout.addRow("摄像头：", self.camera_status_label)
         status_layout.addLayout(status_info_layout)
         self._set_start_time_visible(False)
-        side_panel.addWidget(status_group)
+        self.side_panel_layout.addWidget(status_group, 0)
 
         status_divider = QFrame()
         status_divider.setObjectName("monitorPanelDivider")
         status_divider.setFrameShape(QFrame.HLine)
-        side_panel.addWidget(status_divider)
+        self.side_panel_layout.addWidget(status_divider, 0)
 
         scan_group = QGroupBox("")
         scan_group.setObjectName("plainRightCard")
+        scan_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         scan_layout = QVBoxLayout(scan_group)
         scan_layout.setSpacing(6)
         self.scan_input = ThemedClearableLineEdit()
@@ -629,15 +981,16 @@ class MonitorTab(QWidget):
         scan_layout.addSpacing(5)
         scan_layout.addWidget(scan_title)
         scan_layout.addWidget(self.scan_input)
-        side_panel.addWidget(scan_group)
+        self.side_panel_layout.addWidget(scan_group, 0)
 
         scan_divider = QFrame()
         scan_divider.setObjectName("monitorPanelDivider")
         scan_divider.setFrameShape(QFrame.HLine)
-        side_panel.addWidget(scan_divider)
+        self.side_panel_layout.addWidget(scan_divider, 0)
 
         button_group = QGroupBox("")
         button_group.setObjectName("plainRightCard")
+        button_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         button_layout = QGridLayout(button_group)
         button_layout.setHorizontalSpacing(8)
         button_layout.setVerticalSpacing(8)
@@ -653,39 +1006,38 @@ class MonitorTab(QWidget):
         button_layout.addWidget(self.refresh_camera_button, 1, 1)
         self.open_folder_button.setObjectName("secondaryButton")
         self.refresh_camera_button.setObjectName("secondaryButton")
-        side_panel.addWidget(button_group)
+        self.side_panel_layout.addWidget(button_group, 0)
 
         action_divider = QFrame()
         action_divider.setObjectName("monitorPanelDivider")
         action_divider.setFrameShape(QFrame.HLine)
-        side_panel.addWidget(action_divider)
+        self.side_panel_layout.addWidget(action_divider, 0)
 
         recent_group = QGroupBox("")
         recent_group.setObjectName("recentCard")
+        recent_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         recent_layout = QVBoxLayout(recent_group)
-        recent_layout.setContentsMargins(0, 0, 0, 0)
+        recent_layout.setContentsMargins(RECENT_RECORD_CONTENT_LEFT, 0, 0, 0)
         recent_layout.setSpacing(6)
         recent_title_layout = QHBoxLayout()
-        recent_title_layout.setContentsMargins(0, 0, 0, 0)
-        recent_title_layout.setSpacing(8)
-        recent_title_accent = QFrame()
-        recent_title_accent.setObjectName("recentTitleAccent")
-        recent_title_accent.setFixedSize(0, 0)
+        recent_title_layout.setContentsMargins(RECENT_RECORD_CONTENT_LEFT, 0, 0, 0)
+        recent_title_layout.setSpacing(0)
         recent_title_label = QLabel("最近录制")
         recent_title_label.setObjectName("recentCardTitle")
-        recent_title_layout.addWidget(recent_title_accent)
         recent_title_layout.addWidget(recent_title_label)
         recent_title_layout.addStretch(1)
         self.recent_recordings_layout = QVBoxLayout()
-        self.recent_recordings_layout.setContentsMargins(0, 0, 0, 0)
+        self.recent_recordings_layout.setContentsMargins(RECENT_RECORD_CONTENT_LEFT, 0, 0, 0)
         self.recent_recordings_layout.setSpacing(0)
         recent_layout.addLayout(recent_title_layout)
         recent_layout.addLayout(self.recent_recordings_layout)
-        side_panel.addWidget(recent_group)
+        self.side_panel_layout.addWidget(recent_group, 0)
 
-        side_panel.addStretch(1)
+        self.today_summary_card = TodayRecordSummaryCard(self.side_panel_container)
+        self.side_panel_layout.addWidget(self.today_summary_card, 1)
         self.logger.info("录制类型单选框初始化")
         self.logger.info("最近录制模块初始化")
+        self.logger.info("今日录制统计模块初始化")
         self.logger.info("打包监控页右侧布局初始化")
 
     def _connect_signals(self) -> None:
@@ -1366,8 +1718,8 @@ class MonitorTab(QWidget):
         if not camera_status and self._is_recording_alert_message(message):
             self.show_recording_alert(self._recording_alert_reason(message))
         if self._is_recording_save_complete_message(message):
-            self.logger.info("新视频保存后刷新最近录制模块")
-            QTimer.singleShot(200, self.refresh_recent_recordings)
+            self.logger.info("新视频保存后刷新最近录制和今日统计")
+            QTimer.singleShot(200, self.refresh_record_summaries)
         if self._pending_voice_action == "stop":
             if self._is_recording_save_complete_message(message):
                 if self.voice_prompt.speak_stop():
@@ -1418,6 +1770,75 @@ class MonitorTab(QWidget):
         self.apply_external_config(config)
         self.recorder.restart_camera()
 
+    def set_window_maximized(self, _maximized: bool) -> None:
+        QTimer.singleShot(0, self._schedule_summary_responsive_update)
+
+    def _schedule_summary_responsive_update(self) -> None:
+        if not hasattr(self, "today_summary_card"):
+            return
+        self.today_summary_card.schedule_responsive_update(self.today_summary_card.contentsRect().size())
+
+    def _update_right_panel_density(self, available_size: QSize) -> None:
+        height = max(0, available_size.height())
+        if height < 680:
+            density = "tight"
+            spacing = 6
+        elif height < 760:
+            density = "compact"
+            spacing = 8
+        else:
+            density = "normal"
+            spacing = 12
+        if density == self._right_panel_density:
+            return
+        self._right_panel_density = density
+        self.side_panel_layout.setSpacing(spacing)
+        top_margin, bottom_margin = self._recent_row_vertical_margins()
+        for row_widget in self.findChildren(QWidget, "recentRecordingRow"):
+            row_layout = row_widget.layout()
+            if row_layout is not None:
+                row_layout.setContentsMargins(RECENT_RECORD_CONTENT_LEFT, top_margin, 0, bottom_margin)
+        self.side_panel_layout.invalidate()
+        QTimer.singleShot(0, self._schedule_summary_responsive_update)
+
+    def _recent_row_vertical_margins(self) -> tuple[int, int]:
+        if self._right_panel_density == "tight":
+            return 0, 1
+        if self._right_panel_density == "compact":
+            return 1, 2
+        return 2, 4
+
+    def refresh_record_summaries(self) -> None:
+        self.refresh_recent_recordings()
+        self.refresh_today_summary()
+
+    def refresh_today_summary(self) -> None:
+        database: DatabaseManager | None = None
+        try:
+            today = date.today()
+            database = DatabaseManager(self.config_manager.database_path, self.logger)
+            counts = database.get_daily_record_counts(today)
+            self._today_summary_date = today
+            self.today_summary_card.set_counts(
+                counts.get("ship_records", 0),
+                counts.get("return_records", 0),
+            )
+        except Exception:
+            self.logger.exception("今日录制统计刷新失败")
+        finally:
+            if database is not None:
+                database.close()
+
+    def _schedule_day_rollover(self) -> None:
+        now = datetime.now()
+        next_midnight = datetime.combine(now.date() + timedelta(days=1), datetime_time.min)
+        interval_ms = max(1000, int((next_midnight - now).total_seconds() * 1000) + 1000)
+        self._day_rollover_timer.start(interval_ms)
+
+    def _handle_day_rollover(self) -> None:
+        self.refresh_today_summary()
+        self._schedule_day_rollover()
+
     def refresh_recent_recordings(self) -> None:
         try:
             database = DatabaseManager(self.config_manager.database_path, self.logger)
@@ -1433,8 +1854,8 @@ class MonitorTab(QWidget):
         self._clear_layout(self.recent_recordings_layout)
         if not rows:
             empty_label = QLabel("暂无最近录制")
-            empty_label.setObjectName("hintLabel")
-            empty_label.setAlignment(Qt.AlignCenter)
+            empty_label.setObjectName("recentEmptyText")
+            empty_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             self.recent_recordings_layout.addWidget(empty_label)
             return
 
@@ -1443,7 +1864,13 @@ class MonitorTab(QWidget):
             row_widget = QWidget()
             row_widget.setObjectName("recentRecordingRow")
             row_layout = QHBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 2, 0, 4)
+            top_margin, bottom_margin = self._recent_row_vertical_margins()
+            row_layout.setContentsMargins(
+                RECENT_RECORD_CONTENT_LEFT,
+                top_margin,
+                0,
+                bottom_margin,
+            )
             row_layout.setSpacing(8)
             info_layout = QVBoxLayout()
             info_layout.setContentsMargins(0, 0, 0, 0)
@@ -1592,6 +2019,7 @@ class MonitorTab(QWidget):
                 file_exists,
             )
             self.refresh_recent_recordings()
+            self.refresh_today_summary()
             self._refresh_query_tab_after_recent_delete()
             self.status_message.emit("视频已删除")
         except Exception as exc:
