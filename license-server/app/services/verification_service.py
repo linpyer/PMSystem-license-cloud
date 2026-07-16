@@ -92,7 +92,7 @@ class VerificationService(LicenseOperationSupport):
             return replay
 
         try:
-            self.require_supported_client(request.app_version)
+            update_advisory = await self.require_supported_client_policy(session, request.app_version)
             license_record = await self.licenses.get_by_id_for_update(session, request.license_id)
             if license_record is None:
                 raise LicenseServiceError(ErrorCode.LICENSE_NOT_FOUND, "License was not found")
@@ -153,6 +153,8 @@ class VerificationService(LicenseOperationSupport):
                 detail={"deviceIdPrefix": device_id_prefix(request.device_id)},
             )
             body = {"success": True, "traceId": trace_id, "license": envelope.as_dict()}
+            if update_advisory:
+                body["update"] = update_advisory
             return await self.finish_success(
                 session, endpoint=endpoint, request_id=request.request_id, body=body
             )
@@ -169,4 +171,3 @@ class VerificationService(LicenseOperationSupport):
                 app_version=request.app_version,
                 detail={"deviceIdPrefix": device_id_prefix(request.device_id)},
             )
-

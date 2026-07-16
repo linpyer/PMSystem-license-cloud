@@ -6,10 +6,11 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import get_settings
+from app.db.base import Base
 
 
 pytestmark = pytest.mark.integration
@@ -28,7 +29,18 @@ def test_initial_migration_upgrades_and_downgrades_dedicated_database(monkeypatc
     config.set_main_option("script_location", str(root / "alembic"))
     get_settings.cache_clear()
 
-    command.downgrade(config, "base")
+    async def reset_test_schema() -> None:
+        engine = create_async_engine(database_url)
+        try:
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.drop_all)
+                await connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+        finally:
+            await engine.dispose()
+
+    import asyncio
+
+    asyncio.run(reset_test_schema())
     command.upgrade(config, "head")
 
     async def table_names() -> set[str]:
@@ -39,8 +51,6 @@ def test_initial_migration_upgrades_and_downgrades_dedicated_database(monkeypatc
         finally:
             await engine.dispose()
 
-    import asyncio
-
     assert {
         "licenses",
         "device_bindings",
@@ -48,8 +58,17 @@ def test_initial_migration_upgrades_and_downgrades_dedicated_database(monkeypatc
         "idempotency_requests",
         "signing_keys",
         "alembic_version",
+        "admin_users",
+        "admin_sessions",
+        "admin_audit_events",
+        "admin_login_attempts",
+        "app_version_policy",
     } <= asyncio.run(table_names())
 
     command.downgrade(config, "-1")
+    after_admin_downgrade = asyncio.run(table_names())
+    assert "admin_users" not in after_admin_downgrade
+    assert "licenses" in after_admin_downgrade
+    command.downgrade(config, "base")
     assert "licenses" not in asyncio.run(table_names())
     command.upgrade(config, "head")

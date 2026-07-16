@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+.secrets
+.venv
+.pytest_cache
+tests
+htmlcov
+*.log
+__pycache__
+**/__pycache__

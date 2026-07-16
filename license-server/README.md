@@ -1,6 +1,7 @@
 # PMSystem License Server
 
-PMSystem 激活码系统第二阶段的后端基础服务。该目录是独立的 FastAPI/PostgreSQL 服务，
+PMSystem 激活码系统的独立 FastAPI/PostgreSQL 服务。该目录同时提供客户端授权 API
+与网页版管理端 API，
 不会读取或修改 PMSystem 客户端的 SQLite 数据库、配置或视频目录。
 
 ## 当前范围
@@ -9,12 +10,13 @@ PMSystem 激活码系统第二阶段的后端基础服务。该目录是独立�
 - 激活、在线验证、刷新、主动解绑和健康检查 API。
 - HMAC-SHA256 激活码与设备凭据摘要。
 - Ed25519 规范化 JSON 许可证签名。
-- Alembic 首版可逆迁移。
+- Alembic 可逆迁移。
 - 激活码和开发签名密钥 CLI。
+- 管理员账号、TOTP、服务端会话、CSRF、角色权限和管理审计。
+- 授权创建、状态管理、设备解绑、版本策略和聚合仪表盘 API。
 - Docker Compose 本地 PostgreSQL/API 环境。
 
-当前不包含 PMSystem 客户端激活页面、DPAPI 本地许可证、LicenseGate、完整管理后台、
-在线支付、生产部署和生产密钥管理。
+当前不包含在线支付、生产部署、生产密钥管理和客户自助中心。
 
 ## 目录
 
@@ -42,6 +44,10 @@ tests            单元与专用 PostgreSQL 集成测试
 - `LICENSE_API_HOST`、`LICENSE_API_PORT`、`LICENSE_LOG_LEVEL`。
 - `LICENSE_OPENAPI_ENABLED`：是否开放 `/docs` 和 OpenAPI JSON。
 - `LICENSE_MINIMUM_CLIENT_VERSION`：最低允许的 PMSystem 客户端版本。
+- `LICENSE_ADMIN_SESSION_SECRET`：管理员会话令牌 HMAC 密钥。
+- `LICENSE_ADMIN_TOTP_ENCRYPTION_KEY`：数据库内 TOTP 密钥加密主密钥。
+- `LICENSE_ADMIN_ALLOWED_ORIGINS`：精确的管理端 CORS 来源列表。
+- `LICENSE_ADMIN_COOKIE_SECURE`：生产 HTTPS 环境必须设为 `true`。
 
 `.env`、`.secrets/` 和私钥均被 Git 忽略。不要把生产密码、pepper 或私钥写入镜像。
 
@@ -77,7 +83,19 @@ PMSystem 用户目录。
 .venv\Scripts\alembic downgrade -1
 ```
 
-首版迁移从空 PostgreSQL 创建全部五张表、外键、索引及单 ACTIVE 绑定部分唯一索引。
+迁移从空 PostgreSQL 创建授权与管理表、外键、索引及单 ACTIVE 绑定部分唯一索引。
+
+## 管理员初始化
+
+网页不开放注册。首次管理员通过交互式 CLI 创建，密码不会出现在命令行参数或日志中：
+
+```powershell
+.venv\Scripts\python -m app.cli.create_admin --username owner --display-name "系统所有者" --role OWNER
+.venv\Scripts\python -m app.cli.reset_admin_password --username owner
+```
+
+创建时只显示一次 TOTP 密钥和绑定 URI。数据库保存 Argon2id 密码摘要及加密后的 TOTP
+密钥，不保存明文密码、明文会话令牌或 CSRF 令牌。
 
 ## 创建测试激活码
 
@@ -98,6 +116,19 @@ PMSystem 用户目录。
 - `POST /api/v1/licenses/deactivate`
 - `POST /api/v1/licenses/refresh`
 
+管理 API 基础路径为 `/api/v1/admin`，包括：
+
+- `auth`：密码登录、TOTP 验证、退出、当前账号和修改密码。
+- `dashboard/summary`：数据库聚合统计。
+- `licenses`：单张/批量创建、列表、详情、资料修改、禁用、恢复和撤销。
+- `bindings/{bindingId}/deactivate`：管理员设备解绑。
+- `license-events`、`audit-events`：授权与管理审计。
+- `version-policy`：推荐版本和最低支持版本。
+- `users`：OWNER 创建、禁用和恢复管理员账号。
+
+管理端使用 HttpOnly、SameSite=Strict Cookie。所有写操作还必须携带 CSRF Cookie 对应的
+`X-CSRF-Token`，角色权限始终由后端校验。开发环境仅允许 `.env` 中明确列出的来源。
+
 启用 OpenAPI 时文档位于 `http://localhost:8000/docs`。
 
 ## 测试
@@ -111,6 +142,19 @@ $env:LICENSE_DATABASE_URL='postgresql+asyncpg://pmsystem_license:password@127.0.
 ```
 
 配置保护会拒绝测试进程连接名称不以 `_test` 结尾的数据库。
+
+## 管理端联调
+
+```powershell
+docker compose up -d --build
+cd ..\license-admin
+npm install
+npm run dev
+```
+
+浏览器访问 `http://127.0.0.1:5173`。如果 Windows 上另有 IPv4 服务占用
+`127.0.0.1:8000`，开发代理可以改用 `http://localhost:8000`，但生产环境应使用固定同域
+HTTPS 地址。
 
 ## 安全说明
 

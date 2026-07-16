@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -37,6 +37,36 @@ class Settings(BaseSettings):
     idempotency_ttl_hours: int = 24
     required_verify_days: int = 7
     offline_grace_days: int = 14
+    admin_session_secret: SecretStr = Field(
+        default=SecretStr("development-only-admin-session-secret-change-me"),
+        alias="LICENSE_ADMIN_SESSION_SECRET",
+    )
+    admin_totp_encryption_key: SecretStr = Field(
+        default=SecretStr("development-only-totp-encryption-key-change-me"),
+        alias="LICENSE_ADMIN_TOTP_ENCRYPTION_KEY",
+    )
+    admin_session_idle_minutes: int = Field(
+        default=30, ge=5, le=240, alias="LICENSE_ADMIN_SESSION_IDLE_MINUTES"
+    )
+    admin_session_max_hours: int = Field(
+        default=8, ge=1, le=24, alias="LICENSE_ADMIN_SESSION_MAX_HOURS"
+    )
+    admin_login_max_failures: int = Field(
+        default=5, ge=3, le=20, alias="LICENSE_ADMIN_LOGIN_MAX_FAILURES"
+    )
+    admin_lockout_minutes: int = Field(
+        default=15, ge=1, le=1440, alias="LICENSE_ADMIN_LOCKOUT_MINUTES"
+    )
+    admin_allowed_origins_raw: str = Field(
+        default="http://127.0.0.1:5173,http://localhost:5173",
+        alias="LICENSE_ADMIN_ALLOWED_ORIGINS",
+    )
+    admin_cookie_secure: bool = Field(default=False, alias="LICENSE_ADMIN_COOKIE_SECURE")
+    admin_cookie_name: str = Field(default="pms_admin_session", alias="LICENSE_ADMIN_COOKIE_NAME")
+
+    @property
+    def admin_allowed_origins(self) -> list[str]:
+        return [item.strip().rstrip("/") for item in self.admin_allowed_origins_raw.split(",") if item.strip()]
 
     @field_validator("database_url")
     @classmethod
@@ -54,6 +84,15 @@ class Settings(BaseSettings):
             database = make_url(self.database_url).database or ""
             if not database.endswith("_test"):
                 raise ValueError("test mode requires a database name ending in _test")
+        if "*" in self.admin_allowed_origins:
+            raise ValueError("LICENSE_ADMIN_ALLOWED_ORIGINS cannot contain a wildcard")
+        if self.environment == "production":
+            if not self.admin_cookie_secure:
+                raise ValueError("production admin cookies must be Secure")
+            if self.admin_session_secret.get_secret_value().startswith("development-only"):
+                raise ValueError("production requires a unique admin session secret")
+            if self.admin_totp_encryption_key.get_secret_value().startswith("development-only"):
+                raise ValueError("production requires a unique TOTP encryption key")
         return self
 
 

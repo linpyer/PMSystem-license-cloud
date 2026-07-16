@@ -88,7 +88,7 @@ packing-monitor/
 建议在 Windows 10/11 的 Python 3.10+ 环境中运行。
 
 ```powershell
-cd "E:\PM System"
+cd "E:\AI-Project\PM System"
 python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
@@ -102,7 +102,7 @@ python main.py
 ```powershell
 python -m venv E:\pmvenv
 E:\pmvenv\Scripts\activate
-cd "E:\PM System"
+cd "E:\AI-Project\PM System"
 pip install PySide6 opencv-python Pillow
 python main.py
 ```
@@ -184,7 +184,7 @@ python main.py
 可以不启动完整软件，单独运行语音测试脚本：
 
 ```powershell
-cd "E:\PM System"
+cd "E:\AI-Project\PM System"
 .\.venv\Scripts\python.exe tools\test_voice_prompt.py
 ```
 
@@ -199,7 +199,7 @@ cd "E:\PM System"
 安装依赖：
 
 ```powershell
-cd "E:\PM System"
+cd "E:\AI-Project\PM System"
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 ```

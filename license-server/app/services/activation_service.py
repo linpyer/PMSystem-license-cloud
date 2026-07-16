@@ -61,7 +61,7 @@ class ActivationService(LicenseOperationSupport):
             return replay
 
         try:
-            self.require_supported_client(request.app_version)
+            update_advisory = await self.require_supported_client_policy(session, request.app_version)
             try:
                 code_hash = hash_license_code(request.license_code, self.settings.code_pepper)
             except ValueError as exc:
@@ -144,6 +144,8 @@ class ActivationService(LicenseOperationSupport):
                 "license": envelope.as_dict(),
                 "credential": credential,
             }
+            if update_advisory:
+                body["update"] = update_advisory
             return await self.finish_success(
                 session, endpoint=self.ENDPOINT, request_id=request.request_id, body=body
             )
@@ -163,4 +165,3 @@ class ActivationService(LicenseOperationSupport):
                     "deviceIdPrefix": device_id_prefix(request.device_id),
                 },
             )
-

@@ -11,6 +11,7 @@ from app.core.errors import ErrorCode, LicenseServiceError
 from app.db.models import License
 from app.db.models.enums import LicenseEventType, LicenseStatus
 from app.repositories.event_repository import EventRepository
+from app.repositories.admin_repository import AdminRepository
 from app.services.idempotency_service import IdempotencyService, ServiceResult
 
 
@@ -29,13 +30,33 @@ class LicenseOperationSupport:
         self.idempotency = idempotency
         self.events = events
 
-    def require_supported_client(self, app_version: str) -> None:
+    def require_supported_client(self, app_version: str, minimum: str | None = None) -> None:
+        required = minimum or self.settings.minimum_client_version
         try:
-            if Version(app_version) < Version(self.settings.minimum_client_version):
+            current = Version(app_version)
+            if current < Version(required):
                 raise LicenseServiceError(
                     ErrorCode.CLIENT_VERSION_UNSUPPORTED,
-                    f"PMSystem {self.settings.minimum_client_version} or newer is required",
+                    f"PMSystem {required} or newer is required",
                 )
+        except InvalidVersion as exc:
+            raise LicenseServiceError(ErrorCode.INVALID_REQUEST, "Invalid appVersion") from exc
+
+    async def require_supported_client_policy(
+        self, session: AsyncSession, app_version: str
+    ) -> dict[str, Any] | None:
+        policy = await AdminRepository().get_version_policy(session)
+        minimum = policy.minimum_supported_version if policy else self.settings.minimum_client_version
+        self.require_supported_client(app_version, minimum)
+        try:
+            current = Version(app_version)
+            if policy and current < Version(policy.recommended_version):
+                return {
+                    "recommendedVersion": policy.recommended_version,
+                    "downloadUrl": policy.download_url,
+                    "releaseNotes": policy.release_notes,
+                }
+            return None
         except InvalidVersion as exc:
             raise LicenseServiceError(ErrorCode.INVALID_REQUEST, "Invalid appVersion") from exc
 
