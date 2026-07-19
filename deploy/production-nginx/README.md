@@ -90,11 +90,21 @@ bash /opt/pmsystem-license/current/scripts/status.sh
 bash /opt/pmsystem-license/current/scripts/verify.sh
 bash /opt/pmsystem-license/current/scripts/backup.sh
 bash /opt/pmsystem-license/current/scripts/backup.sh 30
+bash /opt/pmsystem-license/current/scripts/verify-backup.sh
+bash /opt/pmsystem-license/current/scripts/restore-postgres.sh \
+  /opt/pmsystem-license/backups/<backup>.dump \
+  pmsystem_license_restore_review
 bash /opt/pmsystem-license/current/scripts/restart.sh
 bash /opt/pmsystem-license/current/scripts/stop.sh
 ```
 
 `backup.sh` creates a PostgreSQL custom-format dump and SHA-256 file without stopping the database. Retention deletion occurs only when an explicit positive day count is supplied and only inside `/opt/pmsystem-license/backups`.
+
+`verify-backup.sh` restores a backup into a temporary database, verifies Alembic and critical tables,
+then removes only that temporary database. `restore-postgres.sh` requires an explicit temporary
+database name and confirmation, retains the verified database for review, and always refuses to
+restore directly over the configured production database. See `DISASTER_RECOVERY.md` before any
+incident recovery or cutover.
 
 ## Updating
 

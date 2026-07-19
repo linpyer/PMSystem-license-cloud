@@ -9,7 +9,7 @@ require_root
 for command_name in install rsync sha256sum nginx cmp ln readlink; do require_command "${command_name}"; done
 source_release="$(readlink -f "${1:-${RELEASE_ROOT}}")"
 require_directory "${source_release}"
-for item in compose.yml env.production.example README.md SERVER-PREPARATION.md SHA256SUMS.txt admin nginx scripts RELEASE-VERSION.txt; do
+for item in compose.yml env.production.example README.md SERVER-PREPARATION.md DISASTER_RECOVERY.md SHA256SUMS.txt admin nginx scripts RELEASE-VERSION.txt; do
   [[ -e "${source_release}/${item}" ]] || fail "Release item is missing: ${item}"
 done
 (cd "${source_release}" && sha256sum -c SHA256SUMS.txt)

@@ -2,6 +2,7 @@ build/
 dist/
 release/
 installer/output/
+/deploy/production/
 
 __pycache__/
 **/__pycache__/

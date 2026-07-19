@@ -100,7 +100,7 @@ $adminDist = Join-Path $adminRoot 'dist'
 if (-not (Test-Path -LiteralPath (Join-Path $adminDist 'index.html'))) { throw 'Admin build did not produce dist/index.html' }
 Copy-Item -Path (Join-Path $adminDist '*') -Destination (Join-Path $releaseRoot 'admin') -Recurse -Force
 
-foreach ($item in @('compose.yml', 'env.production.example', 'README.md', 'SERVER-PREPARATION.md')) {
+foreach ($item in @('compose.yml', 'env.production.example', 'README.md', 'SERVER-PREPARATION.md', 'DISASTER_RECOVERY.md')) {
     Copy-Item -LiteralPath (Join-Path $scriptRoot $item) -Destination (Join-Path $releaseRoot $item)
 }
 Copy-Item -LiteralPath (Join-Path $scriptRoot 'nginx') -Destination $releaseRoot -Recurse

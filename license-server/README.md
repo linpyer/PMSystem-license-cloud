@@ -2,14 +2,15 @@
 
 ## Production operation
 
-Production deployment is defined under `deploy/production`. The API runs as a non-root Python 3.12
-container behind Caddy, never publishes its container port, and does not run Alembic automatically at
-startup. Production mode requires HTTPS URLs, Secure cookies, explicit hosts/origins, OpenAPI disabled,
-non-development secrets, and a non-development PostgreSQL database. Health endpoints are split into
-`/api/v1/health/live` and `/api/v1/health/ready`; readiness checks PostgreSQL and the configured ACTIVE
-Ed25519 key. Run `python -m app.cli.cleanup_expired` from the supplied systemd task to clear expired
-sessions and idempotency records. Backup, restore verification, key rotation, proxy, and disaster
-recovery procedures are documented in `deploy/production/README.md`.
+Production deployment is defined under `deploy/production-nginx`. The API runs as a non-root Python
+3.12 container behind host Nginx, binds only to host loopback, and does not run Alembic automatically
+at startup. Production mode requires HTTPS URLs, Secure cookies, explicit hosts/origins, OpenAPI
+disabled, non-development secrets, and a non-development PostgreSQL database. Health endpoints are
+split into `/api/v1/health/live` and `/api/v1/health/ready`; readiness checks PostgreSQL and the
+configured ACTIVE Ed25519 key. Run `python -m app.cli.cleanup_expired` through a separately reviewed
+server timer when periodic cleanup is required. Offline deployment, backup verification, key
+handling, Nginx proxy, and disaster recovery procedures are documented in
+`deploy/production-nginx/README.md` and `deploy/production-nginx/DISASTER_RECOVERY.md`.
 
 PMSystem 激活码系统的独立 FastAPI/PostgreSQL 服务。该目录同时提供客户端授权 API
 与网页版管理端 API，
