@@ -4,9 +4,9 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, Field, field_validator, model_validator
+from pydantic import AnyHttpUrl, Field, model_validator
 
-from app.db.models.enums import AdminRole, LicenseStatus, LicenseType
+from app.db.models.enums import AdminRole, DeviceTrialStatus, LicenseStatus, LicenseType
 from app.schemas.base import CamelModel
 
 
@@ -35,6 +35,8 @@ class LicenseCreateRequest(CamelModel):
 
     @model_validator(mode="after")
     def validate_expiration(self) -> "LicenseCreateRequest":
+        if self.license_type == LicenseType.TRIAL:
+            raise ValueError("TRIAL licenses cannot be created from the administration API")
         if self.license_type == LicenseType.FIXED_DATE and self.expires_at is None:
             raise ValueError("fixed_date requires expiresAt")
         if self.license_type != LicenseType.FIXED_DATE and self.expires_at is not None:
@@ -54,6 +56,14 @@ class LicenseUpdateRequest(CamelModel):
 
 class ReasonRequest(CamelModel):
     reason: str = Field(min_length=3, max_length=500)
+
+
+class TrialExtendRequest(ReasonRequest):
+    days: int = Field(ge=1, le=365)
+
+
+class TrialDeleteRequest(ReasonRequest):
+    confirmation: Literal["DELETE", "删除"]
 
 
 class VersionPolicyRequest(CamelModel):
@@ -88,6 +98,20 @@ class AuditQuery(CamelModel):
     admin_user_id: UUID | None = None
     created_from: datetime | None = None
     created_to: datetime | None = None
+
+
+class TrialListQuery(CamelModel):
+    page: int = Field(default=1, ge=1)
+    page_size: Literal[20, 50, 100] = 20
+    device_id: str | None = Field(default=None, max_length=200)
+    status: DeviceTrialStatus | None = None
+    app_version: str | None = Field(default=None, max_length=40)
+    converted: bool | None = None
+    started_from: datetime | None = None
+    started_to: datetime | None = None
+    expires_from: datetime | None = None
+    expires_to: datetime | None = None
+    include_deleted: bool = False
 
 
 class AdminCreateRequest(CamelModel):

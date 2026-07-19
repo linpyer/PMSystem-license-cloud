@@ -18,6 +18,7 @@ def test_license_code_hash_is_unique_but_mask_is_not_plaintext() -> None:
 
 def test_license_type_enum_persists_public_lowercase_values() -> None:
     assert License.__table__.c.license_type.type.enums == [
+        "TRIAL",
         "monthly",
         "yearly",
         "permanent",

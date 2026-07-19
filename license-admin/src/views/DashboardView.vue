@@ -9,11 +9,18 @@ const loading = ref(false)
 const summary = ref<Record<string, number>>({})
 const recent = ref<DashboardRecent>({ createdLicenses: [], recentActivations: [], adminOperations: [], abnormalEvents: [] })
 const metrics = [
+  ['trialTotal','试用设备总数'],['trialActive','当前试用中'],['trialStartedToday','今日新增试用'],
+  ['trialExpiring3Days','3天内到期试用'],['trialExpired','已过期试用'],['trialConverted','已转正式'],
+  ['trialConversionRateBasisPoints','试用转正式比例'],
   ['total','授权总数'],['activated','已激活'],['unactivated','未激活'],['active','当前有效'],
   ['expiring7Days','7天内到期'],['expiring30Days','30天内到期'],['expired','已过期'],
   ['disabled','已禁用'],['revoked','已撤销'],['activeBindings','当前设备绑定'],
   ['verified24Hours','24小时在线'],['created7Days','7天新增'],['activated7Days','7天激活'],
 ]
+function metricValue(key: string): string | number {
+  const value = summary.value[key] ?? 0
+  return key === 'trialConversionRateBasisPoints' ? `${(value / 100).toFixed(2)}%` : value
+}
 async function load() {
   loading.value = true
   try {
@@ -29,7 +36,7 @@ onMounted(load)
   <div class="page">
     <PageHeader title="首页概览" description="授权规模、状态和设备在线情况" />
     <section v-loading="loading" class="metrics">
-      <article v-for="[key,label] in metrics" :key="key" class="metric surface"><span>{{ label }}</span><strong>{{ summary[key] ?? 0 }}</strong></article>
+      <article v-for="[key,label] in metrics" :key="key" class="metric surface"><span>{{ label }}</span><strong>{{ metricValue(key) }}</strong></article>
     </section>
     <section class="activity-grid">
       <article class="surface activity"><h2>最近创建授权</h2><ul><li v-for="item in recent.createdLicenses" :key="item.id"><div><b>{{ item.maskedCode }}</b><span>{{ item.customerName || '未填写客户' }}</span></div><time>{{ formatUtc(item.createdAt) }}</time></li><li v-if="!recent.createdLicenses.length" class="empty">暂无记录</li></ul></article>

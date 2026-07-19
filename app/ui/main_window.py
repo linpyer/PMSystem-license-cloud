@@ -32,6 +32,7 @@ from app.core.video_player import open_folder
 from app.core.version import APP_NAME
 from app.licensing.constants import LicenseStatus
 from app.licensing.license_worker import LicenseOperationWorker
+from app.licensing.recording_request import PendingRecordingRequest
 from app.ui.activation_dialog import ActivationDialog
 from app.ui.confirm_dialog import confirm_action
 from app.ui.dialog_utils import DialogSizeManager
@@ -49,6 +50,9 @@ DEFAULT_WINDOW_WIDTH = 1600
 DEFAULT_WINDOW_HEIGHT = 960
 MIN_WINDOW_WIDTH = 1360
 MIN_WINDOW_HEIGHT = 860
+RESTRICTED_LICENSE_BANNER_TEXT = (
+    "当前授权已失效，暂时不能开始新的录制或上传任务。查询与播放仍可使用"
+)
 SILENT_MONITOR_MESSAGES = {
     "配置保存成功",
     "配置已保存",
@@ -76,6 +80,7 @@ class MainWindow(QMainWindow):
         self.license_manager = license_manager
         self._license_worker: LicenseOperationWorker | None = None
         self._activation_dialog_open = False
+        self._pending_recording_request: PendingRecordingRequest | None = None
         self.help_dialog: HelpDialog | None = None
         self.settings_dialog: SettingsDialog | None = None
         self.stats_dialog: PackagingStatsDialog | None = None
@@ -125,6 +130,7 @@ class MainWindow(QMainWindow):
         self.monitor_tab.critical_message.connect(lambda message: self._show_notice_banner(message, "critical"))
         self.monitor_tab.recorder.recording_state_changed.connect(self._sync_settings_recording_state)
         self.monitor_tab.recorder.recording_state_changed.connect(self.query_tab.on_recording_state_changed)
+        self.monitor_tab.activation_requested.connect(self._request_recording_activation)
         self.query_tab.video_list_changed.connect(self._on_query_video_list_changed)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         if self.license_manager is not None:
@@ -515,11 +521,17 @@ class MainWindow(QMainWindow):
             self.show_status_tip("设置窗口打开失败，请查看日志", "error", 5000)
 
     def start_license_background_verification(self) -> None:
-        if self.license_manager is None or not self.license_manager.should_verify_in_background():
+        if self.license_manager is None:
             return
         if self._license_worker is not None:
             return
-        worker = LicenseOperationWorker(self.license_manager.verify_online, self)
+        if self.license_manager.should_activate_trial_in_background():
+            operation = self.license_manager.activate_trial
+        elif self.license_manager.should_verify_in_background():
+            operation = self.license_manager.verify_online
+        else:
+            return
+        worker = LicenseOperationWorker(operation, self)
         self._license_worker = worker
         worker.failed.connect(self._on_license_verify_failed)
         worker.finished.connect(self._on_license_worker_finished)
@@ -537,15 +549,42 @@ class MainWindow(QMainWindow):
 
     def _on_license_status_changed(self, status_value: str) -> None:
         self._update_license_banner()
-        if status_value == LicenseStatus.UNLICENSED.value:
-            QTimer.singleShot(0, self._show_activation_after_deactivation)
+
+    def _request_recording_activation(self, request: PendingRecordingRequest) -> None:
+        self._pending_recording_request = request
+        QTimer.singleShot(0, self._show_activation_for_pending_recording)
+
+    def _show_activation_for_pending_recording(self) -> None:
+        request = self._pending_recording_request
+        if request is None or self.license_manager is None or self._activation_dialog_open:
+            return
+        self._activation_dialog_open = True
+        try:
+            dialog = ActivationDialog(self.license_manager, self, allow_trial_retry=True)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            latest = self._pending_recording_request
+            if latest is None:
+                return
+            prompt = QMessageBox(self)
+            prompt.setWindowTitle("软件激活成功")
+            prompt.setText(f"软件激活成功，是否继续录制当前订单「{latest.order_no}」？")
+            continue_button = prompt.addButton("继续录制", QMessageBox.AcceptRole)
+            prompt.addButton("暂不录制", QMessageBox.RejectRole)
+            prompt.exec()
+            if prompt.clickedButton() is continue_button:
+                self.monitor_tab.continue_pending_recording(latest)
+        finally:
+            self._pending_recording_request = None
+            self._activation_dialog_open = False
+            self._update_license_banner()
 
     def _show_activation_after_deactivation(self) -> None:
         if self.license_manager is None or self._activation_dialog_open:
             return
         self._activation_dialog_open = True
         try:
-            dialog = ActivationDialog(self.license_manager, self)
+            dialog = ActivationDialog(self.license_manager, self, allow_trial_retry=True)
             dialog.exec()
         finally:
             self._activation_dialog_open = False
@@ -555,18 +594,49 @@ class MainWindow(QMainWindow):
         if self.license_manager is None or not hasattr(self, "license_banner"):
             return
         status = self.license_manager.get_status()
-        if status in {LicenseStatus.ACTIVE, LicenseStatus.VERIFY_RECOMMENDED}:
+        if status in {
+            LicenseStatus.ACTIVE,
+            LicenseStatus.VERIFY_RECOMMENDED,
+            LicenseStatus.TRIAL_ACTIVE,
+        }:
             self.license_banner.hide()
             return
-        if status == LicenseStatus.OFFLINE_GRACE:
+        if status == LicenseStatus.TRIAL_EXPIRING:
+            deadline = self.license_manager.get_license_info().get("trialExpiresAt")
+            if deadline is not None:
+                remaining = max(0, int((deadline - self.license_manager.clock()).total_seconds()))
+                days, remainder = divmod(remaining, 86400)
+                hours = remainder // 3600
+                remaining_text = f"{days}天{hours}小时"
+            else:
+                remaining_text = "不足3天"
+            self.license_banner.setText(
+                f"免费试用还剩 {remaining_text}，激活后可继续使用完整录制功能。"
+            )
+            self.license_banner.setProperty("licenseState", "grace")
+        elif status == LicenseStatus.TRIAL_EXPIRED:
+            self.license_banner.setText(
+                "7天免费试用已结束，历史记录仍可正常查看。激活后可继续录制。"
+            )
+            self.license_banner.setProperty("licenseState", "restricted")
+        elif status == LicenseStatus.TRIAL_PENDING or (
+            status == LicenseStatus.SERVER_UNAVAILABLE
+            and not self.license_manager.get_license_info().get("licenseId")
+        ):
+            self.license_banner.setText(
+                "首次开启免费试用需要连接网络。联网后会自动开启7天完整试用。"
+            )
+            self.license_banner.setProperty("licenseState", "restricted")
+        elif status == LicenseStatus.OFFLINE_GRACE:
             deadline = self.license_manager.get_license_info().get("graceUntil")
             deadline_text = deadline.astimezone().strftime("%Y-%m-%d %H:%M") if deadline else "宽限截止时间"
             self.license_banner.setText(f"当前处于离线宽限期，请在 {deadline_text} 前完成在线验证。")
             self.license_banner.setProperty("licenseState", "grace")
+        elif status == LicenseStatus.SERVER_UNAVAILABLE:
+            self.license_banner.setText("授权服务暂时不可用，请稍后重新验证。")
+            self.license_banner.setProperty("licenseState", "grace")
         else:
-            self.license_banner.setText(
-                "当前授权需要联网验证，暂时不能开始新的录制或上传任务。查询与播放仍可使用。"
-            )
+            self.license_banner.setText(RESTRICTED_LICENSE_BANNER_TEXT)
             self.license_banner.setProperty("licenseState", "restricted")
         self.license_banner.style().unpolish(self.license_banner)
         self.license_banner.style().polish(self.license_banner)

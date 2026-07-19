@@ -1,4 +1,5 @@
 {
+  "environment": "development",
   "keys": [
     {
       "keyId": "dev-2026-01",

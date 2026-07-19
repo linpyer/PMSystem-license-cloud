@@ -4,9 +4,10 @@ import type { ApiErrorBody } from '@/types'
 const messages: Record<string, string> = {
   ADMIN_INVALID_CREDENTIALS: '用户名、密码或动态验证码不正确。',
   ADMIN_ACCOUNT_LOCKED: '登录失败次数过多，请稍后再试。',
-  ADMIN_FORBIDDEN: '当前账号无权执行此操作。',
+  ADMIN_FORBIDDEN: '当前管理员没有执行此操作的权限。',
   CSRF_FAILED: '安全上下文已失效，请重新登录。',
-  INVALID_STATE: '当前状态不允许执行此操作。',
+  INVALID_STATE: '当前试用状态不支持此操作，请刷新页面后重试。',
+  RESOURCE_NOT_FOUND: '该试用设备不存在或已被删除。',
 }
 
 export function apiErrorMessage(error: unknown): string {

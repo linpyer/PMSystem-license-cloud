@@ -63,8 +63,35 @@ def test_initial_migration_upgrades_and_downgrades_dedicated_database(monkeypatc
         "admin_audit_events",
         "admin_login_attempts",
         "app_version_policy",
+        "device_trials",
     } <= asyncio.run(table_names())
 
+    async def event_type_width() -> int:
+        engine = create_async_engine(database_url)
+        try:
+            async with engine.connect() as connection:
+                value = await connection.scalar(text(
+                    "SELECT character_maximum_length FROM information_schema.columns "
+                    "WHERE table_name = 'license_events' AND column_name = 'event_type'"
+                ))
+                return int(value)
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(event_type_width()) >= len("TRIAL_REACTIVATED_SAME_DEVICE")
+
+    command.downgrade(config, "-1")
+    after_event_width_downgrade = asyncio.run(table_names())
+    assert "device_trials" in after_event_width_downgrade
+    command.downgrade(config, "0003_signing_key_rotation")
+    after_trial_downgrade = asyncio.run(table_names())
+    assert "device_trials" not in after_trial_downgrade
+    assert "admin_users" in after_trial_downgrade
+    assert "signing_keys" in after_trial_downgrade
+    command.downgrade(config, "-1")
+    after_rotation_downgrade = asyncio.run(table_names())
+    assert "admin_users" in after_rotation_downgrade
+    assert "signing_keys" in after_rotation_downgrade
     command.downgrade(config, "-1")
     after_admin_downgrade = asyncio.run(table_names())
     assert "admin_users" not in after_admin_downgrade

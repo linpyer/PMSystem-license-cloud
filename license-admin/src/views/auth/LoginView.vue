@@ -1,16 +1,20 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
 import { apiErrorMessage } from '@/utils/errors'
+import { resolvePostLoginRedirect } from '@/utils/auth-navigation'
 
-const router = useRouter(); const auth = useAuthStore(); const loading = ref(false)
+const route = useRoute(); const router = useRouter(); const auth = useAuthStore(); const loading = ref(false)
 const form = reactive({ username: '', password: '' })
 async function submit() {
   if (!form.username || !form.password) return ElMessage.warning('请输入用户名和密码')
   loading.value = true
-  try { await auth.login(form.username, form.password); await router.push('/totp') }
+  try {
+    await auth.login(form.username, form.password)
+    await router.push({ name: 'totp', query: { redirect: resolvePostLoginRedirect(route.query.redirect) } })
+  }
   catch (error) { ElMessage.error(apiErrorMessage(error)) } finally { loading.value = false }
 }
 </script>

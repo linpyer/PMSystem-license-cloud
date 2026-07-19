@@ -8,6 +8,7 @@ from app.core.security import credential_matches, device_id_prefix
 from app.db.models.enums import BindingStatus, LicenseEventType
 from app.repositories.event_repository import EventRepository
 from app.repositories.license_repository import LicenseRepository
+from app.repositories.trial_repository import TrialRepository
 from app.schemas.licenses import DeactivateRequest
 from app.services.idempotency_service import IdempotencyService, ServiceResult
 from app.services.service_support import LicenseOperationSupport, utc_now
@@ -23,10 +24,12 @@ class DeactivationService(LicenseOperationSupport):
         licenses: LicenseRepository | None = None,
         events: EventRepository | None = None,
         idempotency: IdempotencyService,
+        trials: TrialRepository | None = None,
     ) -> None:
         event_repository = events or EventRepository()
         super().__init__(settings, idempotency, event_repository)
         self.licenses = licenses or LicenseRepository()
+        self.trials = trials or TrialRepository()
 
     async def deactivate(
         self,
@@ -119,11 +122,15 @@ class DeactivationService(LicenseOperationSupport):
                 ip=ip,
                 detail={"deviceIdPrefix": device_id_prefix(request.device_id)},
             )
+            trial = await self.trials.get_for_device(
+                session, request.device_id, binding.fingerprint_version, lock=True
+            )
             body = {
                 "success": True,
                 "traceId": trace_id,
                 "deactivated": True,
                 "alreadyDeactivated": already_deactivated,
+                "trialStatus": trial.status.value if trial is not None else None,
             }
             return await self.finish_success(
                 session, endpoint=self.ENDPOINT, request_id=request.request_id, body=body

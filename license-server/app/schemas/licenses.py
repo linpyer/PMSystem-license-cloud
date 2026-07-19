@@ -27,6 +27,15 @@ class ActivateRequest(RequestIdentity):
         return value.upper()
 
 
+class TrialActivateRequest(RequestIdentity):
+    device_id: str = Field(min_length=8, max_length=200)
+    fingerprint_version: str = Field(min_length=1, max_length=40)
+    device_name: str | None = Field(default=None, max_length=200)
+    os_version: str | None = Field(default=None, max_length=160)
+    app_version: str = Field(min_length=1, max_length=40)
+    client_time: datetime | None = None
+
+
 class CredentialRequest(RequestIdentity):
     license_id: UUID
     device_id: str = Field(min_length=8, max_length=200)

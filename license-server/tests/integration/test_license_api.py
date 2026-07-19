@@ -17,8 +17,8 @@ from app.cli.generate_dev_keys import generate
 from app.core.config import Settings
 from app.core.security import base64url_decode
 from app.db.base import Base
-from app.db.models import DeviceBinding, License, LicenseEvent, SigningKey
-from app.db.models.enums import LicenseStatus, LicenseType
+from app.db.models import DeviceBinding, DeviceTrial, License, LicenseEvent, SigningKey
+from app.db.models.enums import DeviceTrialStatus, LicenseStatus, LicenseType
 from app.main import create_app
 from app.services.license_code_service import LicenseCodeService
 
@@ -96,7 +96,7 @@ def activation_body(code: str, device_id: str, request_id: str | None = None) ->
     return {
         "licenseCode": code,
         "deviceId": device_id,
-        "fingerprintVersion": "1",
+        "fingerprintVersion": "win-v1",
         "deviceName": "Integration Device",
         "osVersion": "Windows 11",
         "appVersion": "1.0.4",
@@ -402,6 +402,17 @@ async def test_health_does_not_disclose_sensitive_configuration(api) -> None:
     assert "private" not in serialized.lower()
 
 
+async def test_liveness_and_readiness_are_separate_and_safe(api) -> None:
+    _application, client = api
+    live = await client.get("/api/v1/health/live")
+    ready = await client.get("/api/v1/health/ready")
+    assert live.status_code == 200 and live.json()["status"] == "ok"
+    assert ready.status_code == 200
+    assert ready.json()["database"] == "ok"
+    assert ready.json()["signingKey"] == "ok"
+    assert "private" not in ready.text.lower()
+
+
 async def test_audit_events_and_public_signing_key_are_persisted(api) -> None:
     application, client = api
     code, _ = await create_license(application, LicenseType.MONTHLY)
@@ -478,3 +489,156 @@ async def test_license_creation_transaction_can_be_rolled_back(api) -> None:
 
     async with application.state.database.session_factory() as session:
         assert await session.get(License, license_id) is None
+
+
+def trial_body(device_id: str, request_id: str | None = None) -> dict:
+    return {
+        "deviceId": device_id,
+        "fingerprintVersion": "win-v1",
+        "deviceName": "Trial Integration Device",
+        "osVersion": "Windows 11",
+        "appVersion": "1.0.5",
+        "requestId": request_id or str(uuid4()),
+        "clientTime": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def activate_trial(client: httpx.AsyncClient, device_id: str, request_id: str | None = None):
+    return await client.post("/api/v1/trials/activate", json=trial_body(device_id, request_id))
+
+
+async def test_trial_first_activation_is_exactly_168_hours_and_has_no_code(api) -> None:
+    application, client = api
+    response = await activate_trial(client, "trial-first-device")
+    assert response.status_code == 200
+    payload = signed_payload(response)
+    started = datetime.fromisoformat(payload["trialStartedAt"].replace("Z", "+00:00"))
+    expires = datetime.fromisoformat(payload["trialExpiresAt"].replace("Z", "+00:00"))
+    assert expires - started == timedelta(hours=168)
+    assert payload["licenseType"] == "TRIAL"
+    assert payload["graceUntil"] == payload["trialExpiresAt"]
+    async with application.state.database.session_factory() as session:
+        trial = await session.scalar(select(DeviceTrial))
+        record = await session.get(License, trial.trial_license_id)
+        binding_count = await session.scalar(select(func.count()).select_from(DeviceBinding))
+    assert trial.status == DeviceTrialStatus.ACTIVE
+    assert record.license_code_hash is None and record.license_code_masked is None
+    assert binding_count == 1
+
+
+async def test_trial_repeat_does_not_extend_or_duplicate(api) -> None:
+    application, client = api
+    first = await activate_trial(client, "trial-repeat-device")
+    second = await activate_trial(client, "trial-repeat-device")
+    assert first.status_code == second.status_code == 200
+    assert first.json()["trial"]["expiresAt"] == second.json()["trial"]["expiresAt"]
+    assert first.json()["credential"] != second.json()["credential"]
+    async with application.state.database.session_factory() as session:
+        trial_count = await session.scalar(select(func.count()).select_from(DeviceTrial))
+        license_count = await session.scalar(select(func.count()).select_from(License))
+    assert trial_count == license_count == 1
+
+
+async def test_trial_request_id_is_idempotent(api) -> None:
+    _application, client = api
+    request_id = str(uuid4())
+    body = trial_body("trial-idempotent-device", request_id)
+    first = await client.post("/api/v1/trials/activate", json=body)
+    second = await client.post("/api/v1/trials/activate", json=body)
+    assert second.headers["Idempotency-Replayed"] == "true"
+    assert second.json() == first.json()
+
+
+async def test_concurrent_trial_requests_create_one_trial(api) -> None:
+    application, client = api
+    first, second = await asyncio.gather(
+        activate_trial(client, "trial-concurrent-device"),
+        activate_trial(client, "trial-concurrent-device"),
+    )
+    assert first.status_code == second.status_code == 200
+    async with application.state.database.session_factory() as session:
+        count = await session.scalar(select(func.count()).select_from(DeviceTrial))
+    assert count == 1
+
+
+async def test_trial_verify_succeeds_before_expiration(api) -> None:
+    _application, client = api
+    activated = await activate_trial(client, "trial-verify-device")
+    license_id = signed_payload(activated)["licenseId"]
+    response = await client.post("/api/v1/licenses/verify", json={
+        "licenseId": license_id,
+        "deviceId": "trial-verify-device",
+        "credential": activated.json()["credential"],
+        "appVersion": "1.0.5",
+        "requestId": str(uuid4()),
+    })
+    assert response.status_code == 200
+    assert signed_payload(response)["licenseType"] == "TRIAL"
+
+
+async def test_expired_trial_is_persisted_and_cannot_restart(api) -> None:
+    application, client = api
+    activated = await activate_trial(client, "trial-expired-device")
+    payload = signed_payload(activated)
+    async with application.state.database.session_factory() as session:
+        trial = await session.scalar(select(DeviceTrial).with_for_update())
+        trial.started_at = datetime.now(timezone.utc) - timedelta(hours=169)
+        trial.expires_at = trial.started_at + timedelta(hours=168)
+        record = await session.get(License, trial.trial_license_id)
+        record.expires_at = trial.expires_at
+        await session.commit()
+    response = await client.post("/api/v1/licenses/verify", json={
+        "licenseId": payload["licenseId"], "deviceId": "trial-expired-device",
+        "credential": activated.json()["credential"], "appVersion": "1.0.5",
+        "requestId": str(uuid4()),
+    })
+    assert response.json()["error"]["code"] == "TRIAL_EXPIRED"
+    retry = await activate_trial(client, "trial-expired-device")
+    assert retry.json()["error"]["code"] == "TRIAL_EXPIRED"
+    async with application.state.database.session_factory() as session:
+        trial = await session.scalar(select(DeviceTrial))
+    assert trial.status == DeviceTrialStatus.EXPIRED
+
+
+async def test_formal_activation_converts_trial_and_deactivation_does_not_restore_it(api) -> None:
+    application, client = api
+    await activate_trial(client, "trial-convert-device")
+    code, formal = await create_license(application, LicenseType.MONTHLY)
+    activated = await activate(client, code, "trial-convert-device")
+    assert activated.status_code == 200
+    async with application.state.database.session_factory() as session:
+        trial = await session.scalar(select(DeviceTrial))
+        assert trial.status == DeviceTrialStatus.CONVERTED
+        assert trial.converted_license_id == formal.id
+    await client.post("/api/v1/licenses/deactivate", json={
+        "licenseId": str(formal.id), "deviceId": "trial-convert-device",
+        "credential": activated.json()["credential"], "reason": "integration",
+        "requestId": str(uuid4()),
+    })
+    retry = await activate_trial(client, "trial-convert-device")
+    assert retry.json()["error"]["code"] == "TRIAL_CONVERTED"
+
+
+async def test_failed_formal_activation_does_not_convert_trial(api) -> None:
+    application, client = api
+    await activate_trial(client, "trial-transaction-device")
+    response = await activate(client, "PMS-2345-6789-ABCD-EFGH", "trial-transaction-device")
+    assert response.json()["error"]["code"] == "LICENSE_NOT_FOUND"
+    async with application.state.database.session_factory() as session:
+        trial = await session.scalar(select(DeviceTrial))
+    assert trial.status == DeviceTrialStatus.ACTIVE
+
+
+async def test_disabled_trial_is_rejected(api) -> None:
+    application, client = api
+    activated = await activate_trial(client, "trial-disabled-device")
+    async with application.state.database.session_factory() as session:
+        trial = await session.scalar(select(DeviceTrial).with_for_update())
+        trial.status = DeviceTrialStatus.DISABLED
+        await session.commit()
+    response = await client.post("/api/v1/licenses/verify", json={
+        "licenseId": signed_payload(activated)["licenseId"], "deviceId": "trial-disabled-device",
+        "credential": activated.json()["credential"], "appVersion": "1.0.5",
+        "requestId": str(uuid4()),
+    })
+    assert response.json()["error"]["code"] == "TRIAL_DISABLED"

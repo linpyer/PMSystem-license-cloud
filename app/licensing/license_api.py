@@ -89,6 +89,21 @@ class LicenseApiClient:
             },
         )
 
+    def activate_trial(self, identity) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/trials/activate",
+            {
+                "deviceId": identity.device_id,
+                "fingerprintVersion": identity.fingerprint_version,
+                "deviceName": identity.device_name,
+                "osVersion": identity.os_version,
+                "appVersion": APP_VERSION,
+                "requestId": str(uuid4()),
+                "clientTime": utc_now_iso(),
+            },
+        )
+
     def verify(self, record) -> dict[str, Any]:
         return self._credential_request("/licenses/verify", record, include_client_time=True)
 

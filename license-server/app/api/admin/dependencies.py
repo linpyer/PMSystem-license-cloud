@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from uuid import uuid4
 
 from fastapi import Depends, Request
@@ -25,14 +25,10 @@ def get_admin_management_service(
 
 
 def request_meta(request: Request) -> RequestMeta:
-    forwarded = request.headers.get("x-forwarded-for")
-    ip = forwarded.split(",", 1)[0].strip()[:64] if forwarded else (
-        request.client.host[:64] if request.client else None
-    )
     return RequestMeta(
         trace_id=request.state.trace_id,
-        request_id=request.headers.get("x-request-id", str(uuid4()))[:80],
-        ip=ip,
+        request_id=getattr(request.state, "request_id", str(uuid4())),
+        ip=getattr(request.state, "client_ip", None),
         user_agent=request.headers.get("user-agent", "")[:500] or None,
     )
 

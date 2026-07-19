@@ -8,7 +8,13 @@ from typing import Any, Callable
 
 from PySide6.QtCore import QObject, Signal
 
-from app.licensing.constants import LicenseCapability, LicenseStatus
+from app.licensing.constants import (
+    LicenseCapability,
+    LicenseStatus,
+    license_environment,
+    trusted_public_keys_resource,
+)
+from app.core.version import APP_VERSION
 from app.licensing.device_fingerprint import DeviceIdentity, WindowsDeviceFingerprint
 from app.licensing.errors import LicenseApiError, LicenseStorageError, LicenseValidationError
 from app.licensing.license_api import LicenseApiClient
@@ -21,6 +27,11 @@ from app.utils.runtime_paths import resource_path
 
 
 REMOTE_STATUS_ERRORS = {
+    "TRIAL_EXPIRED": LicenseStatus.TRIAL_EXPIRED,
+    "TRIAL_ALREADY_USED": LicenseStatus.TRIAL_CONVERTED,
+    "TRIAL_CONVERTED": LicenseStatus.TRIAL_CONVERTED,
+    "TRIAL_DISABLED": LicenseStatus.TRIAL_EXPIRED,
+    "TRIAL_DEVICE_MISMATCH": LicenseStatus.DEVICE_MISMATCH,
     "LICENSE_EXPIRED": LicenseStatus.EXPIRED,
     "LICENSE_DISABLED": LicenseStatus.DISABLED,
     "LICENSE_REVOKED": LicenseStatus.REVOKED,
@@ -50,8 +61,20 @@ class LicenseManager(QObject):
         self.api = api or LicenseApiClient(logger=self.logger)
         self.storage = storage or LicenseStorage(logger=self.logger)
         if verifier is None:
-            keys_path = resource_path("app/assets/license/public_keys.json")
-            verifier = LicenseVerifier(TrustedPublicKeys.from_json_file(keys_path))
+            environment = license_environment()
+            keys_path = resource_path(trusted_public_keys_resource())
+            trusted_keys = TrustedPublicKeys.from_json_file(
+                keys_path,
+                expected_environment=environment,
+            )
+            self.logger.info(
+                "授权可信公钥已加载：environment=%s, key_ids=%s, source=%s, client_version=%s",
+                environment,
+                ",".join(trusted_keys.key_ids),
+                keys_path,
+                APP_VERSION,
+            )
+            verifier = LicenseVerifier(trusted_keys)
         self.verifier = verifier
         self.fingerprint_provider = fingerprint_provider or WindowsDeviceFingerprint()
         self.policy = policy or LicensePolicy()
@@ -76,7 +99,7 @@ class LicenseManager(QObject):
                 self._payload = None
                 return self._set_status(LicenseStatus.INVALID_LICENSE)
             if record is None:
-                return self._set_status(LicenseStatus.UNLICENSED)
+                return self._set_status(LicenseStatus.TRIAL_PENDING)
             try:
                 payload = self.verifier.verify(
                     record.signed_license, expected_device_id=self.identity.device_id
@@ -123,6 +146,9 @@ class LicenseManager(QObject):
             "licenseType": payload.license_type if payload else "",
             "edition": payload.edition if payload else "",
             "expiresAt": payload.expires_at if payload else None,
+            "activatedAt": payload.activated_at if payload else None,
+            "trialStartedAt": payload.trial_started_at if payload else None,
+            "trialExpiresAt": payload.trial_expires_at if payload else None,
             "lastVerifiedAt": payload.last_verified_at if payload else None,
             "nextRequiredVerifyAt": payload.next_required_verify_at if payload else None,
             "graceUntil": payload.grace_until if payload else None,
@@ -130,6 +156,8 @@ class LicenseManager(QObject):
             "fingerprintVersion": self.identity.fingerprint_version,
             "serverReachable": self._server_reachable,
             "lastErrorCode": self._last_error_code,
+            "environment": license_environment(),
+            "apiBaseUrl": self.api.base_url,
         }
 
     def activate(self, code: str) -> LicenseStatus:
@@ -142,6 +170,23 @@ class LicenseManager(QObject):
             self._server_reachable = True
             self._last_error_code = ""
             return self._status
+
+    def activate_trial(self) -> LicenseStatus:
+        with self._operation_lock:
+            try:
+                response = self.api.activate_trial(self.identity)
+                credential = str(response.get("credential") or "")
+                if not credential:
+                    raise LicenseValidationError(
+                        "Trial response did not include a device credential"
+                    )
+                self._apply_server_license(response, credential=credential)
+                self._server_reachable = True
+                self._last_error_code = ""
+                return self._status
+            except LicenseApiError as exc:
+                self._handle_api_error(exc)
+                raise
 
     def verify_online(self) -> LicenseStatus:
         with self._operation_lock:
@@ -179,7 +224,12 @@ class LicenseManager(QObject):
                 self._payload = None
                 self._server_reachable = True
                 self._last_error_code = ""
-                return self._set_status(LicenseStatus.UNLICENSED)
+                next_status = (
+                    LicenseStatus.TRIAL_CONVERTED
+                    if response.get("trialStatus") == "CONVERTED"
+                    else LicenseStatus.TRIAL_PENDING
+                )
+                return self._set_status(next_status)
 
     def can_start_recording(self, record_type: str = "发货") -> bool:
         capability = (
@@ -206,6 +256,16 @@ class LicenseManager(QObject):
             LicenseStatus.VERIFY_RECOMMENDED,
             LicenseStatus.OFFLINE_GRACE,
             LicenseStatus.CLOCK_ROLLBACK_SUSPECTED,
+            LicenseStatus.TRIAL_ACTIVE,
+            LicenseStatus.TRIAL_EXPIRING,
+        }
+
+    def should_activate_trial_in_background(self) -> bool:
+        return self._record is None and self._status in {
+            LicenseStatus.TRIAL_PENDING,
+            LicenseStatus.SERVER_UNAVAILABLE,
+            LicenseStatus.UNLICENSED,
+            LicenseStatus.INVALID_LICENSE,
         }
 
     def _apply_server_license(self, response: dict[str, Any], *, credential: str) -> None:
@@ -236,7 +296,10 @@ class LicenseManager(QObject):
 
     def _handle_api_error(self, error: LicenseApiError) -> LicenseStatus:
         self._last_error_code = error.code
-        self._server_reachable = error.code != "SERVER_TEMPORARILY_UNAVAILABLE"
+        self._server_reachable = error.code not in {
+            "SERVER_TEMPORARILY_UNAVAILABLE",
+            "TRIAL_TEMPORARILY_UNAVAILABLE",
+        }
         forced = REMOTE_STATUS_ERRORS.get(error.code)
         if forced is not None:
             if self._record is not None:
@@ -251,6 +314,9 @@ class LicenseManager(QObject):
                 self._payload, now=self.clock(), last_seen_utc=self._record.last_seen_utc
             )
             return self._set_status(local_status)
+        if error.code in {"SERVER_TEMPORARILY_UNAVAILABLE", "TRIAL_TEMPORARILY_UNAVAILABLE"}:
+            if self._record is None:
+                return self._set_status(LicenseStatus.TRIAL_PENDING)
         return self._set_status(LicenseStatus.SERVER_UNAVAILABLE)
 
     def _require_record(self) -> LocalLicenseRecord:

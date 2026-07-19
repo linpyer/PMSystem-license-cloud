@@ -6,8 +6,15 @@
 #define MyAppExeName "电商打包发货监控溯源系统.exe"
 #define MyAppUserModelID "JsonLin.PMSystem"
 #define MyAppIcon "..\app\assets\app_icon.ico"
+#define MyDistRoot "..\dist\电商打包发货监控溯源系统"
 #if !FileExists(MyAppIcon)
   #error Formal application icon not found: {#MyAppIcon}
+#endif
+#if !FileExists(MyDistRoot + "\_internal\tools\ffmpeg\ffmpeg.exe")
+  #error Bundled ffmpeg.exe not found in PyInstaller output
+#endif
+#if !FileExists(MyDistRoot + "\_internal\tools\ffmpeg\ffprobe.exe")
+  #error Bundled ffprobe.exe not found in PyInstaller output
 #endif
 
 [Setup]
@@ -37,7 +44,7 @@ Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
 
 [Files]
-Source: "..\dist\电商打包发货监控溯源系统\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#MyDistRoot}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"; AppUserModelID: "{#MyAppUserModelID}"

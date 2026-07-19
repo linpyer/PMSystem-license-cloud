@@ -68,6 +68,9 @@ class LicensePayload:
     features: tuple[str, ...]
     key_id: str
     nonce: str
+    activated_at: datetime | None = None
+    trial_started_at: datetime | None = None
+    trial_expires_at: datetime | None = None
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "LicensePayload":
@@ -87,6 +90,9 @@ class LicensePayload:
             fingerprint_version=str(value.get("fingerprintVersion") or ""),
             license_type=str(value.get("licenseType") or ""),
             issued_at=parse_utc(value.get("issuedAt"), field="issuedAt"),  # type: ignore[arg-type]
+            activated_at=parse_utc(
+                value.get("activatedAt"), field="activatedAt", optional=True
+            ),
             expires_at=parse_utc(value.get("expiresAt"), field="expiresAt", optional=True),
             last_verified_at=parse_utc(value.get("lastVerifiedAt"), field="lastVerifiedAt"),  # type: ignore[arg-type]
             next_required_verify_at=parse_utc(
@@ -96,6 +102,12 @@ class LicensePayload:
             features=tuple(features),
             key_id=str(value.get("keyId") or ""),
             nonce=str(value.get("nonce") or ""),
+            trial_started_at=parse_utc(
+                value.get("trialStartedAt"), field="trialStartedAt", optional=True
+            ),
+            trial_expires_at=parse_utc(
+                value.get("trialExpiresAt"), field="trialExpiresAt", optional=True
+            ),
         )
 
 

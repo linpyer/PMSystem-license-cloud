@@ -40,6 +40,12 @@ QLabel#activationTitle {{
 }}
 QLabel#licenseFieldLabel {{ color: {tokens.text_secondary}; font-weight: 600; }}
 QLabel#licenseFieldValue {{ color: {tokens.text_primary}; }}
+QLabel#licenseStatusTitle {{ color: {tokens.text_primary}; font-size: 22px; font-weight: 700; }}
+QLabel#licenseStatusDescription {{ color: {tokens.text_secondary}; }}
+QLabel#licenseValidityValue {{ color: {tokens.text_primary}; font-size: 18px; font-weight: 700; }}
+QWidget[licenseState="invalid"] QLabel#licenseStatusTitle,
+QWidget[licenseState="invalid"] QLabel#licenseValidityValue {{ color: {recording_text}; }}
+QWidget[licenseState="pending"] QLabel#licenseStatusTitle {{ color: {warning_text}; }}
 QLabel#licenseOperationStatus {{
     color: {tokens.text_secondary};
     min-height: 22px;

@@ -56,11 +56,13 @@ from app.ui.monitor_tab import (
     CAMERA_HELP_TEXT,
     DEFAULT_FPS,
     DEFAULT_LONG_EDGE,
+    DEFAULT_VIDEO_QUALITY,
     FPS_HELP_TEXT,
     FPS_OPTIONS,
     LONG_EDGE_HELP_TEXT,
     LONG_EDGE_OPTIONS,
     RESOLUTION_HELP_TEXT,
+    VIDEO_QUALITY_OPTIONS,
     WATERMARK_FONT_HELP_TEXT,
     WATERMARK_MARGIN_HELP_TEXT,
 )
@@ -463,15 +465,20 @@ class SettingsDialog(QDialog):
         self.camera_combo.setMinimumWidth(360)
         self.camera_combo.setMaximumWidth(560)
         self.resolution_combo = QComboBox()
-        self.resolution_combo.addItem("原始分辨率", "original")
+        self.resolution_combo.addItem("跟随摄像头输出", "original")
         self.resolution_combo.addItem("720p", "720p")
         self.resolution_combo.addItem("1080p", "1080p")
         compact(self.resolution_combo, 200)
 
         self.fps_combo = QComboBox()
         for fps in FPS_OPTIONS:
-            self.fps_combo.addItem(f"{fps} FPS", fps)
-        compact(self.fps_combo, 130)
+            self.fps_combo.addItem("跟随摄像头输出" if fps == 0 else f"{fps} FPS", fps)
+        compact(self.fps_combo, 200)
+
+        self.video_quality_combo = QComboBox()
+        for label_text, value in VIDEO_QUALITY_OPTIONS:
+            self.video_quality_combo.addItem(label_text, value)
+        compact(self.video_quality_combo, 150)
 
         self.recording_long_edge_combo = QComboBox()
         self.recording_long_edge_combo.addItem("不限制，使用摄像头原始分辨率", 0)
@@ -576,19 +583,26 @@ class SettingsDialog(QDialog):
         )
         camera_grid.addWidget(self.resolution_combo, 1, 1, Qt.AlignLeft | Qt.AlignVCenter)
         camera_grid.addWidget(
-            help_label("帧率：", "帧率说明", FPS_HELP_TEXT, "设置每秒录制画面数量，推荐 25 FPS。"),
+            help_label("帧率：", "帧率说明", FPS_HELP_TEXT, "推荐跟随摄像头当前实际输出帧率。"),
             2,
             0,
             Qt.AlignLeft | Qt.AlignVCenter,
         )
         camera_grid.addWidget(self.fps_combo, 2, 1, Qt.AlignLeft | Qt.AlignVCenter)
         camera_grid.addWidget(
-            help_label("录制长边上限：", "录制长边上限说明", LONG_EDGE_HELP_TEXT, "限制录制视频的最大边长，推荐 1280。"),
+            help_label("录制画质：", "录制画质说明", "录制画质只影响视频压缩程度，不改变分辨率和帧率。", "推荐原画优先。"),
             3,
             0,
             Qt.AlignLeft | Qt.AlignVCenter,
         )
-        camera_grid.addWidget(self.recording_long_edge_combo, 3, 1, Qt.AlignLeft | Qt.AlignVCenter)
+        camera_grid.addWidget(self.video_quality_combo, 3, 1, Qt.AlignLeft | Qt.AlignVCenter)
+        camera_grid.addWidget(
+            help_label("录制长边上限：", "录制长边上限说明", LONG_EDGE_HELP_TEXT, "推荐不限制，保持摄像头实际输出尺寸。"),
+            4,
+            0,
+            Qt.AlignLeft | Qt.AlignVCenter,
+        )
+        camera_grid.addWidget(self.recording_long_edge_combo, 4, 1, Qt.AlignLeft | Qt.AlignVCenter)
         camera_layout.addLayout(camera_grid)
         layout.addWidget(camera_card)
 
@@ -1126,6 +1140,11 @@ class SettingsDialog(QDialog):
         )
         self._select_combo_data(self.fps_combo, fps, DEFAULT_FPS)
         self._select_combo_data(self.recording_long_edge_combo, max_long_edge, DEFAULT_LONG_EDGE)
+        self._select_combo_data(
+            self.video_quality_combo,
+            str(self.config_manager.config.get("recording_video_quality") or DEFAULT_VIDEO_QUALITY),
+            DEFAULT_VIDEO_QUALITY,
+        )
         self.font_size_spin.setValue(int(self.config_manager.config.get("watermark_font_size", 28) or 28))
         self.margin_spin.setValue(int(self.config_manager.config.get("watermark_margin", 16) or 16))
         hash_config = self.config_manager.config.get("hash_check", {})
@@ -1174,6 +1193,7 @@ class SettingsDialog(QDialog):
             self.resolution_combo,
             self.fps_combo,
             self.recording_long_edge_combo,
+            self.video_quality_combo,
             self.font_size_spin,
             self.margin_spin,
             self.hash_check_enabled,
@@ -1186,9 +1206,10 @@ class SettingsDialog(QDialog):
     def _restore_recommended_defaults(self) -> None:
         message = (
             "将恢复以下推荐参数：\n"
-            "分辨率：原始分辨率\n"
-            "帧率：30 FPS\n"
-            "录制长边上限：1280\n"
+            "分辨率：跟随摄像头输出\n"
+            "帧率：跟随摄像头输出\n"
+            "录制画质：原画优先\n"
+            "录制长边上限：不限制\n"
             "水印字号：28\n"
             "水印边距：16\n"
             "视频哈希校验：开启\n"
@@ -1207,8 +1228,9 @@ class SettingsDialog(QDialog):
         ):
             return
         self._select_combo_data(self.resolution_combo, "original", "original")
-        self._select_combo_data(self.fps_combo, 30, DEFAULT_FPS)
-        self._select_combo_data(self.recording_long_edge_combo, 1280, DEFAULT_LONG_EDGE)
+        self._select_combo_data(self.fps_combo, 0, DEFAULT_FPS)
+        self._select_combo_data(self.video_quality_combo, DEFAULT_VIDEO_QUALITY, DEFAULT_VIDEO_QUALITY)
+        self._select_combo_data(self.recording_long_edge_combo, 0, DEFAULT_LONG_EDGE)
         self.font_size_spin.setValue(28)
         self.margin_spin.setValue(16)
         self.hash_check_enabled.setChecked(True)
@@ -1239,8 +1261,11 @@ class SettingsDialog(QDialog):
                 "camera_index": int(self.camera_combo.currentData() or 0),
                 "camera_name": self._selected_camera_name(),
                 "resolution": self.resolution_combo.currentData(),
-                "fps": int(self.fps_combo.currentData() or DEFAULT_FPS),
+                "fps": int(self.fps_combo.currentData()),
                 "recording_max_long_edge": int(self.recording_long_edge_combo.currentData() or 0),
+                "recording_video_quality": str(
+                    self.video_quality_combo.currentData() or DEFAULT_VIDEO_QUALITY
+                ),
                 "watermark_font_size": self.font_size_spin.value(),
                 "watermark_margin": self.margin_spin.value(),
                 "hash_check": {

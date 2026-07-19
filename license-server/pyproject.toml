@@ -4,14 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pmsystem-license-server"
-version = "0.1.0"
+version = "0.2.0"
 description = "PMSystem authorization backend foundation"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "alembic>=1.16,<2",
   "argon2-cffi>=25,<26",
   "asyncpg>=0.30,<1",
-  "cryptography>=45,<47",
+  "cffi>=2,<3",
+  "cryptography>=48.0.1,<49",
   "fastapi>=0.116,<1",
   "packaging>=25,<26",
   "pyotp>=2.9,<3",
@@ -32,6 +33,7 @@ dev = [
 [project.scripts]
 pms-license-create = "app.cli.create_license:main"
 pms-license-generate-dev-keys = "app.cli.generate_dev_keys:main"
+pms-license-cleanup-expired = "app.cli.cleanup_expired:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

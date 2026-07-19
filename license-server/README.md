@@ -1,5 +1,16 @@
 # PMSystem License Server
 
+## Production operation
+
+Production deployment is defined under `deploy/production`. The API runs as a non-root Python 3.12
+container behind Caddy, never publishes its container port, and does not run Alembic automatically at
+startup. Production mode requires HTTPS URLs, Secure cookies, explicit hosts/origins, OpenAPI disabled,
+non-development secrets, and a non-development PostgreSQL database. Health endpoints are split into
+`/api/v1/health/live` and `/api/v1/health/ready`; readiness checks PostgreSQL and the configured ACTIVE
+Ed25519 key. Run `python -m app.cli.cleanup_expired` from the supplied systemd task to clear expired
+sessions and idempotency records. Backup, restore verification, key rotation, proxy, and disaster
+recovery procedures are documented in `deploy/production/README.md`.
+
 PMSystem 激活码系统的独立 FastAPI/PostgreSQL 服务。该目录同时提供客户端授权 API
 与网页版管理端 API，
 不会读取或修改 PMSystem 客户端的 SQLite 数据库、配置或视频目录。
@@ -8,6 +19,7 @@ PMSystem 激活码系统的独立 FastAPI/PostgreSQL 服务。该目录同时提
 
 - PostgreSQL 授权、设备绑定、审计、幂等请求和签名公钥模型。
 - 激活、在线验证、刷新、主动解绑和健康检查 API。
+- 服务端按 `deviceId + fingerprintVersion` 唯一发放的 168 小时免费试用。
 - HMAC-SHA256 激活码与设备凭据摘要。
 - Ed25519 规范化 JSON 许可证签名。
 - Alembic 可逆迁移。
@@ -112,6 +124,7 @@ PMSystem 用户目录。
 
 - `GET /api/v1/health`
 - `POST /api/v1/licenses/activate`
+- `POST /api/v1/trials/activate`
 - `POST /api/v1/licenses/verify`
 - `POST /api/v1/licenses/deactivate`
 - `POST /api/v1/licenses/refresh`
@@ -121,6 +134,7 @@ PMSystem 用户目录。
 - `auth`：密码登录、TOTP 验证、退出、当前账号和修改密码。
 - `dashboard/summary`：数据库聚合统计。
 - `licenses`：单张/批量创建、列表、详情、资料修改、禁用、恢复和撤销。
+- `trials`：试用设备分页、状态/时间/设备筛选、只读详情和可审计禁用。不提供重置、延长或删除试用的接口。
 - `bindings/{bindingId}/deactivate`：管理员设备解绑。
 - `license-events`、`audit-events`：授权与管理审计。
 - `version-policy`：推荐版本和最低支持版本。

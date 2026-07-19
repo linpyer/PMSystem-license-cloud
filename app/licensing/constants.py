@@ -11,6 +11,11 @@ SUPPORTED_SCHEMA_VERSIONS = {1}
 
 
 class LicenseStatus(StrEnum):
+    TRIAL_PENDING = "TRIAL_PENDING"
+    TRIAL_ACTIVE = "TRIAL_ACTIVE"
+    TRIAL_EXPIRING = "TRIAL_EXPIRING"
+    TRIAL_EXPIRED = "TRIAL_EXPIRED"
+    TRIAL_CONVERTED = "TRIAL_CONVERTED"
     UNLICENSED = "UNLICENSED"
     ACTIVE = "ACTIVE"
     VERIFY_RECOMMENDED = "VERIFY_RECOMMENDED"
@@ -40,6 +45,8 @@ class LicenseCapability(StrEnum):
 
 
 FULL_ACCESS_STATUSES = {
+    LicenseStatus.TRIAL_ACTIVE,
+    LicenseStatus.TRIAL_EXPIRING,
     LicenseStatus.ACTIVE,
     LicenseStatus.VERIFY_RECOMMENDED,
     LicenseStatus.OFFLINE_GRACE,
@@ -57,3 +64,21 @@ READ_ONLY_CAPABILITIES = {
 
 def license_api_base_url() -> str:
     return os.getenv("PMSYSTEM_LICENSE_API_BASE_URL", "http://127.0.0.1:8000/api/v1").rstrip("/")
+
+
+def license_environment() -> str:
+    return os.getenv("PMSYSTEM_LICENSE_ENVIRONMENT", "development").strip().lower()
+
+
+def trusted_public_keys_resource() -> str:
+    environment = license_environment()
+    filenames = {
+        "development": "public_keys.json",
+        "staging": "public_keys.staging.json",
+        "production": "public_keys.production.json",
+    }
+    try:
+        filename = filenames[environment]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported license environment: {environment}") from exc
+    return f"app/assets/license/{filename}"

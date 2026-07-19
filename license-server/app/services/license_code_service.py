@@ -40,6 +40,8 @@ class LicenseCodeService:
         customer_contact: str | None = None,
         remark: str | None = None,
     ) -> CreatedLicense:
+        if license_type == LicenseType.TRIAL:
+            raise ValueError("TRIAL licenses can only be issued by the device trial service")
         if license_type == LicenseType.FIXED_DATE:
             if expires_at is None:
                 raise ValueError("fixed_date licenses require expires_at")
@@ -65,4 +67,3 @@ class LicenseCodeService:
         )
         await self._repository.add_license(session, record)
         return CreatedLicense(plaintext, record)
-

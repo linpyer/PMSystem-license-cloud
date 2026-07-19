@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { readCookie } from '@/utils/security'
+import { handleUnauthorized } from '@/utils/auth-navigation'
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
@@ -18,8 +19,6 @@ api.interceptors.request.use((config) => {
 })
 
 api.interceptors.response.use(undefined, async (error) => {
-  if (error.response?.status === 401 && !location.pathname.startsWith('/login')) {
-    location.assign('/login')
-  }
+  if (error.response?.status === 401) handleUnauthorized(error.config?.url)
   return Promise.reject(error)
 })

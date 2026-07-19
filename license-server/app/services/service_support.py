@@ -130,6 +130,8 @@ class LicenseOperationSupport:
         audit_event_type = {
             ErrorCode.LICENSE_DISABLED: LicenseEventType.LICENSE_DISABLED,
             ErrorCode.LICENSE_EXPIRED: LicenseEventType.LICENSE_EXPIRED,
+            ErrorCode.TRIAL_EXPIRED: LicenseEventType.TRIAL_EXPIRED,
+            ErrorCode.TRIAL_DISABLED: LicenseEventType.TRIAL_DISABLED,
         }.get(error.code, event_type)
         await self.events.add(
             session,

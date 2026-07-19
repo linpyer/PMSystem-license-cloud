@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
@@ -18,17 +20,27 @@ from app.db.models import AdminSession, AdminUser
 from app.db.models.enums import AdminRole, AdminSessionStatus, AdminStatus
 
 
-def _host_database_url(value: str) -> str:
-    url = make_url(value)
-    if url.database != "pmsystem_license_dev":
-        raise RuntimeError("Local smoke test may only use pmsystem_license_dev")
-    url = url.set(host="127.0.0.1", port=5433)
+def _smoke_database_url(value: str) -> str:
+    override = os.getenv("PMSYSTEM_SMOKE_DATABASE_URL")
+    url = make_url(override or value)
+    if url.database not in {"pmsystem_license_dev", "pmsystem_license_staging"}:
+        raise RuntimeError("Smoke test may only use development or staging license databases")
+    if not override:
+        url = url.set(host="127.0.0.1", port=5433)
     return url.render_as_string(hide_password=False)
+
+
+def _smoke_base_url() -> str:
+    value = os.getenv("PMSYSTEM_SMOKE_BASE_URL", "http://localhost:8000/api/v1").rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "caddy"}:
+        raise RuntimeError("Smoke API must be a local development or staging HTTP endpoint")
+    return value
 
 
 async def main() -> None:
     settings = get_settings()
-    engine = create_async_engine(_host_database_url(settings.database_url))
+    engine = create_async_engine(_smoke_database_url(settings.database_url))
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     username = f"smoke-{uuid4().hex[:10]}"
     password = f"Dev!{secrets.token_urlsafe(18)}Aa1"
@@ -55,7 +67,7 @@ async def main() -> None:
     summary: dict[str, object] = {}
     try:
         async with httpx.AsyncClient(
-            base_url="http://localhost:8000/api/v1", timeout=10, trust_env=False
+            base_url=_smoke_base_url(), timeout=10, trust_env=False
         ) as client:
             login = await client.post("/admin/auth/login", json={"username": username, "password": password})
             login.raise_for_status()

@@ -36,6 +36,12 @@ class LicenseApiError(LicensingError):
 
 
 ERROR_MESSAGES_ZH = {
+    "TRIAL_EXPIRED": "7天免费试用已结束，激活后可继续录制。",
+    "TRIAL_ALREADY_USED": "该设备已使用过免费试用，请输入激活码继续使用录制功能。",
+    "TRIAL_CONVERTED": "该设备已使用过免费试用，请输入激活码继续使用录制功能。",
+    "TRIAL_DISABLED": "当前设备无法继续使用免费试用，请联系管理员。",
+    "TRIAL_DEVICE_MISMATCH": "免费试用与当前设备不匹配。",
+    "TRIAL_TEMPORARILY_UNAVAILABLE": "暂时无法开启免费试用，请检查网络后重试。",
     "LICENSE_NOT_FOUND": "激活码不存在，请检查后重新输入。",
     "LICENSE_ALREADY_BOUND": "该激活码已绑定其他电脑，请先在原电脑解绑。",
     "LICENSE_EXPIRED": "该授权已过期。",

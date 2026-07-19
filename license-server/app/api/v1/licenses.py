@@ -21,10 +21,7 @@ router = APIRouter(prefix="/licenses", tags=["licenses"])
 
 
 def _client_ip(request: Request) -> str | None:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()[:64]
-    return request.client.host[:64] if request.client else None
+    return getattr(request.state, "client_ip", None)
 
 
 def _response(result: ServiceResult) -> JSONResponse:
@@ -84,4 +81,3 @@ async def deactivate(
         session, payload, trace_id=request.state.trace_id, ip=_client_ip(request)
     )
     return _response(result)
-

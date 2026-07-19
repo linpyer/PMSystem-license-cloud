@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,7 +19,7 @@ class Settings(BaseSettings):
     )
 
     database_url: str = Field(alias="LICENSE_DATABASE_URL")
-    environment: Literal["development", "test", "production"] = Field(
+    environment: Literal["development", "test", "staging", "production"] = Field(
         default="development", alias="LICENSE_ENVIRONMENT"
     )
     signing_private_key_path: Path = Field(alias="LICENSE_SIGNING_PRIVATE_KEY_PATH")
@@ -63,10 +64,46 @@ class Settings(BaseSettings):
     )
     admin_cookie_secure: bool = Field(default=False, alias="LICENSE_ADMIN_COOKIE_SECURE")
     admin_cookie_name: str = Field(default="pms_admin_session", alias="LICENSE_ADMIN_COOKIE_NAME")
+    public_base_url: str = Field(
+        default="http://127.0.0.1:8000", alias="LICENSE_PUBLIC_BASE_URL"
+    )
+    admin_base_url: str = Field(
+        default="http://127.0.0.1:5173", alias="LICENSE_ADMIN_BASE_URL"
+    )
+    trusted_proxy_count: int = Field(
+        default=0, ge=0, le=8, alias="LICENSE_TRUSTED_PROXY_COUNT"
+    )
+    allowed_hosts_raw: str = Field(
+        default="127.0.0.1,localhost,testserver,license.test,admin.test",
+        alias="LICENSE_ALLOWED_HOSTS",
+    )
+    backup_retention_days: int = Field(
+        default=30, ge=7, le=3650, alias="LICENSE_BACKUP_RETENTION_DAYS"
+    )
+    request_max_bytes: int = Field(
+        default=1_048_576, ge=16_384, le=10_485_760, alias="LICENSE_REQUEST_MAX_BYTES"
+    )
+    database_pool_size: int = Field(default=10, ge=1, le=100, alias="LICENSE_DB_POOL_SIZE")
+    database_max_overflow: int = Field(
+        default=10, ge=0, le=100, alias="LICENSE_DB_MAX_OVERFLOW"
+    )
+    database_pool_timeout_seconds: int = Field(
+        default=10, ge=1, le=120, alias="LICENSE_DB_POOL_TIMEOUT_SECONDS"
+    )
+    database_statement_timeout_ms: int = Field(
+        default=15_000, ge=1_000, le=300_000, alias="LICENSE_DB_STATEMENT_TIMEOUT_MS"
+    )
+    service_version: str = Field(default="0.2.0", alias="LICENSE_SERVICE_VERSION")
+    build_commit: str = Field(default="development", alias="LICENSE_BUILD_COMMIT")
+    rate_limit_enabled: bool = Field(default=True, alias="LICENSE_RATE_LIMIT_ENABLED")
 
     @property
     def admin_allowed_origins(self) -> list[str]:
         return [item.strip().rstrip("/") for item in self.admin_allowed_origins_raw.split(",") if item.strip()]
+
+    @property
+    def allowed_hosts(self) -> list[str]:
+        return [item.strip().lower() for item in self.allowed_hosts_raw.split(",") if item.strip()]
 
     @field_validator("database_url")
     @classmethod
@@ -86,13 +123,28 @@ class Settings(BaseSettings):
                 raise ValueError("test mode requires a database name ending in _test")
         if "*" in self.admin_allowed_origins:
             raise ValueError("LICENSE_ADMIN_ALLOWED_ORIGINS cannot contain a wildcard")
+        if not self.allowed_hosts or "*" in self.allowed_hosts:
+            raise ValueError("LICENSE_ALLOWED_HOSTS must contain explicit host names")
         if self.environment == "production":
+            database = (make_url(self.database_url).database or "").lower()
+            if database.endswith("_dev") or database.endswith("_test"):
+                raise ValueError("production cannot use a development or test database")
             if not self.admin_cookie_secure:
                 raise ValueError("production admin cookies must be Secure")
+            if self.openapi_enabled:
+                raise ValueError("production OpenAPI must be disabled")
             if self.admin_session_secret.get_secret_value().startswith("development-only"):
                 raise ValueError("production requires a unique admin session secret")
             if self.admin_totp_encryption_key.get_secret_value().startswith("development-only"):
                 raise ValueError("production requires a unique TOTP encryption key")
+            for name, value in (
+                ("LICENSE_PUBLIC_BASE_URL", self.public_base_url),
+                ("LICENSE_ADMIN_BASE_URL", self.admin_base_url),
+            ):
+                if urlparse(value).scheme.lower() != "https":
+                    raise ValueError(f"{name} must use HTTPS in production")
+            if any(urlparse(origin).scheme.lower() != "https" for origin in self.admin_allowed_origins):
+                raise ValueError("production admin origins must use HTTPS")
         return self
 
 

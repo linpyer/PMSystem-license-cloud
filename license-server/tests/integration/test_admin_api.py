@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -17,8 +17,24 @@ from app.cli.generate_dev_keys import generate
 from app.core.admin_security import encrypt_totp_secret, hash_admin_password, verify_admin_password
 from app.core.config import Settings
 from app.db.base import Base
-from app.db.models import AdminAuditEvent, AdminSession, AdminUser, IdempotencyRequest, License
-from app.db.models.enums import AdminRole, AdminStatus, LicenseType
+from app.db.models import (
+    AdminAuditEvent,
+    AdminSession,
+    AdminUser,
+    DeviceBinding,
+    DeviceTrial,
+    IdempotencyRequest,
+    License,
+    LicenseEvent,
+)
+from app.db.models.enums import (
+    AdminRole,
+    AdminStatus,
+    BindingStatus,
+    DeviceTrialStatus,
+    LicenseEventType,
+    LicenseStatus,
+)
 from app.main import create_app
 
 
@@ -170,6 +186,198 @@ async def test_batch_create_filter_pagination_and_dashboard(admin_api) -> None:
     assert summary.json()["summary"]["created7Days"] == 3
     assert len(summary.json()["recent"]["createdLicenses"]) == 3
     assert "adminOperations" in summary.json()["recent"]
+
+
+async def test_trial_list_dashboard_masking_and_disable_audit(admin_api) -> None:
+    app, client = admin_api
+    device_id = "admin-trial-device-0123456789"
+    activated = await client.post("/api/v1/trials/activate", json={
+        "deviceId": device_id,
+        "fingerprintVersion": "win-v1",
+        "deviceName": "Trial Admin Device",
+        "osVersion": "Windows 11",
+        "appVersion": "1.0.5",
+        "requestId": str(uuid4()),
+        "clientTime": datetime.now(timezone.utc).isoformat(),
+    })
+    assert activated.status_code == 200
+    csrf = await login(client)
+    listing = await client.get("/api/v1/admin/trials", params={
+        "deviceId": "admin-trial-device",
+        "status": "ACTIVE",
+        "page": 1,
+        "pageSize": 20,
+    })
+    assert listing.status_code == 200
+    assert listing.json()["total"] == 1
+    item = listing.json()["items"][0]
+    assert item["device"] == "admin-tr..."
+    assert device_id not in str(listing.json())
+
+    summary = await client.get("/api/v1/admin/dashboard/summary")
+    assert summary.status_code == 200
+    assert summary.json()["summary"]["trialTotal"] == 1
+    assert summary.json()["summary"]["trialActive"] == 1
+
+    disabled = await client.post(
+        f"/api/v1/admin/trials/{item['trialId']}/disable",
+        json={"reason": "integration security review"},
+        headers=write_headers(csrf),
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["trial"]["status"] == "DISABLED"
+    async with app.state.database.session_factory() as session:
+        trial = await session.scalar(select(DeviceTrial))
+        assert trial.status == DeviceTrialStatus.DISABLED
+        actions = set(await session.scalars(select(AdminAuditEvent.action)))
+        assert "DISABLE_TRIAL" in actions
+
+
+async def test_owner_extends_resets_and_logically_deletes_trial(admin_api) -> None:
+    app, client = admin_api
+    device_id = "managed-trial-device-0123456789"
+    activated = await client.post("/api/v1/trials/activate", json={
+        "deviceId": device_id,
+        "fingerprintVersion": "win-v1",
+        "deviceName": "Managed Trial Device",
+        "osVersion": "Windows 11",
+        "appVersion": "1.0.5",
+        "requestId": str(uuid4()),
+        "clientTime": datetime.now(timezone.utc).isoformat(),
+    })
+    assert activated.status_code == 200
+    old_credential = activated.json()["credential"]
+    async with app.state.database.session_factory() as session:
+        initial_trial = await session.scalar(select(DeviceTrial))
+        initial_license_id = str(initial_trial.trial_license_id)
+    csrf = await login(client)
+    item = (await client.get("/api/v1/admin/trials")).json()["items"][0]
+    original_expiry = datetime.fromisoformat(item["expiresAt"].replace("Z", "+00:00"))
+
+    extended = await client.post(
+        f"/api/v1/admin/trials/{item['trialId']}/extend",
+        json={"days": 30, "reason": "customer evaluation extension"},
+        headers=write_headers(csrf),
+    )
+    assert extended.status_code == 200
+    extended_trial = extended.json()["trial"]
+    extended_expiry = datetime.fromisoformat(
+        extended_trial["expiresAt"].replace("Z", "+00:00")
+    )
+    assert extended_expiry - original_expiry == timedelta(days=30)
+    assert extended_trial["extensionCount"] == 1
+
+    reset = await client.post(
+        f"/api/v1/admin/trials/{item['trialId']}/reset",
+        json={"reason": "restart approved evaluation"},
+        headers=write_headers(csrf),
+    )
+    assert reset.status_code == 200
+    reset_trial = reset.json()["trial"]
+    reset_start = datetime.fromisoformat(reset_trial["startedAt"].replace("Z", "+00:00"))
+    reset_expiry = datetime.fromisoformat(reset_trial["expiresAt"].replace("Z", "+00:00"))
+    assert reset_expiry - reset_start == timedelta(hours=168)
+    assert reset_trial["resetCount"] == 1
+    old_verify = await client.post("/api/v1/licenses/verify", json={
+        "licenseId": initial_license_id,
+        "deviceId": device_id,
+        "credential": old_credential,
+        "appVersion": "1.0.5",
+        "requestId": str(uuid4()),
+        "clientTime": datetime.now(timezone.utc).isoformat(),
+    })
+    assert old_verify.status_code == 401
+    assert old_verify.json()["error"]["code"] == "INVALID_CREDENTIAL"
+
+    deleted = await client.post(
+        f"/api/v1/admin/trials/{item['trialId']}/delete",
+        json={"reason": "remove test evaluation", "confirmation": "DELETE"},
+        headers=write_headers(csrf),
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["trial"]["status"] == "DELETED"
+    assert (await client.get("/api/v1/admin/trials")).json()["total"] == 0
+    deleted_listing = await client.get(
+        "/api/v1/admin/trials", params={"includeDeleted": "true"}
+    )
+    assert deleted_listing.json()["total"] == 1
+
+    reactivated = await client.post("/api/v1/trials/activate", json={
+        "deviceId": device_id,
+        "fingerprintVersion": "win-v1",
+        "deviceName": "Managed Trial Device",
+        "osVersion": "Windows 11",
+        "appVersion": "1.0.5",
+        "requestId": str(uuid4()),
+        "clientTime": datetime.now(timezone.utc).isoformat(),
+    })
+    assert reactivated.status_code == 200
+    async with app.state.database.session_factory() as session:
+        trials = list(await session.scalars(select(DeviceTrial).order_by(DeviceTrial.created_at)))
+        assert len(trials) == 2
+        assert trials[0].status == DeviceTrialStatus.DELETED
+        assert trials[1].status == DeviceTrialStatus.ACTIVE
+        old_license = await session.get(License, trials[0].trial_license_id)
+        assert old_license.status == LicenseStatus.REVOKED
+        old_binding = await session.scalar(
+            select(DeviceBinding).where(DeviceBinding.license_id == trials[0].trial_license_id)
+        )
+        assert old_binding.status == BindingStatus.DISABLED
+        event_types = set(await session.scalars(select(LicenseEvent.event_type)))
+        assert LicenseEventType.TRIAL_REACTIVATED_AFTER_DELETE in event_types
+        actions = set(await session.scalars(select(AdminAuditEvent.action)))
+        assert {"TRIAL_EXTENDED", "TRIAL_RESET", "TRIAL_DELETED"} <= actions
+
+
+async def test_trial_management_role_permissions(admin_api) -> None:
+    app, owner = admin_api
+    activated = await owner.post("/api/v1/trials/activate", json={
+        "deviceId": "role-trial-device-0123456789",
+        "fingerprintVersion": "win-v1",
+        "deviceName": "Role Trial Device",
+        "osVersion": "Windows 11",
+        "appVersion": "1.0.5",
+        "requestId": str(uuid4()),
+        "clientTime": datetime.now(timezone.utc).isoformat(),
+    })
+    assert activated.status_code == 200
+    owner_csrf = await login(owner)
+    trial_id = (await owner.get("/api/v1/admin/trials")).json()["items"][0]["trialId"]
+
+    credentials = []
+    for username, role in (("trialadmin", "ADMIN"), ("trialaudit", "AUDITOR")):
+        created = await owner.post("/api/v1/admin/users", json={
+            "username": username,
+            "displayName": username,
+            "role": role,
+            "password": f"{username.title()}!Password2026",
+        }, headers=write_headers(owner_csrf))
+        assert created.status_code == 200
+        credentials.append((username, f"{username.title()}!Password2026", created.json()["totpSecret"], role))
+
+    for username, password, secret, role in credentials:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://license.test") as client:
+            csrf, _ = await login_with_secret(client, username, password, secret)
+            assert (await client.get("/api/v1/admin/trials")).status_code == 200
+            extend = await client.post(
+                f"/api/v1/admin/trials/{trial_id}/extend",
+                json={"days": 1, "reason": "role permission test"},
+                headers=write_headers(csrf),
+            )
+            assert extend.status_code == (200 if role == "ADMIN" else 403)
+            reset = await client.post(
+                f"/api/v1/admin/trials/{trial_id}/reset",
+                json={"reason": "role permission test"},
+                headers=write_headers(csrf),
+            )
+            delete = await client.post(
+                f"/api/v1/admin/trials/{trial_id}/delete",
+                json={"reason": "role permission test", "confirmation": "DELETE"},
+                headers=write_headers(csrf),
+            )
+            assert reset.status_code == 403
+            assert delete.status_code == 403
 
 
 async def test_update_disable_enable_revoke_and_audit(admin_api) -> None:

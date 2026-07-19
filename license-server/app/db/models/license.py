@@ -14,10 +14,16 @@ class License(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("max_devices >= 1", name="max_devices_positive"),
         CheckConstraint("valid_days IS NULL OR valid_days > 0", name="valid_days_positive"),
+        CheckConstraint(
+            "(license_type = 'TRIAL' AND license_code_hash IS NULL AND license_code_masked IS NULL) "
+            "OR (license_type <> 'TRIAL' AND license_code_hash IS NOT NULL "
+            "AND license_code_masked IS NOT NULL)",
+            name="license_code_presence",
+        ),
     )
 
-    license_code_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
-    license_code_masked: Mapped[str] = mapped_column(String(32), nullable=False)
+    license_code_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    license_code_masked: Mapped[str | None] = mapped_column(String(32))
     license_type: Mapped[LicenseType] = mapped_column(
         Enum(
             LicenseType,
@@ -51,3 +57,7 @@ class License(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     bindings = relationship("DeviceBinding", back_populates="license", lazy="raise")
     events = relationship("LicenseEvent", back_populates="license", lazy="raise")
+    trial = relationship(
+        "DeviceTrial", back_populates="trial_license", foreign_keys="DeviceTrial.trial_license_id",
+        uselist=False, lazy="raise",
+    )

@@ -5,9 +5,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.errors import ErrorCode, LicenseServiceError
 from app.core.security import credential_matches, device_id_prefix
-from app.db.models.enums import BindingStatus, LicenseEventType
+from app.db.models.enums import (
+    BindingStatus,
+    DeviceTrialStatus,
+    LicenseEventType,
+    LicenseStatus,
+    LicenseType,
+)
 from app.repositories.event_repository import EventRepository
 from app.repositories.license_repository import LicenseRepository
+from app.repositories.trial_repository import TrialRepository
 from app.schemas.licenses import RefreshRequest, VerifyRequest
 from app.services.idempotency_service import IdempotencyService, ServiceResult
 from app.services.license_signing_service import LicenseSigningService
@@ -23,11 +30,13 @@ class VerificationService(LicenseOperationSupport):
         licenses: LicenseRepository | None = None,
         events: EventRepository | None = None,
         idempotency: IdempotencyService,
+        trials: TrialRepository | None = None,
     ) -> None:
         event_repository = events or EventRepository()
         super().__init__(settings, idempotency, event_repository)
         self.licenses = licenses or LicenseRepository()
         self.signing = signing
+        self.trials = trials or TrialRepository()
 
     async def verify(
         self,
@@ -96,7 +105,37 @@ class VerificationService(LicenseOperationSupport):
             license_record = await self.licenses.get_by_id_for_update(session, request.license_id)
             if license_record is None:
                 raise LicenseServiceError(ErrorCode.LICENSE_NOT_FOUND, "License was not found")
-            self.require_usable_license(license_record, now)
+            trial = None
+            if license_record.license_type == LicenseType.TRIAL:
+                trial = await self.trials.get_for_license(session, license_record.id, lock=True)
+                if trial is None or trial.device_id != request.device_id:
+                    raise LicenseServiceError(
+                        ErrorCode.TRIAL_DEVICE_MISMATCH,
+                        "Trial device does not match",
+                        license_id=license_record.id,
+                    )
+                if trial.status == DeviceTrialStatus.CONVERTED:
+                    raise LicenseServiceError(
+                        ErrorCode.TRIAL_CONVERTED,
+                        "This trial was converted to a formal license",
+                        license_id=license_record.id,
+                    )
+                if trial.status == DeviceTrialStatus.DISABLED:
+                    raise LicenseServiceError(
+                        ErrorCode.TRIAL_DISABLED,
+                        "This trial is disabled",
+                        license_id=license_record.id,
+                    )
+                if trial.status == DeviceTrialStatus.EXPIRED or now >= trial.expires_at:
+                    trial.status = DeviceTrialStatus.EXPIRED
+                    license_record.status = LicenseStatus.EXPIRED
+                    raise LicenseServiceError(
+                        ErrorCode.TRIAL_EXPIRED,
+                        "The seven-day trial has expired",
+                        license_id=license_record.id,
+                    )
+            else:
+                self.require_usable_license(license_record, now)
             binding = await self.licenses.get_active_binding_for_update(session, license_record.id)
             if binding is None:
                 latest = await self.licenses.get_latest_binding_for_device(
@@ -137,12 +176,16 @@ class VerificationService(LicenseOperationSupport):
                 binding.last_verified_at = now
             binding.last_ip = ip
             binding.app_version = request.app_version
+            if trial is not None:
+                trial.last_seen_at = now
+                trial.last_ip = ip
+                trial.app_version = request.app_version
             envelope = await self.signing.issue(
-                session, license_record=license_record, binding=binding, now=now
+                session, license_record=license_record, binding=binding, trial=trial, now=now
             )
             await self.events.add(
                 session,
-                event_type=success_event,
+                event_type=(LicenseEventType.TRIAL_VERIFIED if trial is not None else success_event),
                 result="SUCCESS",
                 request_id=request.request_id,
                 created_at=now,
@@ -165,7 +208,11 @@ class VerificationService(LicenseOperationSupport):
                 request_id=request.request_id,
                 trace_id=trace_id,
                 error=error,
-                event_type=failure_event,
+                event_type=(
+                    LicenseEventType.TRIAL_EXPIRED
+                    if error.code == ErrorCode.TRIAL_EXPIRED
+                    else failure_event
+                ),
                 now=now,
                 ip=ip,
                 app_version=request.app_version,

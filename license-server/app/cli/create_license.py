@@ -43,7 +43,8 @@ async def create_from_args(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create one PMSystem license code")
     parser.add_argument(
-        "--type", required=True, choices=[item.value for item in LicenseType]
+        "--type", required=True,
+        choices=[item.value for item in LicenseType if item != LicenseType.TRIAL]
     )
     parser.add_argument("--expires-at", type=parse_utc_datetime)
     parser.add_argument("--customer-name")
@@ -59,4 +60,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

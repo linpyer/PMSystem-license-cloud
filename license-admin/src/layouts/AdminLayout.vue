@@ -3,16 +3,16 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
-import { DataAnalysis, Key, Plus, Document, Tickets, Setting, User, SwitchButton } from '@element-plus/icons-vue'
+import { DataAnalysis, Key, Plus, Document, Tickets, Setting, User, SwitchButton, Timer } from '@element-plus/icons-vue'
 
 const route = useRoute(); const router = useRouter(); const auth = useAuthStore(); const theme = useThemeStore()
 const active = computed(() => route.path)
 const baseMenu = [
-  ['/', '首页概览', DataAnalysis], ['/licenses', '授权管理', Key], ['/licenses/create', '创建授权', Plus],
+  ['/', '首页概览', DataAnalysis], ['/licenses', '授权管理', Key], ['/trials', '试用设备', Timer], ['/licenses/create', '创建授权', Plus],
   ['/license-events', '授权事件', Document], ['/admin-audit', '管理审计', Tickets], ['/version-policy', '版本策略', Setting], ['/account', '账号安全', User],
 ] as const
 const menu = computed(() => baseMenu.filter(([path]) => path !== '/licenses/create' || auth.user?.role !== 'AUDITOR'))
-async function logout() { await auth.logout(); await router.push('/login') }
+async function logout() { await auth.logout(); await router.replace({ name: 'login' }) }
 </script>
 <template>
   <div class="shell">

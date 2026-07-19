@@ -10,6 +10,9 @@ from app.db.models.enums import SigningKeyStatus
 
 
 class SigningKeyRepository:
+    async def get(self, session: AsyncSession, key_id: str) -> SigningKey | None:
+        return await session.scalar(select(SigningKey).where(SigningKey.key_id == key_id))
+
     async def ensure_active_key(
         self,
         session: AsyncSession,
@@ -37,4 +40,3 @@ class SigningKeyRepository:
         session.add(record)
         await session.flush()
         return record
-

@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+dist
+tests
+e2e
+playwright-report
+test-results
+coverage
+*.log
+*.tsbuildinfo

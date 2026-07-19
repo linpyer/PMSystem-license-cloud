@@ -14,10 +14,11 @@ from app.db.models import (
     AdminUser,
     AppVersionPolicy,
     DeviceBinding,
+    DeviceTrial,
     License,
     LicenseEvent,
 )
-from app.db.models.enums import AdminSessionStatus, BindingStatus, LicenseStatus
+from app.db.models.enums import AdminSessionStatus, BindingStatus, DeviceTrialStatus, LicenseStatus
 
 
 class AdminRepository:
@@ -250,6 +251,27 @@ class AdminRepository:
             statement = statement.with_for_update()
         return await session.scalar(statement)
 
+    async def get_trial_binding(
+        self,
+        session: AsyncSession,
+        license_id: UUID,
+        device_id: str,
+        *,
+        lock: bool = False,
+    ) -> DeviceBinding | None:
+        statement = (
+            select(DeviceBinding)
+            .where(
+                DeviceBinding.license_id == license_id,
+                DeviceBinding.device_id == device_id,
+            )
+            .order_by(DeviceBinding.created_at.desc())
+            .limit(1)
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return await session.scalar(statement)
+
     async def license_events(self, session: AsyncSession, license_id: UUID, limit: int = 50) -> list[LicenseEvent]:
         return list(
             (await session.scalars(
@@ -321,7 +343,86 @@ class AdminRepository:
         names = ("total", "activated", "unactivated", "active", "expired", "disabled", "revoked", "expiring7Days", "expiring30Days", "created7Days", "activated7Days")
         result = {name: int(value or 0) for name, value in zip(names, row, strict=True)}
         result.update(activeBindings=active_bindings, verified24Hours=verified_24h)
+        trial_row = (await session.execute(
+            select(
+                func.count(DeviceTrial.id),
+                func.count(DeviceTrial.id).filter(DeviceTrial.status == DeviceTrialStatus.ACTIVE),
+                func.count(DeviceTrial.id).filter(DeviceTrial.started_at >= now.replace(hour=0, minute=0, second=0, microsecond=0)),
+                func.count(DeviceTrial.id).filter(and_(
+                    DeviceTrial.status == DeviceTrialStatus.ACTIVE,
+                    DeviceTrial.expires_at > now,
+                    DeviceTrial.expires_at <= now + timedelta(days=3),
+                )),
+                func.count(DeviceTrial.id).filter(DeviceTrial.status == DeviceTrialStatus.EXPIRED),
+                func.count(DeviceTrial.id).filter(DeviceTrial.status == DeviceTrialStatus.CONVERTED),
+            ).where(DeviceTrial.deleted_at.is_(None))
+        )).one()
+        trial_names = (
+            "trialTotal", "trialActive", "trialStartedToday", "trialExpiring3Days",
+            "trialExpired", "trialConverted",
+        )
+        result.update({name: int(value or 0) for name, value in zip(trial_names, trial_row, strict=True)})
+        result["trialConversionRateBasisPoints"] = (
+            int(result["trialConverted"] * 10000 / result["trialTotal"])
+            if result["trialTotal"] else 0
+        )
         return result
+
+    async def list_trials(
+        self,
+        session: AsyncSession,
+        *,
+        page: int,
+        page_size: int,
+        device_id: str | None,
+        status: DeviceTrialStatus | None,
+        app_version: str | None,
+        converted: bool | None,
+        started_from: datetime | None,
+        started_to: datetime | None,
+        expires_from: datetime | None,
+        expires_to: datetime | None,
+        include_deleted: bool,
+    ) -> tuple[list[DeviceTrial], int]:
+        conditions = []
+        if not include_deleted and status != DeviceTrialStatus.DELETED:
+            conditions.append(DeviceTrial.deleted_at.is_(None))
+        if device_id:
+            conditions.append(DeviceTrial.device_id.ilike(f"%{device_id.strip()}%"))
+        if status is not None:
+            conditions.append(DeviceTrial.status == status)
+        if app_version:
+            conditions.append(DeviceTrial.app_version == app_version.strip())
+        if converted is True:
+            conditions.append(DeviceTrial.converted_license_id.is_not(None))
+        elif converted is False:
+            conditions.append(DeviceTrial.converted_license_id.is_(None))
+        for column, start, end in (
+            (DeviceTrial.started_at, started_from, started_to),
+            (DeviceTrial.expires_at, expires_from, expires_to),
+        ):
+            if start is not None:
+                conditions.append(column >= start)
+            if end is not None:
+                conditions.append(column <= end)
+        statement = select(DeviceTrial)
+        count = select(func.count()).select_from(DeviceTrial)
+        if conditions:
+            statement = statement.where(*conditions)
+            count = count.where(*conditions)
+        rows = list((await session.scalars(
+            statement.order_by(DeviceTrial.started_at.desc())
+            .offset((page - 1) * page_size).limit(page_size)
+        )).all())
+        return rows, int(await session.scalar(count) or 0)
+
+    async def get_trial(
+        self, session: AsyncSession, trial_id: UUID, *, lock: bool = False
+    ) -> DeviceTrial | None:
+        statement = select(DeviceTrial).where(DeviceTrial.id == trial_id)
+        if lock:
+            statement = statement.with_for_update()
+        return await session.scalar(statement)
 
     async def dashboard_recent(self, session: AsyncSession) -> dict[str, list[dict[str, Any]]]:
         created = list((await session.scalars(

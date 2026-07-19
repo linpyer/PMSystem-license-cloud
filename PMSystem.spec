@@ -19,8 +19,14 @@ from app.core.version import APP_NAME, APP_VERSION
 PROJECT_ROOT = Path(SPECPATH).resolve()
 APP_ICON = PROJECT_ROOT / 'app' / 'assets' / 'app_icon.ico'
 ASSETS_DIR = PROJECT_ROOT / 'app' / 'assets'
+FFMPEG_DIR = PROJECT_ROOT / 'tools' / 'ffmpeg'
+FFMPEG_EXE = FFMPEG_DIR / 'ffmpeg.exe'
+FFPROBE_EXE = FFMPEG_DIR / 'ffprobe.exe'
 if not APP_ICON.is_file():
     raise FileNotFoundError(f'正式应用图标不存在，停止构建：{APP_ICON}')
+for required_tool in (FFMPEG_EXE, FFPROBE_EXE):
+    if not required_tool.is_file():
+        raise FileNotFoundError(f'正式录制工具不存在，停止构建：{required_tool}')
 
 version_parts = tuple(int(part) for part in APP_VERSION.split("."))
 version_tuple = (version_parts + (0, 0, 0, 0))[:4]
@@ -56,7 +62,10 @@ version_resource = VSVersionInfo(
 a = Analysis(
     [str(PROJECT_ROOT / 'main.py')],
     pathex=[str(PROJECT_ROOT)],
-    binaries=[],
+    binaries=[
+        (str(FFMPEG_EXE), 'tools\\ffmpeg'),
+        (str(FFPROBE_EXE), 'tools\\ffmpeg'),
+    ],
     datas=[(str(ASSETS_DIR), 'app\\assets')],
     hiddenimports=[
         'sqlite3',
@@ -100,6 +109,6 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=['ffmpeg.exe', 'ffprobe.exe'],
     name='电商打包发货监控溯源系统',
 )

@@ -7,6 +7,12 @@ __pycache__/
 **/__pycache__/
 .pytest_cache/
 **/.pytest_cache/
+.mypy_cache/
+**/.mypy_cache/
+.ruff_cache/
+**/.ruff_cache/
+.coverage
+htmlcov/
 *.pyc
 *.pyo
 *.pyd
@@ -14,7 +20,9 @@ __pycache__/
 .venv/
 .venv.before-path-move/
 venv/
-env/
+/env/
+node_modules/
+**/node_modules/
 
 logs/
 videos/
@@ -22,6 +30,7 @@ videos/
 *.avi
 *.mkv
 *.mov
+*.webm
 *.db
 *.sqlite
 *.sqlite3
@@ -33,6 +42,11 @@ videos/
 *.sqlite3-wal
 *-wal
 *-shm
+*.dump
+*.backup
+*.bak
+*.tar
+*.tar.gz
 pm_system.db
 retired_legacy_databases/
 database backups/
@@ -43,6 +57,10 @@ video_index.json
 config.json
 .env
 .env.*
+*private*.pem
+*private*.key
+secrets/
+**/secrets/
 
 *.log
 *.tmp
@@ -53,3 +71,4 @@ Thumbs.db
 .vscode/
 
 *.spec
+$env

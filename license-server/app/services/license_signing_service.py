@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.signing import Ed25519Signer, SignedEnvelope
-from app.db.models import DeviceBinding, License
+from app.db.models import DeviceBinding, DeviceTrial, License
+from app.db.models.enums import LicenseType
 from app.repositories.signing_key_repository import SigningKeyRepository
 
 
@@ -35,6 +36,7 @@ class LicenseSigningService:
         license_record: License,
         binding: DeviceBinding,
         now: datetime,
+        trial: DeviceTrial | None = None,
     ) -> SignedEnvelope:
         await self._repository.ensure_active_key(
             session,
@@ -42,6 +44,15 @@ class LicenseSigningService:
             public_key=self._signer.public_key_base64url,
             now=now,
         )
+        if license_record.license_type == LicenseType.TRIAL and trial is None:
+            raise ValueError("Trial metadata is required when signing a trial license")
+        next_required = binding.last_verified_at + timedelta(days=self._settings.required_verify_days)
+        grace_until = binding.last_verified_at + timedelta(
+            days=self._settings.required_verify_days + self._settings.offline_grace_days
+        )
+        if trial is not None:
+            next_required = min(next_required, trial.expires_at)
+            grace_until = trial.expires_at
         payload = {
             "schemaVersion": 1,
             "licenseId": str(license_record.id),
@@ -51,20 +62,16 @@ class LicenseSigningService:
             "fingerprintVersion": binding.fingerprint_version,
             "licenseType": license_record.license_type.value,
             "issuedAt": utc_iso(now),
+            "activatedAt": utc_iso(license_record.activated_at),
             "expiresAt": utc_iso(license_record.expires_at),
             "lastVerifiedAt": utc_iso(binding.last_verified_at),
-            "nextRequiredVerifyAt": utc_iso(
-                binding.last_verified_at + timedelta(days=self._settings.required_verify_days)
-            ),
-            "graceUntil": utc_iso(
-                binding.last_verified_at
-                + timedelta(
-                    days=self._settings.required_verify_days
-                    + self._settings.offline_grace_days
-                )
-            ),
+            "nextRequiredVerifyAt": utc_iso(next_required),
+            "graceUntil": utc_iso(grace_until),
             "features": ["recording", "videoQuery", "statistics", "netdiskSync"],
             "keyId": self._signer.key_id,
             "nonce": secrets.token_urlsafe(18),
         }
+        if trial is not None:
+            payload["trialStartedAt"] = utc_iso(trial.started_at)
+            payload["trialExpiresAt"] = utc_iso(trial.expires_at)
         return self._signer.sign(payload)

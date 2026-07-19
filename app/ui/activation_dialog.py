@@ -22,13 +22,20 @@ from app.ui.themed_line_edit import ThemedClearableLineEdit
 
 
 class ActivationDialog(QDialog):
-    """Online activation dialog shown before the main window has a valid license."""
+    """On-demand formal activation and trial retry dialog."""
 
-    def __init__(self, license_manager, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        license_manager,
+        parent: QWidget | None = None,
+        *,
+        allow_trial_retry: bool = True,
+    ) -> None:
         super().__init__(parent)
         self.license_manager = license_manager
         self._worker: LicenseOperationWorker | None = None
         self._busy = False
+        self._allow_trial_retry = allow_trial_retry
         self.setObjectName("activationDialog")
         self.setWindowTitle("PMSystem 软件激活")
         self.setModal(True)
@@ -46,7 +53,11 @@ class ActivationDialog(QDialog):
         title.setObjectName("activationTitle")
         root.addWidget(title)
 
-        intro = QLabel("首次激活需要连接授权服务器。激活完成后，本机可按授权期限使用。", self)
+        intro = QLabel(
+            "联网后可自动开启7天完整试用，也可以直接输入激活码。"
+            "暂不激活不会影响查看已有记录。",
+            self,
+        )
         intro.setObjectName("settingsHint")
         intro.setWordWrap(True)
         root.addWidget(intro)
@@ -75,7 +86,7 @@ class ActivationDialog(QDialog):
         card_layout.addWidget(device)
         root.addWidget(card)
 
-        self.status_label = QLabel("授权服务：等待激活", self)
+        self.status_label = QLabel("首次开启免费试用需要连接网络。", self)
         self.status_label.setObjectName("licenseOperationStatus")
         self.status_label.setWordWrap(True)
         root.addWidget(self.status_label)
@@ -83,8 +94,13 @@ class ActivationDialog(QDialog):
 
         actions = QHBoxLayout()
         actions.setSpacing(10)
+        if self._allow_trial_retry:
+            self.trial_button = QPushButton("重试开启免费试用", self)
+            self.trial_button.setObjectName("secondaryButton")
+            self.trial_button.clicked.connect(self._start_trial)
+            actions.addWidget(self.trial_button)
         actions.addStretch(1)
-        self.exit_button = QPushButton("退出程序", self)
+        self.exit_button = QPushButton("暂不激活", self)
         self.exit_button.setObjectName("secondaryButton")
         self.exit_button.clicked.connect(self.reject)
         actions.addWidget(self.exit_button)
@@ -94,6 +110,18 @@ class ActivationDialog(QDialog):
         self.activate_button.clicked.connect(self._start_activation)
         actions.addWidget(self.activate_button)
         root.addLayout(actions)
+
+    def _start_trial(self) -> None:
+        if self._busy:
+            return
+        self._set_busy(True)
+        self.status_label.setText("正在联网领取7天免费试用…")
+        worker = LicenseOperationWorker(self.license_manager.activate_trial, self)
+        self._worker = worker
+        worker.succeeded.connect(self._on_activation_succeeded)
+        worker.failed.connect(self._on_activation_failed)
+        worker.finished.connect(self._clear_worker)
+        worker.start()
 
     def _format_code(self, value: str) -> None:
         compact = re.sub(r"[^A-Za-z0-9]", "", value).upper()
@@ -146,6 +174,8 @@ class ActivationDialog(QDialog):
         self.activate_button.setEnabled(not busy)
         self.activate_button.setText("激活中…" if busy else "激活")
         self.exit_button.setEnabled(not busy)
+        if hasattr(self, "trial_button"):
+            self.trial_button.setEnabled(not busy)
 
     def _clear_worker(self) -> None:
         if self._worker is not None:

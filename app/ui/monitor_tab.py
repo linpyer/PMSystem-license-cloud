@@ -51,6 +51,7 @@ from app.core.scanner import normalize_scan_text
 from app.core.scanner_guard import ScannerGuard
 from app.core.video_player import open_folder, open_video, reveal_in_file_manager
 from app.core.voice_prompt import VoicePrompt
+from app.licensing.recording_request import PendingRecordingRequest, RecordingRequestSource
 from app.ui.confirm_dialog import DELETE_CONFIRM_POSITION_KEY, ConfirmActionDialog
 from app.ui.dialog_utils import DialogSizeManager
 from app.ui.themed_line_edit import ThemedClearableLineEdit
@@ -97,32 +98,26 @@ def is_camera_status_message(message: str) -> bool:
     return any(phrase in text for phrase in CAMERA_STATUS_TOAST_PHRASES) or "摄像头" in text or "ivcam" in text.lower()
 
 
-FPS_OPTIONS = [15, 20, 25, 30, 60]
-DEFAULT_FPS = 25
+FPS_OPTIONS = [0, 15, 20, 24, 25, 30, 50, 60]
+DEFAULT_FPS = 0
 LONG_EDGE_OPTIONS = [0, 960, 1280, 1920]
-DEFAULT_LONG_EDGE = 1280
+DEFAULT_LONG_EDGE = 0
+VIDEO_QUALITY_OPTIONS = [
+    ("高清", "hd"),
+    ("高质量", "high"),
+    ("原画优先", "source"),
+]
+DEFAULT_VIDEO_QUALITY = "source"
 ENABLE_CAMERA_ERROR_WAVE_EFFECT = True
 RIGHT_PANEL_CONTENT_MARGIN = 14
 RECENT_RECORD_CONTENT_LEFT = 0
 SUMMARY_RESIZE_DEBOUNCE_MS = 75
 
-FPS_HELP_TEXT = """帧率表示每秒录制多少张画面。
+FPS_HELP_TEXT = """推荐选择“跟随摄像头输出”。
 
-帧率越高，画面越顺滑，但视频文件会更大，电脑性能压力也会更高。
+该模式使用摄像头当前实际输出的帧率，不强制限制为 30 FPS。
 
-打包监控主要用于记录打包过程，一般不需要过高帧率，推荐使用 25 FPS。
-
-选项说明：
-
-15 FPS：文件更小，适合低配电脑或只需要基本记录的场景。
-
-20 FPS：比 15 FPS 更顺滑，文件大小适中。
-
-25 FPS：推荐默认值，清晰度、流畅度和文件大小比较均衡。
-
-30 FPS：画面更顺滑，但文件更大，电脑压力更高。
-
-60 FPS：画面非常顺滑，但文件更大，对摄像头和电脑性能要求更高。只有在设备支持且确实需要更高流畅度时再选择。"""
+只有明确需要降低录制帧率时才选择固定值。固定值高于摄像头实际输出时，软件会提示参数不匹配，不会通过重复画面伪造高帧率。"""
 
 CAMERA_HELP_TEXT = """摄像头设备用于选择当前软件录制使用的摄像头。
 
@@ -134,15 +129,11 @@ CAMERA_HELP_TEXT = """摄像头设备用于选择当前软件录制使用的摄�
 
 如果摄像头画面打不开，请检查摄像头是否被其他软件占用，或者尝试重新插拔摄像头。"""
 
-RESOLUTION_HELP_TEXT = """分辨率表示摄像头采集画面的宽度和高度。
+RESOLUTION_HELP_TEXT = """推荐选择“跟随摄像头输出”。
 
-分辨率越高，画面越清晰，但视频文件会更大，电脑性能压力也会更高。
+该模式使用摄像头当前实际输出的分辨率，不进行放大或缩小。
 
-分辨率越低，视频文件更小，录制更稳定，但画面细节会减少。
-
-打包监控主要用于记录商品、打包过程和发货证据，建议优先选择画面清晰且运行稳定的分辨率。
-
-如果发现画面卡顿或文件过大，可以适当降低分辨率。"""
+固定分辨率只是向摄像头请求对应规格；实际输出不一致时软件会提示，不会把低分辨率画面放大冒充高清。"""
 
 LONG_EDGE_HELP_TEXT = """录制长边上限用于限制视频最大分辨率。
 
@@ -152,7 +143,7 @@ LONG_EDGE_HELP_TEXT = """录制长边上限用于限制视频最大分辨率。
 
 数值越小，视频文件越小，录制更稳定，但画面清晰度会下降。
 
-推荐使用 1280。
+推荐使用“不限制”，保持摄像头实际输出的细节。
 
 选项说明：
 
@@ -160,7 +151,7 @@ LONG_EDGE_HELP_TEXT = """录制长边上限用于限制视频最大分辨率。
 
 960：文件更小，适合低配电脑或硬盘空间紧张的场景。
 
-1280：推荐默认值，清晰度和文件大小比较均衡。
+1280：适合需要主动减小视频尺寸的场景。
 
 1920：更清晰，适合需要看清更多细节的场景，但文件更大。"""
 
@@ -626,6 +617,7 @@ class MonitorTab(QWidget):
     status_message = Signal(str)
     warning_message = Signal(str)
     critical_message = Signal(str)
+    activation_requested = Signal(object)
 
     def __init__(
         self,
@@ -1371,8 +1363,9 @@ class MonitorTab(QWidget):
             return
         if not result.should_ignore:
             if not self.is_recording and result.cleaned_code:
-                if not self._license_allows_new_recording():
-                    self.scan_input.clear()
+                if not self._license_allows_new_recording(
+                    result.cleaned_code, RecordingRequestSource.SCAN
+                ):
                     self.focus_scan_input(80)
                     return
                 camera_error = self._camera_start_block_reason()
@@ -1400,8 +1393,9 @@ class MonitorTab(QWidget):
                 self.warning_message.emit("请先输入或扫描单号。")
             self.focus_scan_input(80)
             return
-        if not self.is_recording and not self._license_allows_new_recording():
-            self.scan_input.clear()
+        if not self.is_recording and not self._license_allows_new_recording(
+            result.cleaned_code, RecordingRequestSource.MANUAL
+        ):
             self.focus_scan_input(80)
             return
         camera_error = self._camera_start_block_reason()
@@ -1416,7 +1410,11 @@ class MonitorTab(QWidget):
         self.scan_input.clear()
         self.focus_scan_input(80)
 
-    def _license_allows_new_recording(self) -> bool:
+    def _license_allows_new_recording(
+        self,
+        order_no: str,
+        source: RecordingRequestSource = RecordingRequestSource.INTERNAL,
+    ) -> bool:
         if self.license_manager is None:
             return True
         if self.license_manager.can_start_recording(self._current_record_type()):
@@ -1424,13 +1422,41 @@ class MonitorTab(QWidget):
         message = "当前授权需要联网验证，暂时不能开始新的录制。"
         self.warning_message.emit(message)
         self.status_message.emit(message)
+        self.activation_requested.emit(
+            PendingRecordingRequest(
+                order_no=order_no,
+                recording_type=self._current_record_type(),
+                source=source,
+            )
+        )
         return False
 
     def _apply_license_state(self) -> None:
         if not hasattr(self, "manual_start_button") or self.license_manager is None:
             return
-        allowed = self.license_manager.can_start_recording(self._current_record_type())
-        self.manual_start_button.setEnabled(bool(self.is_recording or allowed))
+        self.manual_start_button.setEnabled(True)
+
+    def continue_pending_recording(self, request: PendingRecordingRequest) -> bool:
+        result = self.scanner_guard.process(request.order_no, debounce=False)
+        if not result.cleaned_code:
+            self.warning_message.emit("订单号已失效，请重新扫描。")
+            return False
+        self._set_record_type_selection(request.recording_type)
+        self.scan_input.setText(result.cleaned_code)
+        if not self.license_manager or not self.license_manager.can_start_recording(
+            request.recording_type
+        ):
+            self.warning_message.emit("当前授权仍不能开始新的录制。")
+            return False
+        camera_error = self._camera_start_block_reason()
+        if camera_error:
+            self._block_recording_start_for_camera_error(camera_error)
+            return False
+        self._pending_voice_action = "start"
+        self.recorder.manual_start(result.cleaned_code)
+        self.scan_input.clear()
+        self.focus_scan_input(80)
+        return True
 
     def _on_license_status_changed(self, _status: str) -> None:
         self._apply_license_state()

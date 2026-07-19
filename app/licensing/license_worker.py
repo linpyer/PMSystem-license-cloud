@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QThread, Signal
 
-from app.licensing.errors import LicenseApiError, localized_error
+from app.licensing.errors import LicenseApiError, LicenseValidationError, localized_error
 
 
 class LicenseOperationWorker(QThread):
@@ -20,5 +20,7 @@ class LicenseOperationWorker(QThread):
             self.succeeded.emit(self.operation())
         except LicenseApiError as exc:
             self.failed.emit(exc.code, localized_error(exc))
+        except LicenseValidationError as exc:
+            self.failed.emit("CLIENT_VALIDATION_ERROR", str(exc))
         except Exception as exc:
             self.failed.emit("CLIENT_LICENSE_ERROR", str(exc) or "授权操作失败")

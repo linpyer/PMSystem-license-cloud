@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,12 @@ from app.licensing.errors import LicenseValidationError
 from app.licensing.models import LicensePayload, SignedLicense
 
 
+UNKNOWN_SIGNING_KEY_MESSAGE = (
+    "当前客户端不信任授权服务器使用的签名密钥，请更新客户端授权公钥配置。"
+)
+_BASE64URL_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
 def base64url_decode(value: str) -> bytes:
     try:
         return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
@@ -30,16 +37,39 @@ class TrustedPublicKeys:
         self._keys = dict(keys)
 
     @classmethod
-    def from_json_file(cls, path: str | Path) -> "TrustedPublicKeys":
+    def from_json_file(
+        cls,
+        path: str | Path,
+        *,
+        expected_environment: str | None = None,
+    ) -> "TrustedPublicKeys":
         try:
             raw = json.loads(Path(path).read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise TypeError("trusted public key document must be an object")
+            configured_environment = str(raw.get("environment") or "").strip().lower()
+            if expected_environment and configured_environment != expected_environment.lower():
+                raise ValueError("trusted public key environment does not match the client")
             items = raw.get("keys", [])
-            keys = {
-                str(item["keyId"]): base64url_decode(str(item["publicKey"]))
-                for item in items
-                if str(item.get("algorithm") or "") == "Ed25519"
-            }
-        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            if not isinstance(items, list):
+                raise TypeError("trusted public keys must be a list")
+            keys: dict[str, bytes] = {}
+            for item in items:
+                if not isinstance(item, dict):
+                    raise TypeError("trusted public key entry must be an object")
+                if str(item.get("algorithm") or "") != "Ed25519":
+                    raise ValueError("trusted public key algorithm must be Ed25519")
+                key_id = str(item.get("keyId") or "")
+                encoded_key = str(item.get("publicKey") or "")
+                if not key_id or key_id in keys:
+                    raise ValueError("trusted public keyId is missing or duplicated")
+                if not _BASE64URL_PATTERN.fullmatch(encoded_key):
+                    raise ValueError("trusted public key must use unpadded Base64URL")
+                public_key = base64url_decode(encoded_key)
+                if len(public_key) != 32:
+                    raise ValueError("Ed25519 public key must contain 32 bytes")
+                keys[key_id] = public_key
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise LicenseValidationError("Unable to load trusted license public keys") from exc
         if not keys:
             raise LicenseValidationError("No trusted Ed25519 public keys are configured")
@@ -47,6 +77,10 @@ class TrustedPublicKeys:
 
     def get(self, key_id: str) -> bytes | None:
         return self._keys.get(key_id)
+
+    @property
+    def key_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self._keys))
 
 
 class LicenseVerifier:
@@ -58,7 +92,7 @@ class LicenseVerifier:
             raise LicenseValidationError("Unsupported license signature algorithm")
         public_key_bytes = self.trusted_keys.get(envelope.key_id)
         if public_key_bytes is None:
-            raise LicenseValidationError("Unknown license signing key")
+            raise LicenseValidationError(UNKNOWN_SIGNING_KEY_MESSAGE)
         try:
             payload_bytes = base64url_decode(envelope.payload)
             signature_bytes = base64url_decode(envelope.signature)

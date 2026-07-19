@@ -15,6 +15,8 @@ from app.services.deactivation_service import DeactivationService
 from app.services.idempotency_service import IdempotencyService
 from app.services.license_signing_service import LicenseSigningService
 from app.services.verification_service import VerificationService
+from app.services.trial_activation_service import TrialActivationService
+from app.repositories.trial_repository import TrialRepository
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -45,6 +47,7 @@ def get_activation_service(
         licenses=LicenseRepository(),
         events=EventRepository(),
         idempotency=_idempotency(settings),
+        trials=TrialRepository(),
     )
 
 
@@ -59,6 +62,7 @@ def get_verification_service(
         licenses=LicenseRepository(),
         events=EventRepository(),
         idempotency=_idempotency(settings),
+        trials=TrialRepository(),
     )
 
 
@@ -70,5 +74,20 @@ def get_deactivation_service(
         licenses=LicenseRepository(),
         events=EventRepository(),
         idempotency=_idempotency(settings),
+        trials=TrialRepository(),
     )
 
+
+def get_trial_activation_service(
+    settings: Settings = Depends(get_app_settings),
+    signer: Ed25519Signer = Depends(get_signer),
+) -> TrialActivationService:
+    signing = LicenseSigningService(settings, signer)
+    return TrialActivationService(
+        settings,
+        signing,
+        licenses=LicenseRepository(),
+        trials=TrialRepository(),
+        events=EventRepository(),
+        idempotency=_idempotency(settings),
+    )

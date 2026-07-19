@@ -14,9 +14,10 @@ from app.core.security import (
     mask_license_code,
 )
 from app.db.models import DeviceBinding
-from app.db.models.enums import BindingStatus, LicenseEventType, LicenseStatus
+from app.db.models.enums import BindingStatus, DeviceTrialStatus, LicenseEventType, LicenseStatus
 from app.repositories.event_repository import EventRepository
 from app.repositories.license_repository import LicenseRepository
+from app.repositories.trial_repository import TrialRepository
 from app.schemas.licenses import ActivateRequest
 from app.services.idempotency_service import IdempotencyService, ServiceResult
 from app.services.license_signing_service import LicenseSigningService
@@ -34,11 +35,13 @@ class ActivationService(LicenseOperationSupport):
         licenses: LicenseRepository | None = None,
         events: EventRepository | None = None,
         idempotency: IdempotencyService,
+        trials: TrialRepository | None = None,
     ) -> None:
         event_repository = events or EventRepository()
         super().__init__(settings, idempotency, event_repository)
         self.licenses = licenses or LicenseRepository()
         self.signing = signing
+        self.trials = trials or TrialRepository()
 
     async def activate(
         self,
@@ -119,6 +122,36 @@ class ActivationService(LicenseOperationSupport):
                 binding.last_ip = ip
                 binding.device_credential_hash = credential_hash
                 event_type = LicenseEventType.REACTIVATED_SAME_DEVICE
+
+            await self.trials.lock_device(
+                session, request.device_id, request.fingerprint_version
+            )
+            trial = await self.trials.get_for_device(
+                session, request.device_id, request.fingerprint_version, lock=True
+            )
+            if trial is not None and trial.status in {
+                DeviceTrialStatus.ACTIVE,
+                DeviceTrialStatus.EXPIRED,
+            }:
+                trial.status = DeviceTrialStatus.CONVERTED
+                trial.converted_at = now
+                trial.converted_license_id = license_record.id
+                trial.last_seen_at = now
+                trial.last_ip = ip
+                await self.events.add(
+                    session,
+                    event_type=LicenseEventType.TRIAL_CONVERTED,
+                    result="SUCCESS",
+                    request_id=request.request_id,
+                    created_at=now,
+                    license_id=trial.trial_license_id,
+                    ip=ip,
+                    app_version=request.app_version,
+                    detail={
+                        "convertedLicenseId": str(license_record.id),
+                        "deviceIdPrefix": device_id_prefix(request.device_id),
+                    },
+                )
 
             envelope = await self.signing.issue(
                 session, license_record=license_record, binding=binding, now=now

@@ -70,6 +70,19 @@ def test_activate_sends_client_metadata_without_logging_code(caplog):
 
 
 @responses.activate
+def test_trial_activation_sends_device_identity_without_license_code():
+    responses.post(
+        f"{BASE_URL}/trials/activate",
+        json={"success": True, "credential": "x" * 40, "license": {}},
+    )
+    identity = DeviceIdentity(DEVICE_ID, "win-v1", "Test PC", "Windows 11")
+    client().activate_trial(identity)
+    body = responses.calls[0].request.body.decode()
+    assert '"deviceId"' in body and '"fingerprintVersion": "win-v1"' in body
+    assert "licenseCode" not in body
+
+
+@responses.activate
 def test_verify_never_sends_full_activation_code():
     responses.post(f"{BASE_URL}/licenses/verify", json={"success": True, "license": {}})
     record = type("Record", (), {"license_id": LICENSE_ID, "device_id": DEVICE_ID, "credential": "c" * 40})()

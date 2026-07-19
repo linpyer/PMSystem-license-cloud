@@ -2,12 +2,21 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { authApi } from '@/api/auth'
 import type { AdminUser } from '@/types'
+import { setAuthenticationExpiredHandler } from '@/utils/auth-navigation'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<AdminUser | null>(null)
   const challenge = ref('')
   const initialized = ref(false)
   const authenticated = computed(() => Boolean(user.value))
+
+  function clearAuthentication() {
+    user.value = null
+    challenge.value = ''
+    initialized.value = true
+  }
+
+  setAuthenticationExpiredHandler(clearAuthentication)
 
   async function restore() {
     try { user.value = (await authApi.me()).data.user } catch { user.value = null }
@@ -23,7 +32,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
   async function logout() {
     await authApi.logout()
-    user.value = null
+    clearAuthentication()
   }
   return { user, challenge, initialized, authenticated, restore, login, verifyTotp, logout }
 })

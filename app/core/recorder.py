@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import queue
 import threading
 import time
@@ -13,12 +14,27 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from PySide6.QtCore import QThread, Signal
 
-from app.core.camera import apply_capture_settings, get_capture_size, list_camera_devices, open_camera
+from app.core.camera import (
+    CameraParameterMismatch,
+    get_capture_size,
+    is_ivcam,
+    list_camera_devices,
+    open_and_negotiate_camera,
+    requested_fps,
+)
 from app.core.database import DatabaseManager
 from app.core.database_paths import get_canonical_database_path
 from app.core.disk_space_checker import DiskSpaceChecker
 from app.core.file_hash import calculate_file_hash, normalize_hash_algorithm
 from app.core.video_checker import VideoChecker
+from app.core.video_encoder import (
+    COMPATIBILITY_MODE_MESSAGE,
+    ENCODING_OVERLOAD_MESSAGE,
+    VideoEncoder,
+    create_video_encoder,
+    prepare_recording_frame,
+    recording_output_size,
+)
 from app.utils.filename import unique_temp_recording_path, unique_video_path
 from app.utils.time_utils import format_datetime
 
@@ -125,7 +141,7 @@ class WatermarkRenderer:
 
 
 class RecordingWriterWorker:
-    def __init__(self, writer: cv2.VideoWriter, logger: logging.Logger, max_queue_size: int) -> None:
+    def __init__(self, writer: VideoEncoder, logger: logging.Logger, max_queue_size: int) -> None:
         self.writer = writer
         self.logger = logger
         self.queue: queue.Queue[np.ndarray | None] = queue.Queue(maxsize=max_queue_size)
@@ -147,30 +163,18 @@ class RecordingWriterWorker:
             self.queue.put_nowait(frame)
             return True
         except queue.Full:
-            try:
-                self.queue.get_nowait()
-                with self.lock:
-                    self.frames_dropped += 1
-            except queue.Empty:
-                pass
-            try:
-                self.queue.put_nowait(frame)
-                return True
-            except queue.Full:
-                with self.lock:
-                    self.frames_dropped += 1
-                return False
+            with self.lock:
+                self.frames_dropped += 1
+            return False
 
     def stop_and_wait(self) -> None:
         self.stop_requested.set()
-        try:
-            self.queue.put(None, timeout=2)
-        except queue.Full:
+        while self.thread.is_alive():
             try:
-                self.queue.get_nowait()
-            except queue.Empty:
-                pass
-            self.queue.put(None, timeout=2)
+                self.queue.put(None, timeout=0.5)
+                break
+            except queue.Full:
+                continue
         self.thread.join()
 
     def snapshot(self, reset_window: bool = False) -> dict[str, float | int | str]:
@@ -231,7 +235,11 @@ class RecordingWriterWorker:
                 self.write_time_count += 1
                 self.write_time_max = max(self.write_time_max, elapsed)
 
-        self.writer.release()
+        try:
+            self.writer.close()
+        except Exception as exc:
+            self.error = self.error or exc
+            self.logger.exception("视频编码器安全结束失败")
 
 
 class RecorderThread(QThread):
@@ -263,7 +271,6 @@ class RecorderThread(QThread):
         self._stop_requested = threading.Event()
 
         self._capture: cv2.VideoCapture | None = None
-        self._writer: cv2.VideoWriter | None = None
         self._writer_worker: RecordingWriterWorker | None = None
         self._writer_size: tuple[int, int] | None = None
         self._temp_path: Path | None = None
@@ -275,12 +282,15 @@ class RecorderThread(QThread):
         self._frames_written = 0
         self._frames_enqueued = 0
         self._record_type_for_current_recording = str(self.config.get("current_record_type") or "发货")
-        self._target_recording_fps = int(self.config.get("fps", 25) or 25)
-        self._effective_recording_fps = self._target_recording_fps
+        self._target_recording_fps = float(self.config.get("fps", 0) or 0)
+        self._effective_recording_fps = 30.0
         self._camera_actual_fps: float | None = None
+        self._follow_camera_fps = requested_fps(self.config) is None
+        self._camera_backend = ""
+        self._source_recording_size: tuple[int, int] | None = None
         self._next_record_frame_at = 0.0
         self._next_preview_frame_at = 0.0
-        self._record_interval = 1.0 / max(1, self._target_recording_fps)
+        self._record_interval = 1.0 / max(1.0, self._effective_recording_fps)
         self._perf_last_log = time.perf_counter()
         self._perf_capture_count = 0
         self._perf_capture_time_sum = 0.0
@@ -542,10 +552,12 @@ class RecorderThread(QThread):
 
             self._handle_camera_frame_ok(frame)
             self._last_frame_size = (frame.shape[1], frame.shape[0])
-            preview_frame = frame
+            preview_frame = frame.copy()
             now_perf = time.perf_counter()
             should_emit_preview = now_perf >= self._next_preview_frame_at
-            should_record_frame = self._recording and now_perf >= self._next_record_frame_at
+            should_record_frame = self._recording and (
+                self._follow_camera_fps or now_perf >= self._next_record_frame_at
+            )
 
             if self._pending_start_order_id and not self._recording:
                 pending_order_id = self._pending_start_order_id
@@ -554,15 +566,18 @@ class RecorderThread(QThread):
                 now_perf = time.perf_counter()
                 should_emit_preview = True
                 should_record_frame = self._recording
-            elif self._recording and not should_record_frame:
-                should_emit_preview = False
-
             if self._recording and should_record_frame:
                 now = datetime.now()
-                write_frame = self._prepare_frame_for_writer(frame)
+                source_size = (frame.shape[1], frame.shape[0])
+                if self._source_recording_size is not None and source_size != self._source_recording_size:
+                    self._trigger_recording_error(
+                        "摄像头输出尺寸在录制中发生变化，请检查摄像头设置后重试"
+                    )
+                    continue
+                write_frame = self._prepare_frame_for_writer(frame.copy())
                 try:
                     watermark_started = time.perf_counter()
-                    watermarked = self._watermark.draw(write_frame.copy(), self._order_id, now)
+                    watermarked = self._watermark.draw(write_frame, self._order_id, now)
                     watermark_elapsed = time.perf_counter() - watermark_started
                     self._perf_watermark_count += 1
                     self._perf_watermark_time_sum += watermark_elapsed
@@ -573,17 +588,21 @@ class RecorderThread(QThread):
                     self.message.emit(f"视频水印绘制失败：{exc}")
                     watermarked = write_frame.copy()
 
-                if self._show_recording_watermark_in_preview():
-                    preview_frame = watermarked.copy()
-                else:
-                    preview_frame = frame
+                if should_emit_preview and self._show_recording_watermark_in_preview():
+                    preview_frame = self._watermark.draw(frame.copy(), self._order_id, now)
 
                 try:
                     enqueue_started = time.perf_counter()
                     if self._writer_worker is None:
                         raise RuntimeError("视频写入线程不可用")
                     if not self._writer_worker.enqueue(watermarked):
-                        raise RuntimeError("视频写入队列不可用")
+                        raise RuntimeError(
+                            ENCODING_OVERLOAD_MESSAGE.format(
+                                width=self._writer_size[0] if self._writer_size else frame.shape[1],
+                                height=self._writer_size[1] if self._writer_size else frame.shape[0],
+                                fps=self._effective_recording_fps,
+                            )
+                        )
                     enqueue_elapsed = time.perf_counter() - enqueue_started
                     self._perf_enqueue_count += 1
                     self._perf_enqueue_time_sum += enqueue_elapsed
@@ -600,9 +619,9 @@ class RecorderThread(QThread):
                         last_duration = duration
                         self.duration_changed.emit(duration)
 
-            if should_emit_preview or should_record_frame:
+            if should_emit_preview:
                 preview_started = time.perf_counter()
-                self.frame_ready.emit(preview_frame)
+                self.frame_ready.emit(preview_frame.copy())
                 self._perf_preview_count += 1
                 self._perf_preview_time_sum += time.perf_counter() - preview_started
                 self._next_preview_frame_at = time.perf_counter() + (1.0 / 30.0)
@@ -1149,13 +1168,16 @@ class RecorderThread(QThread):
             return True
         return bool(preview_config.get("show_recording_watermark", True))
 
-    def _effective_fps(self, target_fps: int) -> int:
-        target_fps = max(1, int(target_fps or 25))
-        if self._camera_actual_fps and self._camera_actual_fps > 1 and self._camera_actual_fps + 1 < target_fps:
-            return max(1, int(round(self._camera_actual_fps)))
-        return target_fps
+    def _effective_fps(self, target_fps: float | None) -> float:
+        if target_fps is None:
+            if self._camera_actual_fps is None:
+                raise RuntimeError("摄像头实际帧率尚未确定")
+            return float(self._camera_actual_fps)
+        return float(target_fps)
 
     def _schedule_next_record_frame(self, now_perf: float) -> None:
+        if self._follow_camera_fps:
+            return
         if self._next_record_frame_at <= 0:
             self._next_record_frame_at = now_perf + self._record_interval
             return
@@ -1216,14 +1238,19 @@ class RecorderThread(QThread):
             self.warning_message.emit(message)
             self.message.emit(message)
         if self._recording and capture_fps + 1 < self._effective_recording_fps:
-            message = "当前摄像头实际帧率低于配置帧率，建议降低帧率或分辨率。"
+            message = ENCODING_OVERLOAD_MESSAGE.format(
+                width=self._writer_size[0] if self._writer_size else 0,
+                height=self._writer_size[1] if self._writer_size else 0,
+                fps=self._effective_recording_fps,
+            )
             self.logger.warning(
-                "%s 窗口采集FPS=%.2f, 写入FPS=%s",
+                "%s 窗口采集FPS=%.2f, 目标写入FPS=%s",
                 message,
                 capture_fps,
                 self._effective_recording_fps,
             )
-            self.warning_message.emit(message)
+            self._trigger_recording_error(message)
+            return
             self.message.emit(message)
         if avg_write_ms > 1000 / max(1, self._effective_recording_fps):
             self.logger.warning(
@@ -1281,20 +1308,30 @@ class RecorderThread(QThread):
         self._check_disk_space_notice()
 
         width, height = self._recording_frame_size(*self._current_frame_size())
-        target_fps = int(self.config.get("fps", 25) or 25)
-        fps = self._effective_fps(target_fps)
+        configured_fps = requested_fps(self.config)
+        fps = self._effective_fps(configured_fps)
+        target_fps = float(configured_fps or 0.0)
 
-        writer, codec = self._create_writer(temp_path, width, height, fps, extension)
-        if writer is None:
+        try:
+            selection = create_video_encoder(
+                temp_path,
+                width,
+                height,
+                fps,
+                quality_profile=str(self.config.get("recording_video_quality") or "source"),
+            )
+        except Exception as exc:
             message = "视频编码器不可用，无法创建 mp4 文件"
             self.message.emit(message)
-            self.logger.error("开始录制失败：%s", message)
+            self.logger.exception("开始录制失败：%s", message)
             return
 
-        max_queue_size = max(30, fps * 2)
-        self._writer = None
-        self._writer_worker = RecordingWriterWorker(writer, self.logger, max_queue_size)
+        frame_bytes = max(1, width * height * 3)
+        memory_bounded_frames = max(3, (256 * 1024 * 1024) // frame_bytes)
+        max_queue_size = max(3, min(60, int(math.ceil(fps)), memory_bounded_frames))
+        self._writer_worker = RecordingWriterWorker(selection.encoder, self.logger, max_queue_size)
         self._writer_size = (width, height)
+        self._source_recording_size = self._current_frame_size()
         self._temp_path = temp_path
         self._recording = True
         self._order_id = order_id
@@ -1304,7 +1341,8 @@ class RecorderThread(QThread):
         self._frames_enqueued = 0
         self._target_recording_fps = target_fps
         self._effective_recording_fps = fps
-        self._record_interval = 1.0 / max(1, fps)
+        self._follow_camera_fps = configured_fps is None
+        self._record_interval = 1.0 / max(1.0, fps)
         self._next_record_frame_at = 0.0
         self._next_preview_frame_at = 0.0
         self._recording_error_reason = None
@@ -1333,17 +1371,16 @@ class RecorderThread(QThread):
             "开始录制：单号=%s, 临时文件=%s, 编码=%s, 配置FPS=%s, 写入FPS=%s, 摄像头实际FPS=%s, 队列容量=%s",
             order_id,
             temp_path,
-            codec,
-            target_fps,
+            selection.codec,
+            target_fps or "跟随摄像头输出",
             fps,
             self._camera_actual_fps if self._camera_actual_fps else "unknown",
             max_queue_size,
         )
-        if self._camera_actual_fps and self._camera_actual_fps + 1 < target_fps:
-            message = "当前摄像头实际帧率低于配置帧率，可能导致视频不流畅，建议降低帧率或分辨率。"
-            self.logger.warning("%s 摄像头实际FPS=%.2f, 配置FPS=%s", message, self._camera_actual_fps, target_fps)
-            self.warning_message.emit(message)
-            self.message.emit(message)
+        if selection.compatibility_mode:
+            self.logger.warning("FFmpeg H.264 不可用，进入兼容模式：%s", selection.fallback_reason)
+            self.warning_message.emit(COMPATIBILITY_MODE_MESSAGE)
+            self.message.emit(COMPATIBILITY_MODE_MESSAGE)
         if self._show_recording_watermark_in_preview() and not self._preview_watermark_logged:
             self.logger.info("预览水印功能启用")
             self._preview_watermark_logged = True
@@ -1375,9 +1412,9 @@ class RecorderThread(QThread):
             save_failed_reason = str(writer_snapshot.get("error"))
         is_abnormal_stop = bool(save_failed_reason)
 
-        self._writer = None
         self._writer_worker = None
         self._writer_size = None
+        self._source_recording_size = None
         self._recording = False
         self._order_id = ""
         self._start_time = None
@@ -1560,10 +1597,35 @@ class RecorderThread(QThread):
     def _open_camera(self) -> None:
         self._release_camera()
         camera_index = int(self.config.get("camera_index", 0) or 0)
+        camera_name = str(self.config.get("camera_name", "") or "")
+        if not camera_name:
+            camera_name = next(
+                (device.name for device in list_camera_devices() if device.index == camera_index),
+                f"摄像头 {camera_index}",
+            )
 
         try:
-            capture = open_camera(camera_index)
-            apply_capture_settings(capture, self.config)
+            negotiation_validator = None
+            if is_ivcam(camera_name):
+                negotiation_validator = lambda frame: not bool(
+                    self._detect_ivcam_placeholder_frame(frame)[0]
+                )
+            opened = open_and_negotiate_camera(
+                camera_index,
+                camera_name,
+                self.config,
+                frame_validator=negotiation_validator,
+            )
+            capture = opened.capture
+            negotiation = opened.negotiation
+        except CameraParameterMismatch as exc:
+            self.logger.warning("摄像头实际参数与固定设置不一致：%s", exc)
+            self._camera_available = False
+            self._camera_last_error = str(exc)
+            self._camera_unhealthy_since = time.perf_counter()
+            self._emit_camera_status(False, str(exc), force=True)
+            self.critical_message.emit(str(exc))
+            return
         except Exception as exc:
             self.logger.exception("摄像头打开失败")
             self._camera_available = False
@@ -1584,17 +1646,12 @@ class RecorderThread(QThread):
             return
 
         self._capture = capture
-        width, height = get_capture_size(capture)
-        capture_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-        self._camera_actual_fps = capture_fps if capture_fps > 1 else None
-        camera_name = str(self.config.get("camera_name", "") or "")
-        if not camera_name:
-            camera_name = next(
-                (device.name for device in list_camera_devices() if device.index == camera_index),
-                f"摄像头 {camera_index}",
-            )
-        camera_name_lower = camera_name.lower()
-        self._ivcam_camera = "ivcam" in camera_name_lower or "e2esoft" in camera_name_lower
+        width, height = negotiation.width, negotiation.height
+        self._last_frame_size = (width, height)
+        self._camera_actual_fps = negotiation.fps
+        self._follow_camera_fps = negotiation.fps_follows_camera
+        self._camera_backend = negotiation.backend
+        self._ivcam_camera = is_ivcam(camera_name)
         self._camera_fail_count = 0
         self._camera_success_count = 0
         self._camera_available = False
@@ -1618,13 +1675,14 @@ class RecorderThread(QThread):
         self._last_freeze_sample = None
         self._last_freeze_warning_log_at = 0.0
         self.logger.info(
-            "摄像头打开：%s, index=%s, 分辨率=%sx%s, 摄像头实际FPS=%s, 配置目标FPS=%s, iVCam=%s",
+            "摄像头打开：%s, index=%s, 后端=%s, 实际帧尺寸=%sx%s, 实际有效FPS=%s, 配置目标FPS=%s, iVCam=%s",
             camera_name,
             camera_index,
+            self._camera_backend,
             width,
             height,
             f"{self._camera_actual_fps:.2f}" if self._camera_actual_fps else "unknown",
-            self.config.get("fps", 25),
+            self.config.get("fps", 0) or "跟随摄像头输出",
             self._ivcam_camera,
         )
         self.message.emit("摄像头已打开")
@@ -1634,41 +1692,16 @@ class RecorderThread(QThread):
             self._capture.release()
             self._capture = None
 
-    def _create_writer(
-        self,
-        path: Path,
-        width: int,
-        height: int,
-        fps: int,
-        extension: str,
-    ) -> tuple[cv2.VideoWriter | None, str]:
-        codec_candidates = ["mp4v", "avc1", "H264", "X264"] if extension.lower() == "mp4" else ["XVID", "MJPG"]
-        for codec in codec_candidates:
-            fourcc = cv2.VideoWriter_fourcc(*codec)
-            writer = cv2.VideoWriter(str(path), fourcc, float(fps), (width, height))
-            if writer.isOpened():
-                return writer, codec
-            writer.release()
-        return None, ""
-
     def _prepare_frame_for_writer(self, frame: np.ndarray) -> np.ndarray:
-        if self._writer_size is None:
-            return frame
-        width, height = self._writer_size
-        if frame.shape[1] == width and frame.shape[0] == height:
-            return frame
-        return cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+        max_long_edge = int(self.config.get("recording_max_long_edge", 0) or 0)
+        prepared = prepare_recording_frame(frame, max_long_edge)
+        if self._writer_size is not None and (prepared.shape[1], prepared.shape[0]) != self._writer_size:
+            raise RuntimeError("录制帧尺寸与编码器输入尺寸不一致")
+        return prepared
 
     def _recording_frame_size(self, width: int, height: int) -> tuple[int, int]:
-        max_long_edge = int(self.config.get("recording_max_long_edge", 1280) or 0)
-        if max_long_edge > 0:
-            scale = min(1.0, max_long_edge / max(width, height))
-            width = int(width * scale)
-            height = int(height * scale)
-
-        width = max(2, width - (width % 2))
-        height = max(2, height - (height % 2))
-        return width, height
+        max_long_edge = int(self.config.get("recording_max_long_edge", 0) or 0)
+        return recording_output_size(width, height, max_long_edge)
 
     def _current_frame_size(self) -> tuple[int, int]:
         if self._last_frame_size is not None:

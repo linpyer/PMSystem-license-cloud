@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -8,8 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ErrorCode, LicenseServiceError
+from app.core.security import generate_device_credential, hash_device_credential
 from app.db.models import AppVersionPolicy
-from app.db.models.enums import BindingStatus, LicenseEventType, LicenseStatus
+from app.db.models.enums import BindingStatus, DeviceTrialStatus, LicenseEventType, LicenseStatus
 from app.repositories.admin_repository import AdminRepository
 from app.repositories.event_repository import EventRepository
 from app.repositories.idempotency_repository import IdempotencyRepository
@@ -20,7 +21,10 @@ from app.schemas.admin import (
     LicenseListQuery,
     LicenseUpdateRequest,
     ReasonRequest,
+    TrialDeleteRequest,
+    TrialExtendRequest,
     VersionPolicyRequest,
+    TrialListQuery,
 )
 from app.services.admin_auth_service import AuthenticatedAdmin, RequestMeta
 from app.services.idempotency_service import IdempotencyService, ServiceResult
@@ -241,6 +245,247 @@ class AdminManagementService:
                         item[key] = _iso(value)
         return {"summary": metrics, "recent": recent}
 
+    async def list_trials(self, session: AsyncSession, query: TrialListQuery) -> dict[str, Any]:
+        rows, total = await self.repository.list_trials(session, **query.model_dump())
+        return {
+            "items": [self._trial_dict(item) for item in rows],
+            "page": query.page,
+            "pageSize": query.page_size,
+            "total": total,
+        }
+
+    async def trial_detail(self, session: AsyncSession, trial_id: UUID) -> dict[str, Any]:
+        trial = await self.repository.get_trial(session, trial_id)
+        if trial is None:
+            raise LicenseServiceError(ErrorCode.RESOURCE_NOT_FOUND, "试用设备不存在")
+        return self._trial_dict(trial)
+
+    async def disable_trial(
+        self,
+        session: AsyncSession,
+        auth: AuthenticatedAdmin,
+        trial_id: UUID,
+        request: ReasonRequest,
+        meta: RequestMeta,
+    ) -> dict[str, Any]:
+        trial = await self.repository.get_trial(session, trial_id, lock=True)
+        if trial is None:
+            raise LicenseServiceError(ErrorCode.RESOURCE_NOT_FOUND, "试用设备不存在")
+        if trial.status not in {DeviceTrialStatus.ACTIVE, DeviceTrialStatus.EXPIRED}:
+            raise LicenseServiceError(ErrorCode.INVALID_STATE, "当前试用状态不允许禁用")
+        now = _utc_now()
+        trial.status = DeviceTrialStatus.DISABLED
+        license_record = await self.repository.get_license(session, trial.trial_license_id, lock=True)
+        if license_record is not None:
+            license_record.status = LicenseStatus.DISABLED
+        binding = await self.repository.get_trial_binding(
+            session, trial.trial_license_id, trial.device_id, lock=True
+        )
+        if binding is not None:
+            binding.status = BindingStatus.DISABLED
+            binding.deactivated_at = now
+            binding.deactivate_reason = request.reason
+            binding.device_credential_hash = self._invalid_credential_hash()
+        await self.events.add(
+            session,
+            event_type=LicenseEventType.TRIAL_DISABLED,
+            result="SUCCESS",
+            request_id=meta.request_id,
+            created_at=now,
+            license_id=trial.trial_license_id,
+            ip=meta.ip,
+            detail={"reason": request.reason, "adminUserId": str(auth.user.id)},
+        )
+        await self._audit(
+            session, auth, meta, "DISABLE_TRIAL", "device_trial", trial.id,
+            {"reason": request.reason}, now,
+        )
+        await session.commit()
+        return self._trial_dict(trial)
+
+    async def reset_trial(
+        self,
+        session: AsyncSession,
+        auth: AuthenticatedAdmin,
+        trial_id: UUID,
+        request: ReasonRequest,
+        meta: RequestMeta,
+    ) -> dict[str, Any]:
+        trial = await self.repository.get_trial(session, trial_id, lock=True)
+        if trial is None or trial.deleted_at is not None:
+            raise LicenseServiceError(ErrorCode.RESOURCE_NOT_FOUND, "该试用设备不存在或已被删除")
+        now = _utc_now()
+        old_status = trial.status.value
+        old_expires_at = trial.expires_at
+        license_record = await self.repository.get_license(
+            session, trial.trial_license_id, lock=True
+        )
+        binding = await self.repository.get_trial_binding(
+            session, trial.trial_license_id, trial.device_id, lock=True
+        )
+        if license_record is None or binding is None:
+            raise LicenseServiceError(ErrorCode.INVALID_STATE, "试用许可证状态不完整，无法重置")
+
+        trial.status = DeviceTrialStatus.ACTIVE
+        trial.started_at = now
+        trial.expires_at = now + timedelta(hours=168)
+        trial.converted_at = None
+        trial.converted_license_id = None
+        trial.last_seen_at = now
+        trial.reset_count = (trial.reset_count or 0) + 1
+        trial.last_reset_at = now
+        trial.last_reset_by = auth.user.id
+        trial.last_reset_reason = request.reason
+        license_record.status = LicenseStatus.ACTIVE
+        license_record.activated_at = now
+        license_record.expires_at = trial.expires_at
+        license_record.valid_days = 7
+        binding.status = BindingStatus.ACTIVE
+        binding.last_verified_at = now
+        binding.deactivated_at = None
+        binding.deactivate_reason = None
+        binding.device_credential_hash = self._invalid_credential_hash()
+
+        detail = self._trial_audit_detail(
+            trial,
+            auth,
+            request.reason,
+            old_status=old_status,
+            old_expires_at=old_expires_at,
+        )
+        await self.events.add(
+            session,
+            event_type=LicenseEventType.TRIAL_RESET,
+            result="SUCCESS",
+            request_id=meta.request_id,
+            created_at=now,
+            license_id=trial.trial_license_id,
+            binding_id=binding.id,
+            ip=meta.ip,
+            detail=detail,
+        )
+        await self._audit(
+            session, auth, meta, "TRIAL_RESET", "device_trial", trial.id, detail, now
+        )
+        await session.commit()
+        return self._trial_dict(trial)
+
+    async def extend_trial(
+        self,
+        session: AsyncSession,
+        auth: AuthenticatedAdmin,
+        trial_id: UUID,
+        request: TrialExtendRequest,
+        meta: RequestMeta,
+    ) -> dict[str, Any]:
+        trial = await self.repository.get_trial(session, trial_id, lock=True)
+        if trial is None or trial.deleted_at is not None:
+            raise LicenseServiceError(ErrorCode.RESOURCE_NOT_FOUND, "该试用设备不存在或已被删除")
+        if trial.status not in {DeviceTrialStatus.ACTIVE, DeviceTrialStatus.EXPIRED}:
+            raise LicenseServiceError(ErrorCode.INVALID_STATE, "当前试用状态不支持延长")
+        now = _utc_now()
+        old_status = trial.status.value
+        old_expires_at = trial.expires_at
+        base_time = trial.expires_at if trial.status == DeviceTrialStatus.ACTIVE and trial.expires_at > now else now
+        trial.expires_at = base_time + timedelta(days=request.days)
+        trial.status = DeviceTrialStatus.ACTIVE
+        trial.last_seen_at = now
+        trial.extension_count = (trial.extension_count or 0) + 1
+        trial.total_extended_days = (trial.total_extended_days or 0) + request.days
+        trial.last_extended_at = now
+        trial.last_extended_by = auth.user.id
+        trial.last_extension_days = request.days
+        trial.last_extension_reason = request.reason
+
+        license_record = await self.repository.get_license(
+            session, trial.trial_license_id, lock=True
+        )
+        if license_record is None:
+            raise LicenseServiceError(ErrorCode.INVALID_STATE, "试用许可证状态不完整，无法延长")
+        license_record.status = LicenseStatus.ACTIVE
+        license_record.expires_at = trial.expires_at
+        detail = self._trial_audit_detail(
+            trial,
+            auth,
+            request.reason,
+            old_status=old_status,
+            old_expires_at=old_expires_at,
+            extension_days=request.days,
+        )
+        await self.events.add(
+            session,
+            event_type=LicenseEventType.TRIAL_EXTENDED,
+            result="SUCCESS",
+            request_id=meta.request_id,
+            created_at=now,
+            license_id=trial.trial_license_id,
+            ip=meta.ip,
+            detail=detail,
+        )
+        await self._audit(
+            session, auth, meta, "TRIAL_EXTENDED", "device_trial", trial.id, detail, now
+        )
+        await session.commit()
+        return self._trial_dict(trial)
+
+    async def delete_trial(
+        self,
+        session: AsyncSession,
+        auth: AuthenticatedAdmin,
+        trial_id: UUID,
+        request: TrialDeleteRequest,
+        meta: RequestMeta,
+    ) -> dict[str, Any]:
+        trial = await self.repository.get_trial(session, trial_id, lock=True)
+        if trial is None or trial.deleted_at is not None:
+            raise LicenseServiceError(ErrorCode.RESOURCE_NOT_FOUND, "该试用设备不存在或已被删除")
+        now = _utc_now()
+        old_status = trial.status.value
+        old_expires_at = trial.expires_at
+        trial.status = DeviceTrialStatus.DELETED
+        trial.deleted_at = now
+        trial.deleted_by = auth.user.id
+        trial.delete_reason = request.reason
+        trial.last_seen_at = now
+
+        license_record = await self.repository.get_license(
+            session, trial.trial_license_id, lock=True
+        )
+        if license_record is not None:
+            license_record.status = LicenseStatus.REVOKED
+        binding = await self.repository.get_trial_binding(
+            session, trial.trial_license_id, trial.device_id, lock=True
+        )
+        if binding is not None:
+            binding.status = BindingStatus.DISABLED
+            binding.deactivated_at = now
+            binding.deactivate_reason = request.reason
+            binding.device_credential_hash = self._invalid_credential_hash()
+
+        detail = self._trial_audit_detail(
+            trial,
+            auth,
+            request.reason,
+            old_status=old_status,
+            old_expires_at=old_expires_at,
+        )
+        await self.events.add(
+            session,
+            event_type=LicenseEventType.TRIAL_DELETED,
+            result="SUCCESS",
+            request_id=meta.request_id,
+            created_at=now,
+            license_id=trial.trial_license_id,
+            binding_id=binding.id if binding is not None else None,
+            ip=meta.ip,
+            detail=detail,
+        )
+        await self._audit(
+            session, auth, meta, "TRIAL_DELETED", "device_trial", trial.id, detail, now
+        )
+        await session.commit()
+        return self._trial_dict(trial)
+
     async def list_admin_audit(self, session: AsyncSession, query: AuditQuery) -> dict[str, Any]:
         rows, total = await self.repository.audit_events(session, **query.model_dump())
         return {
@@ -331,6 +576,64 @@ class AdminManagementService:
             "bindingId": str(item.binding_id) if item.binding_id else None,
             "eventType": item.event_type.value, "result": item.result,
             "requestId": item.request_id, "detail": item.detail, "createdAt": _iso(item.created_at),
+        }
+
+    @staticmethod
+    def _trial_dict(item) -> dict[str, Any]:
+        return {
+            "trialId": str(item.id),
+            "device": _masked_device(item.device_id),
+            "fingerprintVersion": item.fingerprint_version,
+            "deviceName": item.device_name,
+            "status": item.status.value,
+            "startedAt": _iso(item.started_at),
+            "expiresAt": _iso(item.expires_at),
+            "lastSeenAt": _iso(item.last_seen_at),
+            "convertedAt": _iso(item.converted_at),
+            "convertedLicenseId": (
+                str(item.converted_license_id) if item.converted_license_id else None
+            ),
+            "firstIp": str(item.first_ip) if item.first_ip else None,
+            "lastIp": str(item.last_ip) if item.last_ip else None,
+            "appVersion": item.app_version,
+            "osVersion": item.os_version,
+            "resetCount": item.reset_count,
+            "lastResetAt": _iso(item.last_reset_at),
+            "lastResetReason": item.last_reset_reason,
+            "extensionCount": item.extension_count,
+            "totalExtendedDays": item.total_extended_days,
+            "lastExtendedAt": _iso(item.last_extended_at),
+            "lastExtensionDays": item.last_extension_days,
+            "lastExtensionReason": item.last_extension_reason,
+            "deletedAt": _iso(item.deleted_at),
+            "deleteReason": item.delete_reason,
+        }
+
+    def _invalid_credential_hash(self) -> str:
+        return hash_device_credential(
+            generate_device_credential(), self.settings.device_credential_pepper
+        )
+
+    @staticmethod
+    def _trial_audit_detail(
+        trial,
+        auth: AuthenticatedAdmin,
+        reason: str,
+        *,
+        old_status: str,
+        old_expires_at: datetime,
+        extension_days: int | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "adminRole": auth.user.role.value,
+            "device": _masked_device(trial.device_id),
+            "trialId": str(trial.id),
+            "oldStatus": old_status,
+            "newStatus": trial.status.value,
+            "oldExpiresAt": _iso(old_expires_at),
+            "newExpiresAt": _iso(trial.expires_at),
+            "extensionDays": extension_days,
+            "reason": reason,
         }
 
     @staticmethod
