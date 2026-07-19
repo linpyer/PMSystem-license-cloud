@@ -1,0 +1,70 @@
+name: pmsystem-license-production
+
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: 20m
+    max-file: "5"
+
+services:
+  postgres:
+    image: postgres:17.5-alpine
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - production_postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    logging: *json-logging
+
+  license-api:
+    image: pmsystem-license-api:${PMSYSTEM_API_IMAGE_TAG:?PMSYSTEM_API_IMAGE_TAG is required}
+    pull_policy: never
+    restart: unless-stopped
+    env_file:
+      - ${PMSYSTEM_ENV_FILE:-/opt/pmsystem-license/config/.env.production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - backend
+      - edge
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    volumes:
+      - type: bind
+        source: /opt/pmsystem-license/secrets/production_ed25519_private.pem
+        target: /run/secrets/license_signing_private_key.pem
+        read_only: true
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health/ready', timeout=4).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging: *json-logging
+
+networks:
+  backend:
+    internal: true
+  edge:
+
+volumes:
+  production_postgres_data:

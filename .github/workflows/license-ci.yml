@@ -1,0 +1,119 @@
+name: License CI
+
+on:
+  push:
+    paths:
+      - "license-server/**"
+      - "license-admin/**"
+      - "deploy/**"
+      - ".github/workflows/license-ci.yml"
+  pull_request:
+    paths:
+      - "license-server/**"
+      - "license-admin/**"
+      - "deploy/**"
+      - ".github/workflows/license-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.5-alpine
+        env:
+          POSTGRES_USER: license_test
+          POSTGRES_PASSWORD: test-password-not-for-production
+          POSTGRES_DB: pmsystem_license_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U license_test -d pmsystem_license_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: license-server
+    env:
+      LICENSE_DATABASE_URL: postgresql+asyncpg://license_test:test-password-not-for-production@127.0.0.1:5432/pmsystem_license_test
+      LICENSE_TEST_DATABASE_URL: postgresql+asyncpg://license_test:test-password-not-for-production@127.0.0.1:5432/pmsystem_license_test
+      LICENSE_ENVIRONMENT: test
+      LICENSE_SIGNING_PRIVATE_KEY_PATH: .secrets/dev_ed25519_private.pem
+      LICENSE_SIGNING_KEY_ID: ci-test-key
+      LICENSE_CODE_PEPPER: ci-code-pepper-with-at-least-32-characters
+      LICENSE_DEVICE_CREDENTIAL_PEPPER: ci-device-pepper-with-at-least-32-characters
+      LICENSE_ADMIN_SESSION_SECRET: ci-session-secret-with-at-least-32-characters
+      LICENSE_ADMIN_TOTP_ENCRYPTION_KEY: ci-totp-secret-with-at-least-32-characters
+      LICENSE_RATE_LIMIT_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+          cache: pip
+          cache-dependency-path: license-server/pyproject.toml
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]" ruff bandit pip-audit -c constraints.txt
+      - run: python -m app.cli.generate_dev_keys --output-dir .secrets
+      - run: ruff check app tests alembic
+      - run: bandit -q -r app -x tests
+      - run: pip-audit -r constraints.txt
+      - run: alembic upgrade head
+      - run: pytest -q
+
+  admin:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: license-admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.17.0"
+          cache: npm
+          cache-dependency-path: license-admin/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run type-check
+      - run: npm test
+      - run: npm run build
+
+  deployment:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Shell static analysis
+        run: shellcheck --severity=warning deploy/production-nginx/scripts/*.sh
+      - name: Prepare non-secret staging fixtures
+        run: |
+          cp deploy/staging/env/app.env.example deploy/staging/env/app.env
+          cp deploy/staging/env/postgres.env.example deploy/staging/env/postgres.env
+      - name: Validate Compose
+        env:
+          PMSYSTEM_API_IMAGE_TAG: ci
+          PMSYSTEM_ENV_FILE: ${{ github.workspace }}/deploy/production-nginx/env.production.example
+        run: |
+          docker compose --env-file deploy/production-nginx/env.production.example -f deploy/production-nginx/compose.yml config --quiet
+          docker compose -f deploy/staging/compose.yml config --quiet
+      - name: Build production images
+        run: |
+          docker build --tag pmsystem-license-api:ci license-server
+          docker build --tag pmsystem-license-admin:ci license-admin
+          test "$(docker image inspect pmsystem-license-api:ci --format '{{.Config.User}}')" = "10001:10001"
+      - name: Verify images exclude sensitive development files
+        run: |
+          api_id="$(docker create pmsystem-license-api:ci)"
+          admin_id="$(docker create pmsystem-license-admin:ci)"
+          trap 'docker rm -f "$api_id" "$admin_id" >/dev/null 2>&1 || true' EXIT
+          ! docker export "$api_id" | tar -tf - | grep -E '(^|/)(\.env|\.git|\.secrets|tests)(/|$)|private.*\.pem$'
+          ! docker export "$admin_id" | tar -tf - | grep -E '(^|/)(\.env|\.git|node_modules|tests|e2e)(/|$)'
+      - name: Repository sensitive-file guard
+        run: |
+          ! git ls-files | grep -E '(^|/)(\.env|\.secrets|node_modules|dist|backups)(/|$)|\.(pem|key|p12|pfx|db|sqlite)$'
+          ! git grep -I -n -E 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AKIA[0-9A-Z]{16}'
