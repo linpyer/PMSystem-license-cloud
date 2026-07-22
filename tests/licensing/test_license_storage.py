@@ -7,7 +7,7 @@ import pytest
 
 from app.licensing.dpapi_storage import WindowsDpapiProtector
 from app.licensing.errors import LicenseStorageError
-from app.licensing.license_storage import LicenseStorage
+from app.licensing.license_storage import LicenseStorage, default_license_path
 from app.licensing.models import LocalLicenseRecord
 from tests.licensing.helpers import DEVICE_ID, LICENSE_ID, NOW, signed_envelope
 
@@ -72,6 +72,13 @@ def test_delete_only_removes_license_file(tmp_path, private_key):
     storage.save(record(private_key)); storage.delete()
     assert not storage.path.exists()
     assert unrelated_db.read_bytes() == b"database" and video.read_bytes() == b"video"
+
+
+def test_frozen_client_ignores_storage_path_override(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("PMSYSTEM_LICENSE_STORAGE_PATH", str(tmp_path / "redirected.dat"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    assert default_license_path() == tmp_path / "local-app-data" / "PMSystem" / "license" / "license.dat"
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows DPAPI is only available on Windows")

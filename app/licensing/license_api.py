@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -12,7 +13,7 @@ from uuid import uuid4
 import requests
 
 from app.core.version import APP_VERSION
-from app.licensing.constants import license_api_base_url
+from app.licensing.constants import PRODUCTION_LICENSE_API_BASE_URL, license_api_base_url
 from app.licensing.errors import LicenseApiError
 
 
@@ -43,12 +44,19 @@ class LicenseApiClient:
         session: requests.Session | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
-        self.base_url = (base_url or license_api_base_url()).rstrip("/")
+        self.is_frozen_production_client = bool(getattr(sys, "frozen", False))
+        self.base_url = (
+            PRODUCTION_LICENSE_API_BASE_URL
+            if self.is_frozen_production_client
+            else (base_url or license_api_base_url()).rstrip("/")
+        )
         self.connect_timeout = float(
             connect_timeout or os.getenv("PMSYSTEM_LICENSE_CONNECT_TIMEOUT", "3")
         )
         self.read_timeout = float(read_timeout or os.getenv("PMSYSTEM_LICENSE_READ_TIMEOUT", "8"))
-        if allow_insecure_http is None:
+        if self.is_frozen_production_client:
+            allow_insecure_http = False
+        elif allow_insecure_http is None:
             configured = os.getenv("PMSYSTEM_LICENSE_ALLOW_INSECURE_HTTP")
             if configured is not None:
                 allow_insecure_http = configured.lower() in {"1", "true", "yes", "on"}
@@ -65,6 +73,7 @@ class LicenseApiClient:
                 "INVALID_REQUEST", "Insecure license API HTTP is disabled for this environment"
             )
         self.session = session or requests.Session()
+        self.verify_tls = True
         self.session.headers.update(
             {"Accept": "application/json", "User-Agent": f"PMSystem/{APP_VERSION} (Windows)"}
         )
@@ -151,6 +160,7 @@ class LicenseApiClient:
                     url,
                     json=body,
                     timeout=(self.connect_timeout, self.read_timeout),
+                    verify=self.verify_tls,
                 )
                 break
             except (requests.ConnectionError, requests.Timeout) as exc:

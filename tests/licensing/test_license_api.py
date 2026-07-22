@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 
 import pytest
 import requests
@@ -8,6 +9,7 @@ import responses
 
 from app.licensing.device_fingerprint import DeviceIdentity
 from app.licensing.errors import LicenseApiError
+from app.licensing.constants import PRODUCTION_LICENSE_API_BASE_URL
 from app.licensing.license_api import LicenseApiClient, normalize_license_code
 from tests.licensing.helpers import DEVICE_ID, LICENSE_ID
 
@@ -47,6 +49,31 @@ def test_loopback_http_is_allowed_by_default_only_in_development(monkeypatch):
     monkeypatch.setenv("PMSYSTEM_LICENSE_ENVIRONMENT", "production")
     with pytest.raises(LicenseApiError):
         LicenseApiClient(BASE_URL)
+
+
+class SuccessfulSession(requests.Session):
+    def __init__(self):
+        super().__init__()
+        self.kwargs = None
+
+    def request(self, *args, **kwargs):
+        self.kwargs = kwargs
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b'{"success": true, "status": "ok"}'
+        response.headers["Content-Type"] = "application/json"
+        return response
+
+
+def test_frozen_production_client_locks_url_and_tls(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("PMSYSTEM_LICENSE_API_BASE_URL", BASE_URL)
+    monkeypatch.setenv("PMSYSTEM_LICENSE_ALLOW_INSECURE_HTTP", "true")
+    session = SuccessfulSession()
+    api = LicenseApiClient(BASE_URL, allow_insecure_http=True, session=session)
+    assert api.base_url == PRODUCTION_LICENSE_API_BASE_URL
+    assert api.health()["status"] == "ok"
+    assert session.kwargs["verify"] is True
 
 
 @responses.activate

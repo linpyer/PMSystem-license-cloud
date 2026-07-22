@@ -3,6 +3,11 @@ from __future__ import annotations
 import sys
 import ctypes
 
+if sys.argv[1:] == ["--deactivate-before-uninstall"]:
+    from app.licensing.uninstall_helper import main as uninstall_helper_main
+
+    raise SystemExit(uninstall_helper_main(sys.argv[1:]))
+
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication

@@ -14,7 +14,7 @@ if "%APP_VERSION%"=="" (
 
 set "APP_EXE=dist\电商打包发货监控溯源系统\电商打包发货监控溯源系统.exe"
 set "ISS_FILE=installer\PMSystem.iss"
-set "OUTPUT_EXE=installer\output\PMSystem_Setup_v%APP_VERSION%.exe"
+set "OUTPUT_EXE=release\client\%APP_VERSION%\PMSystem-Setup-%APP_VERSION%-x64.exe"
 set "ISCC="
 
 if not exist "%APP_EXE%" (

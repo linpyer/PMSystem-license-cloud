@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from enum import StrEnum
 
 
@@ -8,6 +9,9 @@ FINGERPRINT_VERSION = "win-v1"
 LICENSE_PRODUCT = "PMSystem"
 LICENSE_EDITION = "professional"
 SUPPORTED_SCHEMA_VERSIONS = {1}
+PRODUCTION_LICENSE_ENVIRONMENT = "production"
+PRODUCTION_LICENSE_API_BASE_URL = "https://license.aixcc.top/api/v1"
+PRODUCTION_LICENSE_KEY_ID = "production-2026-01"
 
 
 class LicenseStatus(StrEnum):
@@ -63,10 +67,14 @@ READ_ONLY_CAPABILITIES = {
 
 
 def license_api_base_url() -> str:
+    if getattr(sys, "frozen", False):
+        return PRODUCTION_LICENSE_API_BASE_URL
     return os.getenv("PMSYSTEM_LICENSE_API_BASE_URL", "http://127.0.0.1:8000/api/v1").rstrip("/")
 
 
 def license_environment() -> str:
+    if getattr(sys, "frozen", False):
+        return PRODUCTION_LICENSE_ENVIRONMENT
     return os.getenv("PMSYSTEM_LICENSE_ENVIRONMENT", "development").strip().lower()
 
 

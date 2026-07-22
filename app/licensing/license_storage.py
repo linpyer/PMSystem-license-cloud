@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -12,7 +13,11 @@ from app.licensing.models import LocalLicenseRecord
 
 
 def default_license_path() -> Path:
-    override = os.getenv("PMSYSTEM_LICENSE_STORAGE_PATH", "").strip()
+    override = (
+        ""
+        if getattr(sys, "frozen", False)
+        else os.getenv("PMSYSTEM_LICENSE_STORAGE_PATH", "").strip()
+    )
     if override:
         return Path(override).expanduser().resolve()
     local_app_data = os.environ.get("LOCALAPPDATA")

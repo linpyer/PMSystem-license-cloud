@@ -1,5 +1,10 @@
 {
   "environment": "production",
-  "keys": [],
-  "status": "PRODUCTION_PUBLIC_KEY_REQUIRED"
+  "keys": [
+    {
+      "keyId": "production-2026-01",
+      "algorithm": "Ed25519",
+      "publicKey": "DqwwkJXTkLyxzmDhchLOPvfIZDM09jPH9MF0CNlpB1s"
+    }
+  ]
 }

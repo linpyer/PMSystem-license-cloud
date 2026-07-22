@@ -3,6 +3,7 @@ dist/
 release/
 installer/output/
 /deploy/production/
+/build-input/
 
 __pycache__/
 **/__pycache__/
