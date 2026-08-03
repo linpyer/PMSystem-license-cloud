@@ -88,12 +88,14 @@ Write-Host 'Building the production admin application...'
 Push-Location $adminRoot
 try {
     Invoke-Checked $npm @('ci', '--ignore-scripts')
-    $env:VITE_API_BASE_URL = '/api/v1'
+    $env:VITE_API_BASE_URL = 'https://license.aixcc.top/api/v1'
     $env:VITE_APP_ENVIRONMENT = 'production'
+    $env:VITE_APP_ENV_LABEL = '生产环境'
+    $env:VITE_APP_TITLE = 'PMSystem授权管理'
     $env:VITE_BASE_PATH = '/admin/'
-    Invoke-Checked $npm @('run', 'build')
+    Invoke-Checked $npm @('run', 'build:production')
 } finally {
-    Remove-Item Env:VITE_API_BASE_URL, Env:VITE_APP_ENVIRONMENT, Env:VITE_BASE_PATH -ErrorAction SilentlyContinue
+    Remove-Item Env:VITE_API_BASE_URL, Env:VITE_APP_ENVIRONMENT, Env:VITE_APP_ENV_LABEL, Env:VITE_APP_TITLE, Env:VITE_BASE_PATH -ErrorAction SilentlyContinue
     Pop-Location
 }
 $adminDist = Join-Path $adminRoot 'dist'

@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
+import { environmentLabel } from '@/config/environment'
 import { DataAnalysis, Key, Plus, Document, Tickets, Setting, User, SwitchButton, Timer } from '@element-plus/icons-vue'
 
 const route = useRoute(); const router = useRouter(); const auth = useAuthStore(); const theme = useThemeStore()
@@ -25,7 +26,7 @@ async function logout() { await auth.logout(); await router.replace({ name: 'log
     </aside>
     <main class="main">
       <header class="topbar">
-        <span class="environment">开发环境</span>
+        <span class="environment" data-testid="environment-label">{{ environmentLabel }}</span>
         <div class="top-actions"><el-select :model-value="theme.mode" size="small" style="width:110px" @change="theme.setMode($event as ThemeMode)"><el-option label="跟随系统" value="system"/><el-option label="浅色" value="light"/><el-option label="深色" value="dark"/></el-select><span>{{ auth.user?.displayName }}</span><el-tag size="small" effect="plain">{{ auth.user?.role }}</el-tag></div>
       </header>
       <router-view />
