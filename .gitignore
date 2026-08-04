@@ -4,6 +4,7 @@ release/
 installer/output/
 /deploy/production/
 /build-input/
+/artifacts/
 
 __pycache__/
 **/__pycache__/
@@ -49,6 +50,7 @@ videos/
 *.bak
 *.tar
 *.tar.gz
+*.zip
 pm_system.db
 retired_legacy_databases/
 database backups/

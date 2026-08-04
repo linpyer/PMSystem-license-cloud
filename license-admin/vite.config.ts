@@ -6,7 +6,7 @@ function sanitizeProductionDependencyFallbacks(mode: string) {
   return {
     name: 'sanitize-production-dependency-fallbacks',
     transform(code: string, id: string) {
-      if (mode !== 'production' || !id.includes('node_modules')) return null
+      if (mode !== 'production' || process.env.VITE_APP_ENVIRONMENT !== 'production' || !id.includes('node_modules')) return null
       const sanitized = code
         .replaceAll('"http://localhost"', '"https://license.aixcc.top"')
         .replaceAll("'http://localhost'", "'https://license.aixcc.top'")
