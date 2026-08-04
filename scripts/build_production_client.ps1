@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "1.0.5"
+    [string]$Version = "1.3.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -64,8 +64,8 @@ $AppName = (& $Python -c "from app.core.version import APP_NAME; print(APP_NAME)
 if ($ActualVersion -ne $Version) {
     throw "Requested version $Version does not match application version $ActualVersion"
 }
-if ((git branch --show-current).Trim() -ne "v1.0.5") {
-    throw "Production client must be built from branch v1.0.5"
+if ((git branch --show-current).Trim() -ne "v1.3") {
+    throw "Production client must be built from branch v1.3"
 }
 
 $Ffmpeg = Join-Path $ProjectRoot "tools\ffmpeg\ffmpeg.exe"
@@ -168,7 +168,7 @@ OnlineActivationAcceptance=NOT COMPLETED - production HTTPS is not available yet
 "@
 Set-Content -LiteralPath (Join-Path $ReleaseRoot "RELEASE-MANIFEST.txt") -Encoding UTF8 -Value $Manifest
 $Report = @"
-# PMSystem 1.0.5 Production Client Build Report
+# PMSystem $Version Production Client Build Report
 
 - Build result: succeeded
 - Build time (UTC): $BuildTime

@@ -387,7 +387,7 @@ chmod 600 /opt/pmsystem-license/config/.env.production
 | 脚本 | 实际职责 | 边界 |
 |---|---|---|
 | `precheck.sh` | root、命令、x86_64、Docker/Compose/Nginx、资源、端口、DNS和目录只读检查 | 不创建资源 |
-| `load-images.sh` | 校验并加载旧离线包镜像、检查平台 | 仍期望 API 标签 `<VERSION>`；统一构建为 `<VERSION>-production`，不匹配时不要执行 |
+| `load-images.sh` | 校验并加载离线包镜像、检查平台 | 生产 API 标签固定为 `<VERSION>-production`，不会创建无后缀兼容标签 |
 | `init-production.sh` | 首次生成 `.env.production`、Ed25519 密钥和随机秘密 | 默认拒绝覆盖；普通发布禁止 `--force` |
 | `install-release.sh` | 校验、安装纯版本目录、切 current、同步 Admin、复制脚本、保护 Nginx | 不启动容器；同版本重发会拒绝 |
 | `migrate.sh` | 启动/等待 PostgreSQL，执行 `upgrade head` 并显示前后 revision | 不启动 API、不 downgrade |
@@ -406,7 +406,7 @@ find scripts -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
 find scripts -type f -name '*.sh' -exec bash -n {} \;
 bash scripts/precheck.sh
 
-# 按第16章加载镜像；标签不匹配时禁止盲用 load-images.sh。
+# 按第16章加载镜像；`load-images.sh` 会校验 `<VERSION>-production` 标签和 linux/amd64 平台。
 bash scripts/init-production.sh
 bash scripts/install-release.sh "$PWD"
 bash /opt/pmsystem-license/current/scripts/migrate.sh
@@ -678,7 +678,7 @@ docker image inspect postgres:17.5-alpine \
   --format '{{.Id}} {{.Os}}/{{.Architecture}}'
 ```
 
-必须为 `linux/amd64`，并保留旧镜像。当前 `load-images.sh` 仍检查 `pmsystem-license-api:<VERSION>`，与统一构建标签不一致；未修复前使用上述明确命令，不得为通过脚本而覆盖旧标签。
+必须为 `linux/amd64`，并保留旧镜像。`load-images.sh` 与统一构建均使用 `pmsystem-license-api:<VERSION>-production`，不得额外创建无 `-production` 后缀的标签。
 
 ### 16.2 路径 B：服务器构建
 

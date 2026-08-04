@@ -3,7 +3,7 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
-import { environmentLabel } from '@/config/environment'
+import { appVersion, environmentLabel } from '@/config/environment'
 import { DataAnalysis, Key, Plus, Document, Tickets, Setting, User, SwitchButton, Timer } from '@element-plus/icons-vue'
 
 const route = useRoute(); const router = useRouter(); const auth = useAuthStore(); const theme = useThemeStore()
@@ -26,11 +26,11 @@ async function logout() { await auth.logout(); await router.replace({ name: 'log
     </aside>
     <main class="main">
       <header class="topbar">
-        <span class="environment" data-testid="environment-label">{{ environmentLabel }}</span>
+        <div class="release-info"><span class="environment" data-testid="environment-label">{{ environmentLabel }}</span><span class="version" data-testid="app-version">V{{ appVersion }}</span></div>
         <div class="top-actions"><el-select :model-value="theme.mode" size="small" style="width:110px" @change="theme.setMode($event as ThemeMode)"><el-option label="跟随系统" value="system"/><el-option label="浅色" value="light"/><el-option label="深色" value="dark"/></el-select><span>{{ auth.user?.displayName }}</span><el-tag size="small" effect="plain">{{ auth.user?.role }}</el-tag></div>
       </header>
       <router-view />
     </main>
   </div>
 </template>
-<style scoped>.shell{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;background:var(--sidebar);display:flex;flex-direction:column;color:#eef5f2}.brand{height:72px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid #ffffff18}.brand-mark{width:34px;height:34px;display:grid;place-items:center;background:#2d8b6d;border-radius:6px;font-weight:800}.brand strong,.brand span{display:block}.brand span{font-size:12px;color:#aab9b3;margin-top:2px}.nav{flex:1;border:0;background:transparent;padding:12px 8px;--el-menu-text-color:#aebbb6;--el-menu-hover-bg-color:#ffffff10;--el-menu-active-color:#fff;--el-menu-bg-color:transparent}.nav :deep(.el-menu-item){height:44px;border-radius:5px;margin:2px 0}.nav :deep(.el-menu-item.is-active){background:#2b765f}.sidebar-bottom{padding:14px;border-top:1px solid #ffffff18}.logout{width:100%;height:38px;display:flex;align-items:center;justify-content:center;gap:8px;border:0;background:transparent;color:#b9c4c0;cursor:pointer}.main{min-width:0;background:var(--app-bg)}.topbar{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:var(--surface);border-bottom:1px solid var(--border)}.environment{font-size:12px;color:#8a5a10;background:#fff3d6;border:1px solid #e8cc90;border-radius:4px;padding:3px 8px}.top-actions{display:flex;align-items:center;gap:12px;font-size:13px}</style>
+<style scoped>.shell{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;background:var(--sidebar);display:flex;flex-direction:column;color:#eef5f2}.brand{height:72px;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid #ffffff18}.brand-mark{width:34px;height:34px;display:grid;place-items:center;background:#2d8b6d;border-radius:6px;font-weight:800}.brand strong,.brand span{display:block}.brand span{font-size:12px;color:#aab9b3;margin-top:2px}.nav{flex:1;border:0;background:transparent;padding:12px 8px;--el-menu-text-color:#aebbb6;--el-menu-hover-bg-color:#ffffff10;--el-menu-active-color:#fff;--el-menu-bg-color:transparent}.nav :deep(.el-menu-item){height:44px;border-radius:5px;margin:2px 0}.nav :deep(.el-menu-item.is-active){background:#2b765f}.sidebar-bottom{padding:14px;border-top:1px solid #ffffff18}.logout{width:100%;height:38px;display:flex;align-items:center;justify-content:center;gap:8px;border:0;background:transparent;color:#b9c4c0;cursor:pointer}.main{min-width:0;background:var(--app-bg)}.topbar{height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:var(--surface);border-bottom:1px solid var(--border)}.release-info{display:flex;align-items:center;gap:8px}.environment{font-size:12px;color:#8a5a10;background:#fff3d6;border:1px solid #e8cc90;border-radius:4px;padding:3px 8px}.version{font-size:12px;color:var(--text-muted)}.top-actions{display:flex;align-items:center;gap:12px;font-size:13px}</style>

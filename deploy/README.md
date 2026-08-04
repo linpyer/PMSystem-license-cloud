@@ -30,5 +30,5 @@ images without embedding any server environment file or secret. The legacy
 `production-nginx/build-production-release.ps1` entry now delegates to this unified implementation.
 
 The repository root `VERSION` is the release version source. API and admin package metadata must
-match it or the build stops. Production builds require branch `v1.0.5`, a clean worktree,
+match it or the build stops. Production builds require branch `v1.3`, a clean worktree,
 `https://license.aixcc.top/api/v1`, the `生产环境` label, and all security checks.

@@ -11,7 +11,7 @@ ROOT = Path(__file__).parents[1]
 
 
 def test_application_version_and_product_names():
-    assert APP_VERSION == "1.0.5"
+    assert APP_VERSION == "1.3.0"
     assert APP_NAME == "电商打包发货监控溯源系统"
     assert PRODUCTION_LICENSE_API_BASE_URL == "https://license.aixcc.top/api/v1"
     assert PRODUCTION_LICENSE_KEY_ID == "production-2026-01"

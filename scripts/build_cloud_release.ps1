@@ -244,7 +244,7 @@ function Invoke-AdminBuild {
             Invoke-Checked $script:npm @('test') '前端单元测试失败'
         }
         $savedEnvironment = @{}
-        foreach ($name in @('NODE_ENV', 'VITE_API_BASE_URL', 'VITE_APP_ENVIRONMENT', 'VITE_APP_ENV_LABEL', 'VITE_APP_TITLE', 'VITE_BASE_PATH')) {
+        foreach ($name in @('NODE_ENV', 'VITE_API_BASE_URL', 'VITE_APP_ENVIRONMENT', 'VITE_APP_ENV_LABEL', 'VITE_APP_TITLE', 'VITE_APP_VERSION', 'VITE_BASE_PATH')) {
             $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         }
         try {
@@ -253,6 +253,7 @@ function Invoke-AdminBuild {
             $env:VITE_APP_ENVIRONMENT = $EnvironmentConfig.AdminEnvironment
             $env:VITE_APP_ENV_LABEL = $EnvironmentConfig.AdminLabel
             $env:VITE_APP_TITLE = $EnvironmentConfig.AdminTitle
+            $env:VITE_APP_VERSION = $script:releaseVersion
             $env:VITE_BASE_PATH = $EnvironmentConfig.AdminBasePath
             $buildCommand = if ($Environment -eq 'production') { 'build:production' } else { 'build:app' }
             Invoke-Checked $script:npm @('run', $buildCommand) '前端构建失败'

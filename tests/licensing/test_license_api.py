@@ -92,7 +92,7 @@ def test_activate_sends_client_metadata_without_logging_code(caplog):
     with caplog.at_level(logging.INFO):
         client().activate(CODE, identity)
     body = responses.calls[0].request.body.decode()
-    assert CODE in body and '"appVersion": "1.0.5"' in body
+    assert CODE in body and '"appVersion": "1.3.0"' in body
     assert CODE not in caplog.text
 
 

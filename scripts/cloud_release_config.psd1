@@ -1,6 +1,6 @@
 ﻿@{
     ProjectName = 'PMSystem License Cloud'
-    ProductionBranch = 'v1.0.5'
+    ProductionBranch = 'v1.3'
     VersionFile = 'VERSION'
     Environments = @{
         local = @{

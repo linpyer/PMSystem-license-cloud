@@ -3,8 +3,8 @@ from __future__ import annotations
 
 CHANGELOG_ENTRIES: list[dict[str, list[str] | str]] = [
     {
-        "version": "v1.0.5",
-        "date": "2026-07-15",
+        "version": "v1.3.0",
+        "date": "2026-08-04",
         "features": [
             "新增7天免费试用，首次使用可直接体验完整录制功能",
             "授权失效后仍可查询和播放历史视频",

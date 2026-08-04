@@ -14,16 +14,16 @@ The API startup lifespan derives the Ed25519 public key from the mounted private
 
 ## Offline package installation
 
-Upload both the release archive and its `.sha256.txt` file to the server. Then run:
+Upload the release archive and its `SHA256SUMS.txt` file to the server. Then run:
 
 ```bash
-cd /opt/pmsystem-license
-sha256sum -c PMSystem-License-Production-1.0.5.tar.gz.sha256.txt
-mkdir -p /opt/pmsystem-license/release/1.0.5
-tar -xzf PMSystem-License-Production-1.0.5.tar.gz \
+cd /opt/pmsystem-license/incoming/1.3.0
+sha256sum -c SHA256SUMS.txt
+mkdir -p /opt/pmsystem-license/release/1.3.0-<short-git-sha>
+tar -xzf PMSystem-License-Cloud-1.3.0-production-all.tar.gz \
   --strip-components=1 \
-  -C /opt/pmsystem-license/release/1.0.5
-cd /opt/pmsystem-license/release/1.0.5
+  -C /opt/pmsystem-license/release/1.3.0-<short-git-sha>
+cd /opt/pmsystem-license/release/1.3.0-<short-git-sha>
 
 bash scripts/precheck.sh
 bash scripts/load-images.sh

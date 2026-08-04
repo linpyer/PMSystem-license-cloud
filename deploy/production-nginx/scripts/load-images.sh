@@ -15,7 +15,7 @@ checksum_line="$(grep -F "  images/$(basename "${image_tar}")" "${RELEASE_ROOT}/
 
 docker load --input "${image_tar}"
 version="$(tr -d '\r\n' < "${RELEASE_ROOT}/RELEASE-VERSION.txt")"
-for image in "pmsystem-license-api:${version}" "postgres:17.5-alpine"; do
+for image in "pmsystem-license-api:${version}-production" "postgres:17.5-alpine"; do
   docker image inspect "${image}" >/dev/null 2>&1 || fail "Loaded archive does not contain ${image}"
   platform="$(docker image inspect "${image}" --format '{{.Os}}/{{.Architecture}}')"
   [[ "${platform}" == "linux/amd64" ]] || fail "${image} has unsupported platform ${platform}"

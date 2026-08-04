@@ -195,7 +195,7 @@ cd "E:\AI-Project\PM System"
 
 ## 打包和制作安装包
 
-当前版本由 `app/core/version.py` 中的 `APP_VERSION` 统一维护。软件可以使用 PyInstaller 打包为 onedir 程序目录，再使用 Inno Setup 制作 Windows 安装包。目标电脑不需要安装 Python，不需要安装 SQLite，也不需要部署任何数据库服务。
+当前正式产品版本为 `1.3.0`，由 `app/core/version.py` 中的 `APP_VERSION` 统一维护。软件可以使用 PyInstaller 打包为 onedir 程序目录，再使用 Inno Setup 制作 Windows 安装包。目标电脑不需要安装 Python，不需要安装 SQLite，也不需要部署任何数据库服务。
 
 安装依赖：
 
