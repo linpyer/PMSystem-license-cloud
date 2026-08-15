@@ -416,7 +416,14 @@ function Export-ApiImage {
     New-Item -ItemType Directory -Path $imagesRoot -Force | Out-Null
     $imageTar = Join-Path $imagesRoot "ddrec-$Environment-images-$script:releaseVersion.tar"
     if ($Environment -eq 'production') {
-        Invoke-Checked $script:docker @('pull', '--platform', 'linux/amd64', 'postgres:17.5-alpine') 'PostgreSQL 基础镜像准备失败'
+        if ([string]::IsNullOrWhiteSpace($OfflineBaseApiImage)) {
+            Invoke-Checked $script:docker @('pull', '--platform', 'linux/amd64', 'postgres:17.5-alpine') 'PostgreSQL 基础镜像准备失败'
+        } else {
+            $postgresPlatform = (& $script:docker image inspect 'postgres:17.5-alpine' --format '{{.Os}}/{{.Architecture}}').Trim()
+            if ($LASTEXITCODE -ne 0 -or $postgresPlatform -ne 'linux/amd64') {
+                throw '离线生产构建要求本地已有 linux/amd64 的 postgres:17.5-alpine。'
+            }
+        }
         Invoke-Checked $script:docker @('save', '--output', $imageTar, $imageTag, 'postgres:17.5-alpine') '生产镜像导出失败'
     } else {
         Invoke-Checked $script:docker @('save', '--output', $imageTar, $imageTag) '本地镜像导出失败'
