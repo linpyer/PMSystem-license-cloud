@@ -398,7 +398,7 @@ function Export-ApiImage {
         New-Item -ItemType Directory -Path $buildContext -Force | Out-Null
         Invoke-Checked $script:pythonBuildPath @(
             '-m', 'pip', 'wheel', '--disable-pip-version-check', '--no-deps',
-            '--no-build-isolation', '--wheel-dir', $buildContext, $script:serverRoot
+            '--wheel-dir', $buildContext, $script:serverRoot
         ) '生成离线 API wheel 失败'
         Copy-Item -LiteralPath (Join-Path $script:serverRoot 'Dockerfile.offline-upgrade') -Destination $buildContext
         Copy-Item -LiteralPath (Join-Path $script:serverRoot 'alembic.ini') -Destination $buildContext
