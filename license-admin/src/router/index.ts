@@ -20,6 +20,7 @@ const router = createRouter({
         { path: 'license-events', name: 'license-events', component: () => import('@/views/audit/LicenseEventsView.vue') },
         { path: 'admin-audit', name: 'admin-audit', component: () => import('@/views/audit/AdminAuditView.vue') },
         { path: 'version-policy', name: 'version-policy', component: () => import('@/views/versions/VersionPolicyView.vue') },
+        { path: 'client-updates', name: 'client-updates', component: () => import('@/views/updates/ClientReleaseView.vue') },
         { path: 'account', name: 'account', component: () => import('@/views/account/AccountSecurityView.vue') },
       ],
     },

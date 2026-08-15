@@ -62,6 +62,7 @@ config.json
 .env.*
 *private*.pem
 *private*.key
+**/.ddrec/keys/
 secrets/
 **/secrets/
 

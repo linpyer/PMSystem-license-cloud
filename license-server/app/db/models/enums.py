@@ -82,3 +82,9 @@ class DeviceTrialStatus(StrEnum):
     CONVERTED = "CONVERTED"
     DISABLED = "DISABLED"
     DELETED = "DELETED"
+
+
+class ClientReleaseStatus(StrEnum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+    WITHDRAWN = "withdrawn"

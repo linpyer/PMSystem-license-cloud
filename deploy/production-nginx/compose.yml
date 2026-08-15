@@ -51,6 +51,14 @@ services:
         source: /opt/ddrec-license/secrets/production_ed25519_private.pem
         target: /run/secrets/license_signing_private_key.pem
         read_only: true
+      - type: bind
+        source: /opt/ddrec-license/config/update_ed25519_public.pem
+        target: /run/config/update_ed25519_public.pem
+        read_only: true
+      - type: bind
+        source: /var/www/ddrec-downloads
+        target: /var/www/ddrec-downloads
+        read_only: true
     security_opt:
       - no-new-privileges:true
     healthcheck:

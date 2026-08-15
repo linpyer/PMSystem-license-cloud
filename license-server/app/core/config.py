@@ -96,6 +96,16 @@ class Settings(BaseSettings):
     service_version: str = Field(default="1.3.0", alias="LICENSE_SERVICE_VERSION")
     build_commit: str = Field(default="development", alias="LICENSE_BUILD_COMMIT")
     rate_limit_enabled: bool = Field(default=True, alias="LICENSE_RATE_LIMIT_ENABLED")
+    update_download_root: Path = Field(
+        default=Path("/var/www/ddrec-downloads"), alias="DDREC_UPDATE_DOWNLOAD_ROOT"
+    )
+    update_download_base_url: str = Field(
+        default="https://download.aixcc.top", alias="DDREC_UPDATE_DOWNLOAD_BASE_URL"
+    )
+    update_signing_public_key_path: Path = Field(
+        default=Path("config/update_ed25519_public.pem"),
+        alias="DDREC_UPDATE_SIGNING_PUBLIC_KEY_PATH",
+    )
 
     @property
     def admin_allowed_origins(self) -> list[str]:
@@ -140,6 +150,7 @@ class Settings(BaseSettings):
             for name, value in (
                 ("LICENSE_PUBLIC_BASE_URL", self.public_base_url),
                 ("LICENSE_ADMIN_BASE_URL", self.admin_base_url),
+                ("DDREC_UPDATE_DOWNLOAD_BASE_URL", self.update_download_base_url),
             ):
                 if urlparse(value).scheme.lower() != "https":
                     raise ValueError(f"{name} must use HTTPS in production")

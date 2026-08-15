@@ -1,0 +1,35 @@
+# Enable this server only after download.aixcc.top resolves to this host and a certificate exists.
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name download.aixcc.top;
+
+    ssl_certificate /etc/letsencrypt/live/download.aixcc.top/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/download.aixcc.top/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    root /var/www/ddrec-downloads;
+    autoindex off;
+    access_log /var/log/nginx/ddrec-downloads-access.log;
+    error_log /var/log/nginx/ddrec-downloads-error.log warn;
+
+    location = / {
+        return 404;
+    }
+
+    location ~ ^/releases/(stable|dev)/(standard|license)/[0-9]+\.[0-9]+\.[0-9]+/DDREC-[0-9]+\.[0-9]+\.[0-9]+-(standard|license|license-local)-Setup\.exe$ {
+        try_files $uri =404;
+        limit_rate_after 1m;
+        limit_rate 4m;
+        sendfile on;
+        tcp_nopush on;
+        add_header Accept-Ranges bytes always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        default_type application/octet-stream;
+    }
+
+    location / {
+        return 404;
+    }
+}

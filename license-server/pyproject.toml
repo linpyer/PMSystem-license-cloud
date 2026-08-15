@@ -31,9 +31,10 @@ dev = [
 ]
 
 [project.scripts]
-pms-license-create = "app.cli.create_license:main"
-pms-license-generate-dev-keys = "app.cli.generate_dev_keys:main"
-pms-license-cleanup-expired = "app.cli.cleanup_expired:main"
+ddrec-license-create = "app.cli.create_license:main"
+ddrec-license-generate-dev-keys = "app.cli.generate_dev_keys:main"
+ddrec-license-cleanup-expired = "app.cli.cleanup_expired:main"
+ddrec-license-import-update-draft = "app.cli.import_client_release_draft:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

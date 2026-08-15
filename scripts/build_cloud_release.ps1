@@ -335,6 +335,7 @@ function Copy-DeploymentFiles {
     }
     Copy-FilteredTree (Join-Path $deployRoot 'scripts') (Join-Path $Destination 'scripts') -ExcludedDirectories @() -ExcludedFiles @() -ExcludedExtensions @()
     Copy-FilteredTree (Join-Path $deployRoot 'nginx') (Join-Path $Destination 'nginx') -ExcludedDirectories @() -ExcludedFiles @() -ExcludedExtensions @()
+    Copy-FilteredTree (Join-Path $deployRoot 'config') (Join-Path $Destination 'config') -ExcludedDirectories @() -ExcludedFiles @() -ExcludedExtensions @()
     $envPath = Join-Path $Destination 'env.production.example'
     $envText = Get-Content -LiteralPath $envPath -Raw -Encoding UTF8
     $imageTag = "$script:releaseVersion-production"
@@ -355,6 +356,7 @@ function Copy-ProductionComponentFiles {
         foreach ($name in @('common.sh', 'migrate.sh', 'verify.sh')) {
             Copy-Item -LiteralPath (Join-Path $deployRoot "scripts\$name") -Destination (Join-Path $Destination "scripts\$name")
         }
+        Copy-FilteredTree (Join-Path $deployRoot 'config') (Join-Path $Destination 'config') -ExcludedDirectories @() -ExcludedFiles @() -ExcludedExtensions @()
         $envPath = Join-Path $Destination 'env.production.example'
         $envText = Get-Content -LiteralPath $envPath -Raw -Encoding UTF8
         $envText = [regex]::Replace($envText, '(?m)^DDREC_API_IMAGE_TAG=.*$', "DDREC_API_IMAGE_TAG=$script:releaseVersion-production")

@@ -65,6 +65,8 @@ class ApplicationRateLimiter:
     @staticmethod
     def _rules(request: Request, body: bytes, client_ip: str | None) -> list[LimitRule]:
         path = request.url.path
+        if request.method == "GET" and path.endswith("/client-updates/latest"):
+            return [LimitRule("client-update-ip", client_ip or "unknown", 60, 60)]
         if request.method not in {"POST", "PATCH", "PUT", "DELETE"}:
             return []
         ip_key = client_ip or "unknown"

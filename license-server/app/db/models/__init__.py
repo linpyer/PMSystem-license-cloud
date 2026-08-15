@@ -3,6 +3,7 @@ from app.db.models.admin_login_attempt import AdminLoginAttempt
 from app.db.models.admin_session import AdminSession
 from app.db.models.admin_user import AdminUser
 from app.db.models.app_version_policy import AppVersionPolicy
+from app.db.models.client_release import ClientRelease
 from app.db.models.device_binding import DeviceBinding
 from app.db.models.device_trial import DeviceTrial
 from app.db.models.idempotency_request import IdempotencyRequest
@@ -16,6 +17,7 @@ __all__ = [
     "AdminSession",
     "AdminUser",
     "AppVersionPolicy",
+    "ClientRelease",
     "DeviceBinding",
     "DeviceTrial",
     "IdempotencyRequest",
