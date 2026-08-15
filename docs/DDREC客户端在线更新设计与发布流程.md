@@ -19,7 +19,7 @@ DD Rec 在主窗口显示后延迟 7 秒后台访问 `GET https://license.aixcc.
 1. 在干净的 `v1.3` 分支执行正式客户端构建。`scripts/build_client.ps1` 动态读取版本、BuildNumber 与 GitCommit，并同时构建 `DDREC.exe` 和 `DDREC-Updater.exe`。
 2. 确认安装包名称为 `DDREC-<version>-standard-Setup.exe` 或 `DDREC-<version>-license-Setup.exe`。同版本重新构建必须提高 BuildNumber，已发布文件不可覆盖。
 3. 执行 `scripts/publish_client_update.ps1`。脚本读取 RELEASE-MANIFEST、重新计算 SHA-256、生成规范化 Manifest，并使用工作站外部私钥签名。
-4. 脚本先上传到 `/opt/ddrec-updates/incoming/` 的 `.part` 文件，服务器复核大小和 SHA-256，再复制到正式文件系统的隐藏临时文件，并在同一目录原子 rename 为 `/var/www/ddrec-downloads/releases/<channel>/<edition>/<version>/...`。
+4. 脚本先上传到 `/opt/ddrec-updates/incoming/` 的 `.part` 文件，服务器复核大小和 SHA-256，再复制到正式文件系统的隐藏临时文件，并在同一目录原子 rename 为 `/var/www/ddrec-downloads/releases/<channel>/<edition>/<version>/<buildNumber>/...`。BuildNumber 目录确保同一 ProductVersion 的更高 Build 不覆盖历史安装包；Nginx 同时保留对早期无 BuildNumber 路径的只读兼容。
 5. 脚本通过服务器 CLI 创建 `client_releases` 草稿，不会自动发布。
 6. OWNER 登录“DD Rec 授权管理 → 客户端更新”，复核版本、Build、Edition、环境、更新说明、SHA-256 和 GitCommit，然后点击发布。API 会再次检查文件、大小、SHA-256、Ed25519 签名及唯一键；任一失败都禁止发布。
 7. 需要停止分发时使用“下架”。已发布记录不删除，下架后立即不再被公开接口选中。
