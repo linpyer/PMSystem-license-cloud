@@ -592,10 +592,14 @@ try {
 
     $payloadFiles = @(Get-ChildItem -LiteralPath $payloadRoot -Recurse -File)
     Assert-NoSensitiveMaterial ($payloadFiles | Select-Object -ExpandProperty FullName) '最终发布目录'
+    $allowedUpdatePublicKey = [System.IO.Path]::GetFullPath((Join-Path $payloadRoot 'config\update_ed25519_public.pem'))
     $blocked = @($payloadFiles | Where-Object {
+        $extension = $_.Extension.ToLowerInvariant()
+        $isBlockedExtension = $extension -in @('.db', '.sqlite', '.sqlite3', '.dump', '.backup', '.key') -or
+            ($extension -eq '.pem' -and -not $_.FullName.Equals($allowedUpdatePublicKey, [StringComparison]::OrdinalIgnoreCase))
         $_.Name -in @('.env', '.env.production') -or
         $_.FullName -match '(?i)[\\/](?:node_modules|\.venv|venv|__pycache__|\.git|\.secrets)[\\/]' -or
-        $_.Extension.ToLowerInvariant() -in @('.db', '.sqlite', '.sqlite3', '.dump', '.backup', '.pem', '.key')
+        $isBlockedExtension
     })
     if ($blocked.Count -gt 0) {
         $blocked | ForEach-Object { Write-Host "禁止打包：$($_.FullName)" -ForegroundColor Red }
