@@ -1,7 +1,7 @@
 # Enable this server only after download.aixcc.top resolves to this host and a certificate exists.
 server {
     listen 443 ssl;
-    listen [::]:443 ssl ipv6only=on;
+    listen [::]:443 ssl;
     server_name download.aixcc.top;
 
     ssl_certificate /etc/letsencrypt/live/download.aixcc.top/fullchain.pem;
