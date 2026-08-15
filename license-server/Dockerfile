@@ -1,3 +1,6 @@
+ARG DDREC_VERSION=development
+ARG DDREC_GIT_COMMIT=development
+
 FROM python:3.12.10-slim-bookworm AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -8,6 +11,15 @@ COPY app ./app
 RUN python -m pip wheel --constraint constraints.txt --wheel-dir /wheels .
 
 FROM python:3.12.10-slim-bookworm AS runtime
+
+ARG DDREC_VERSION
+ARG DDREC_GIT_COMMIT
+
+LABEL org.opencontainers.image.title="DDREC License API" \
+      org.opencontainers.image.version="${DDREC_VERSION}" \
+      org.opencontainers.image.revision="${DDREC_GIT_COMMIT}" \
+      com.ddrec.environment="production" \
+      com.ddrec.build.mode="full"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

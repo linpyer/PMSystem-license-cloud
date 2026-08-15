@@ -13,7 +13,9 @@ param(
 
     [switch]$Clean,
     [switch]$SkipTests,
-    [switch]$ExportDockerImage
+    [switch]$ExportDockerImage,
+
+    [string]$OfflineBaseApiImage
 )
 
 $ErrorActionPreference = 'Stop'
@@ -314,7 +316,7 @@ function Invoke-ComposeCheck {
 function Copy-ApiRelease {
     param([Parameter(Mandatory = $true)][string]$Destination)
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-    foreach ($name in @('Dockerfile', '.dockerignore', 'pyproject.toml', 'constraints.txt', 'README.md', 'alembic.ini')) {
+    foreach ($name in @('Dockerfile', 'Dockerfile.offline-upgrade', '.dockerignore', 'pyproject.toml', 'constraints.txt', 'README.md', 'alembic.ini')) {
         Copy-Item -LiteralPath (Join-Path $script:serverRoot $name) -Destination (Join-Path $Destination $name)
     }
     Copy-FilteredTree (Join-Path $script:serverRoot 'app') (Join-Path $Destination 'app')
@@ -380,7 +382,34 @@ function Export-ApiImage {
     Write-Host '构建并导出 API Docker 镜像...'
     Invoke-Checked $script:docker @('version') 'Docker 引擎不可用'
     $imageTag = "ddrec-license-api:$script:releaseVersion-$Environment"
-    Invoke-Checked $script:docker @('buildx', 'build', '--platform', 'linux/amd64', '--load', '--tag', $imageTag, $script:serverRoot) 'API 镜像构建失败'
+    $buildArguments = @(
+        'buildx', 'build', '--platform', 'linux/amd64', '--load', '--tag', $imageTag,
+        '--build-arg', "DDREC_VERSION=$script:releaseVersion",
+        '--build-arg', "DDREC_GIT_COMMIT=$script:commit"
+    )
+    $buildContext = $script:serverRoot
+    if (-not [string]::IsNullOrWhiteSpace($OfflineBaseApiImage)) {
+        if ($Environment -ne 'production') { throw '离线基础镜像只允许用于 production 构建。' }
+        $basePlatform = (& $script:docker image inspect $OfflineBaseApiImage --format '{{.Os}}/{{.Architecture}}').Trim()
+        if ($LASTEXITCODE -ne 0 -or $basePlatform -ne 'linux/amd64') {
+            throw "离线基础镜像必须已存在且为 linux/amd64：$OfflineBaseApiImage"
+        }
+        $buildContext = Join-Path $script:scratchRoot 'offline-image-context'
+        New-Item -ItemType Directory -Path $buildContext -Force | Out-Null
+        Invoke-Checked $script:pythonBuildPath @(
+            '-m', 'pip', 'wheel', '--disable-pip-version-check', '--no-deps',
+            '--no-build-isolation', '--wheel-dir', $buildContext, $script:serverRoot
+        ) '生成离线 API wheel 失败'
+        Copy-Item -LiteralPath (Join-Path $script:serverRoot 'Dockerfile.offline-upgrade') -Destination $buildContext
+        Copy-Item -LiteralPath (Join-Path $script:serverRoot 'alembic.ini') -Destination $buildContext
+        Copy-Item -LiteralPath (Join-Path $script:serverRoot 'alembic') -Destination $buildContext -Recurse
+        $buildArguments += @(
+            '--file', (Join-Path $buildContext 'Dockerfile.offline-upgrade'),
+            '--build-arg', "BASE_API_IMAGE=$OfflineBaseApiImage"
+        )
+    }
+    $buildArguments += $buildContext
+    Invoke-Checked $script:docker $buildArguments 'API 镜像构建失败'
     $script:imageDigest = (& $script:docker image inspect $imageTag --format '{{.Id}}').Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($script:imageDigest)) { throw '无法读取 API 镜像摘要。' }
     $imagesRoot = Join-Path $PayloadRoot 'images'

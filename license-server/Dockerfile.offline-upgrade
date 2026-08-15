@@ -1,0 +1,23 @@
+ARG BASE_API_IMAGE
+FROM ${BASE_API_IMAGE}
+
+ARG DDREC_VERSION
+ARG DDREC_GIT_COMMIT
+
+USER root
+COPY ddrec_license_server-*.whl /tmp/
+RUN python -m pip uninstall -y pmsystem-license-server ddrec-license-server \
+    && python -m pip install --no-index --no-deps /tmp/ddrec_license_server-*.whl \
+    && rm -f /tmp/ddrec_license_server-*.whl
+
+WORKDIR /srv/license-server
+COPY --chown=license:license alembic.ini ./
+COPY --chown=license:license alembic ./alembic
+
+LABEL org.opencontainers.image.title="DDREC License API" \
+      org.opencontainers.image.version="${DDREC_VERSION}" \
+      org.opencontainers.image.revision="${DDREC_GIT_COMMIT}" \
+      com.ddrec.environment="production" \
+      com.ddrec.build.mode="offline-production-upgrade"
+
+USER 10001:10001
