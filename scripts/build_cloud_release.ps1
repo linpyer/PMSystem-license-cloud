@@ -533,6 +533,7 @@ try {
     }
 
     Write-Utf8File (Join-Path $payloadRoot 'RELEASE-VERSION.txt') @($releaseVersion)
+    Write-Utf8File (Join-Path $payloadRoot 'RELEASE-GIT-COMMIT.txt') @($commit)
     $migrationHead = Get-DatabaseMigrationHead
     $internalManifest = @(
         "Project: $($config.ProjectName)",

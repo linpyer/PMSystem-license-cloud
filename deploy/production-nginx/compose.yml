@@ -1,4 +1,4 @@
-name: ddrec-license-production
+name: ${DDREC_COMPOSE_PROJECT_NAME:-ddrec-license-production}
 
 x-json-logging: &json-logging
   driver: json-file
@@ -48,15 +48,15 @@ services:
       - /tmp:size=64m,mode=1777
     volumes:
       - type: bind
-        source: /opt/ddrec-license/secrets/production_ed25519_private.pem
+        source: ${DDREC_LICENSE_SIGNING_PRIVATE_KEY_HOST_PATH:-/opt/ddrec-license/secrets/production_ed25519_private.pem}
         target: /run/secrets/license_signing_private_key.pem
         read_only: true
       - type: bind
-        source: /opt/ddrec-license/config/update_ed25519_public.pem
+        source: ${DDREC_UPDATE_SIGNING_PUBLIC_KEY_HOST_PATH:-/opt/ddrec-license/config/update_ed25519_public.pem}
         target: /run/config/update_ed25519_public.pem
         read_only: true
       - type: bind
-        source: /var/www/ddrec-downloads
+        source: ${DDREC_UPDATE_DOWNLOAD_ROOT_HOST:-/var/www/ddrec-downloads}
         target: /var/www/ddrec-downloads
         read_only: true
     security_opt:
@@ -76,3 +76,4 @@ networks:
 
 volumes:
   ddrec_license_postgres_data:
+    name: ${DDREC_POSTGRES_VOLUME_NAME:-ddrec-license-production_ddrec_license_postgres_data}

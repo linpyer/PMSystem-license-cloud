@@ -14,8 +14,7 @@ require_value POSTGRES_PASSWORD
 wait_for_health postgres 20
 
 backup_dir="${DDREC_ROOT}/backups"
-[[ "${backup_dir}" == /opt/ddrec-license/backups ]] \
-  || fail "Unsafe backup directory: ${backup_dir}"
+assert_backup_directory "${backup_dir}"
 backup_file="${1:-}"
 target_database="${2:-}"
 [[ -n "${backup_file}" && -n "${target_database}" ]] \
@@ -29,7 +28,7 @@ require_file "${backup_file}.sha256"
 sha256sum --check "${backup_file}.sha256"
 [[ "${target_database}" != "${POSTGRES_DB}" ]] \
   || fail "Direct production database restore is prohibited"
-[[ "${target_database}" =~ ^ddrec_license_restore_[a-zA-Z0-9_]+$ ]] \
+[[ "${target_database}" =~ ^(ddrec|pmsystem)_license_restore_[a-zA-Z0-9_]+$ ]] \
   || fail "Target must be a dedicated temporary restore database"
 [[ -t 0 ]] || fail "Restore confirmation requires an interactive terminal"
 expected="RESTORE-TEST ${target_database}"

@@ -16,8 +16,7 @@ require_value POSTGRES_PASSWORD
 wait_for_health postgres 20
 
 backup_dir="${DDREC_ROOT}/backups"
-[[ "${backup_dir}" == /opt/ddrec-license/backups ]] \
-  || fail "Unsafe backup directory: ${backup_dir}"
+assert_backup_directory "${backup_dir}"
 require_directory "${backup_dir}"
 
 backup_file="${1:-}"

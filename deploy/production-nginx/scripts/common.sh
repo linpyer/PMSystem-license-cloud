@@ -2,6 +2,9 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${DDREC_ROOT:-}" && -d /opt/pmsystem-license/config && ! -d /opt/ddrec-license/config ]]; then
+  DDREC_ROOT=/opt/pmsystem-license
+fi
 DDREC_ROOT="${DDREC_ROOT:-/opt/ddrec-license}"
 ENV_FILE="${DDREC_ENV_FILE:-${DDREC_ROOT}/config/.env.production}"
 CURRENT_LINK="${DDREC_ROOT}/current"
@@ -24,12 +27,29 @@ require_file() { [[ -f "$1" ]] || fail "Required file not found: $1"; }
 require_directory() { [[ -d "$1" ]] || fail "Required directory not found: $1"; }
 require_value() { local name="$1"; [[ -n "${!name:-}" ]] || fail "Required value is empty: ${name}"; }
 
+assert_production_root() {
+  case "${DDREC_ROOT}" in
+    /opt/ddrec-license|/opt/pmsystem-license) ;;
+    *) fail "Unsafe production root: ${DDREC_ROOT}" ;;
+  esac
+}
+
+assert_backup_directory() {
+  local directory="$1"
+  assert_production_root
+  [[ "${directory}" == "${DDREC_ROOT}/backups" ]] \
+    || fail "Unsafe backup directory: ${directory}"
+}
+
 load_environment() {
   require_file "${ENV_FILE}"
   set -a
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
   set +a
+  DDREC_ADMIN_ROOT="${DDREC_ADMIN_ROOT:-/var/www/ddrec-license/admin}"
+  DDREC_LICENSE_NGINX_CONF="${DDREC_LICENSE_NGINX_CONF:-/etc/nginx/conf.d/ddrec-license.conf}"
+  DDREC_LICENSE_SIGNING_PRIVATE_KEY_HOST_PATH="${DDREC_LICENSE_SIGNING_PRIVATE_KEY_HOST_PATH:-${DDREC_ROOT}/secrets/production_ed25519_private.pem}"
   export DDREC_ENV_FILE="${ENV_FILE}"
 }
 
@@ -53,7 +73,7 @@ wait_for_health() {
 }
 
 check_private_key() {
-  local path="${DDREC_ROOT}/secrets/production_ed25519_private.pem" owner group mode
+  local path="${DDREC_LICENSE_SIGNING_PRIVATE_KEY_HOST_PATH:-${DDREC_ROOT}/secrets/production_ed25519_private.pem}" owner group mode
   require_file "${path}"
   owner="$(stat -c '%u' "${path}")"
   group="$(stat -c '%g' "${path}")"
@@ -64,7 +84,7 @@ check_private_key() {
 }
 
 verify_private_key_readable() {
-  local path="${DDREC_ROOT}/secrets/production_ed25519_private.pem"
+  local path="${DDREC_LICENSE_SIGNING_PRIVATE_KEY_HOST_PATH:-${DDREC_ROOT}/secrets/production_ed25519_private.pem}"
   require_command docker
   require_value DDREC_API_IMAGE_TAG
   check_private_key

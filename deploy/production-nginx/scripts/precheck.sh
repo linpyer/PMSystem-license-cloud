@@ -9,6 +9,8 @@ require_root
 for command_name in docker nginx openssl rsync curl tar gzip sha256sum systemctl ss getent awk df free; do
   require_command "${command_name}"
 done
+load_environment
+assert_production_root
 
 [[ "$(uname -m)" == "x86_64" ]] || fail "This release requires x86_64; found $(uname -m)"
 systemctl is-active --quiet docker || fail "Docker service is not active"
@@ -43,7 +45,7 @@ else
 fi
 
 for directory in "${DDREC_ROOT}" "${DDREC_ROOT}/release" "${DDREC_ROOT}/config" \
-  "${DDREC_ROOT}/secrets" "${DDREC_ROOT}/backups" /var/www/ddrec-license/admin /var/www/certbot; do
+  "${DDREC_ROOT}/secrets" "${DDREC_ROOT}/backups" "${DDREC_ADMIN_ROOT}" /var/www/certbot; do
   if [[ -e "${directory}" ]]; then
     log "Present: ${directory}"
   else
