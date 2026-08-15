@@ -27,8 +27,13 @@ $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptRoot '..'))
 $configPath = Join-Path $scriptRoot 'cloud_release_config.psd1'
 
 function Write-Utf8File {
-    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string[]]$Lines)
-    [System.IO.File]::WriteAllText($Path, (($Lines -join "`r`n") + "`r`n"), $script:utf8NoBom)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string[]]$Lines,
+        [switch]$UnixNewlines
+    )
+    $newline = if ($UnixNewlines) { "`n" } else { "`r`n" }
+    [System.IO.File]::WriteAllText($Path, (($Lines -join $newline) + $newline), $script:utf8NoBom)
 }
 
 function Invoke-Checked {
@@ -613,7 +618,7 @@ try {
         $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $(Get-RelativeUnixPath $payloadRoot $_.FullName)"
     }
-    Write-Utf8File $payloadChecksumsPath $payloadChecksumLines
+    Write-Utf8File $payloadChecksumsPath $payloadChecksumLines -UnixNewlines
 
     Push-Location $scratchRoot
     try { Invoke-Checked $tar @('-czf', $archivePath, $releaseName) '创建发布压缩包失败' } finally { Pop-Location }
@@ -625,7 +630,7 @@ try {
         "Archive SHA-256: $archiveHash"
     )
     Write-Utf8File $manifestPath $manifest
-    Write-Utf8File $checksumsPath @("$archiveHash  $($archiveItem.Name)")
+    Write-Utf8File $checksumsPath @("$archiveHash  $($archiveItem.Name)") -UnixNewlines
 
     Remove-Item -LiteralPath $scratchRoot -Recurse -Force
     Write-Host ''
