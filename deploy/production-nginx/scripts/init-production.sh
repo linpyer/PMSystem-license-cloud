@@ -12,8 +12,8 @@ for command_name in docker openssl install grep sed; do require_command "${comma
 force=false
 if [[ "${1:-}" == "--force" ]]; then force=true; elif [[ -n "${1:-}" ]]; then fail "Usage: $0 [--force]"; fi
 
-private_key="${PMSYSTEM_ROOT}/secrets/production_ed25519_private.pem"
-public_key="${PMSYSTEM_ROOT}/secrets/production_ed25519_public.pem"
+private_key="${DDREC_ROOT}/secrets/production_ed25519_private.pem"
+public_key="${DDREC_ROOT}/secrets/production_ed25519_public.pem"
 if [[ -e "${ENV_FILE}" || -e "${private_key}" || -e "${public_key}" ]]; then
   ${force} || fail "Production configuration or signing keys already exist; refusing to overwrite"
   [[ -t 0 ]] || fail "--force requires an interactive terminal"
@@ -23,15 +23,15 @@ if [[ -e "${ENV_FILE}" || -e "${private_key}" || -e "${public_key}" ]]; then
   log "WARNING: replacing an in-use signing key invalidates the trust chain and requires a documented key rotation"
 fi
 
-release_version="$(grep -E '^PMSYSTEM_API_IMAGE_TAG=' "${RELEASE_ROOT}/env.production.example" | cut -d= -f2-)"
+release_version="$(grep -E '^DDREC_API_IMAGE_TAG=' "${RELEASE_ROOT}/env.production.example" | cut -d= -f2-)"
 service_version="$(grep -E '^LICENSE_SERVICE_VERSION=' "${RELEASE_ROOT}/env.production.example" | cut -d= -f2-)"
 build_commit="$(tr -d '\r\n' < "${RELEASE_ROOT}/BUILD-COMMIT.txt")"
 [[ -n "${release_version}" && -n "${service_version}" && -n "${build_commit}" ]] || fail "Release metadata is incomplete"
-api_image="pmsystem-license-api:${release_version}"
+api_image="ddrec-license-api:${release_version}"
 docker image inspect "${api_image}" >/dev/null 2>&1 || fail "Load ${api_image} before initialization"
 
-install -d -m 750 "${PMSYSTEM_ROOT}" "${PMSYSTEM_ROOT}/release" "${PMSYSTEM_ROOT}/backups" "${PMSYSTEM_ROOT}/scripts"
-install -d -m 700 "${PMSYSTEM_ROOT}/config" "${PMSYSTEM_ROOT}/secrets"
+install -d -m 750 "${DDREC_ROOT}" "${DDREC_ROOT}/release" "${DDREC_ROOT}/backups" "${DDREC_ROOT}/scripts"
+install -d -m 700 "${DDREC_ROOT}/config" "${DDREC_ROOT}/secrets"
 
 database_password="$(openssl rand -hex 32)"
 session_secret="$(openssl rand -hex 32)"
@@ -49,11 +49,11 @@ chmod 644 "${public_key}"
 
 temporary_env="${ENV_FILE}.tmp.$$"
 cat >"${temporary_env}" <<EOF
-PMSYSTEM_API_IMAGE_TAG=${release_version}
-POSTGRES_DB=pmsystem_license
-POSTGRES_USER=pmsystem_license
+DDREC_API_IMAGE_TAG=${release_version}
+POSTGRES_DB=ddrec_license
+POSTGRES_USER=ddrec_license
 POSTGRES_PASSWORD=${database_password}
-LICENSE_DATABASE_URL=postgresql+asyncpg://pmsystem_license:${database_password}@postgres:5432/pmsystem_license
+LICENSE_DATABASE_URL=postgresql+asyncpg://ddrec_license:${database_password}@postgres:5432/ddrec_license
 LICENSE_ENVIRONMENT=production
 LICENSE_API_HOST=0.0.0.0
 LICENSE_API_PORT=8080
@@ -89,7 +89,7 @@ LICENSE_SERVICE_VERSION=${service_version}
 EOF
 chmod 600 "${temporary_env}"
 mv -f "${temporary_env}" "${ENV_FILE}"
-export PMSYSTEM_API_IMAGE_TAG="${release_version}"
+export DDREC_API_IMAGE_TAG="${release_version}"
 verify_private_key_readable
 log "Production configuration and Ed25519 key pair were created without printing secret material."
 log "Public key: ${public_key}"

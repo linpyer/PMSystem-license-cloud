@@ -12,13 +12,13 @@ ROOT = Path(__file__).parents[1]
 
 def test_application_version_and_product_names():
     assert APP_VERSION == "1.3.0"
-    assert APP_NAME == "电商打包发货监控溯源系统"
+    assert APP_NAME == "DD Rec"
     assert PRODUCTION_LICENSE_API_BASE_URL == "https://license.aixcc.top/api/v1"
     assert PRODUCTION_LICENSE_KEY_ID == "production-2026-01"
 
 
 def test_pyinstaller_spec_is_onedir_and_bundles_required_runtime_files():
-    spec = (ROOT / "PMSystem.spec").read_text(encoding="utf-8")
+    spec = (ROOT / "DDREC.spec").read_text(encoding="utf-8")
     assert "COLLECT(" in spec
     assert "ffmpeg.exe" in spec and "ffprobe.exe" in spec
     assert "app\\\\assets" in spec
@@ -29,15 +29,16 @@ def test_pyinstaller_spec_is_onedir_and_bundles_required_runtime_files():
 
 
 def test_inno_setup_uses_exact_release_name_and_uninstall_helper():
-    iss = (ROOT / "installer" / "PMSystem.iss").read_text(encoding="utf-8")
-    assert "OutputBaseFilename=PMSystem-Setup-{#MyAppVersion}-x64" in iss
+    iss = (ROOT / "installer" / "DDREC.iss").read_text(encoding="utf-8")
+    assert "OutputBaseFilename=DDREC-Setup" in iss
+    assert '#define MyAppExeName "DDREC.exe"' in iss
     assert "OutputDir=..\\release\\client\\{#MyAppVersion}" in iss
     assert "--deactivate-before-uninstall" in iss
     assert 'DestName: "{#MyLicenseHelper}"' in iss
     assert "CurUninstallStep = usUninstall" in iss
-    assert "DefaultDirName={autopf}\\PMSystem" in iss
+    assert "DefaultDirName={autopf}\\DDREC" in iss
     assert "VersionInfoVersion={#MyAppVersion}" in iss
-    assert "VersionInfoProductName=PMSystem" in iss
+    assert "VersionInfoProductName=DDREC" in iss
     assert "license.dat" not in iss
     assert "LOCALAPPDATA" not in iss
 

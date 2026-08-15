@@ -73,7 +73,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "voice_prompt": {
         "enabled": True,
         "mode": "system",
-        "custom_voice_dir": "%LOCALAPPDATA%/PMSystem/voice",
+        "custom_voice_dir": "%LOCALAPPDATA%/DDREC/voice",
         "custom_files": {
             "start": "",
             "stop": "",
@@ -142,7 +142,7 @@ LEGACY_NO_ORDER_PROMPT = "请先输入或扫描" + "物流" + "单号"
 CURRENT_NO_ORDER_PROMPT = "请先输入或扫描单号"
 
 CONFIG_EXPORT_VERSION = 1
-CONFIG_EXPORT_APP = "PMSystem"
+CONFIG_EXPORT_APP = "DDREC"
 NETDISK_EXPORT_SECRET_KEYS = {
     "client_secret",
     "access_token",
@@ -343,7 +343,7 @@ class ConfigManager:
         video_dir.mkdir(parents=True, exist_ok=True)
         if not video_dir.is_dir():
             raise ValueError("视频存储目录不是文件夹")
-        test_file = video_dir / ".pm_system_write_test"
+        test_file = video_dir / ".ddrec-write-test"
         try:
             test_file.write_text("ok", encoding="utf-8")
         finally:
@@ -416,7 +416,7 @@ class ConfigManager:
         if not isinstance(payload, dict):
             raise ValueError("配置文件格式不正确")
         if payload.get("app") != CONFIG_EXPORT_APP:
-            raise ValueError("不是 PMSystem 配置文件")
+            raise ValueError("不是 DD Rec 配置文件")
         config_version = int(payload.get("config_version") or 0)
         if config_version < 1 or config_version > CONFIG_EXPORT_VERSION:
             raise ValueError(f"不支持的配置版本：{config_version}")

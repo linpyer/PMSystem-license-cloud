@@ -7,7 +7,7 @@ source "${SCRIPT_DIR}/common.sh"
 require_root
 load_environment
 log "Current release: $(readlink -f "${CURRENT_LINK}" 2>/dev/null || printf 'not installed')"
-log "API image: pmsystem-license-api:${PMSYSTEM_API_IMAGE_TAG:-unset}"
+log "API image: ddrec-license-api:${DDREC_API_IMAGE_TAG:-unset}"
 compose ps
 log "Listening ports:"
 ss -lntp | awk 'NR == 1 || $4 ~ /:(80|443|8080|5432)$/' || true

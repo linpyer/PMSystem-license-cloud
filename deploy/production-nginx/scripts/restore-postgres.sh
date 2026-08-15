@@ -13,13 +13,13 @@ require_value POSTGRES_USER
 require_value POSTGRES_PASSWORD
 wait_for_health postgres 20
 
-backup_dir="${PMSYSTEM_ROOT}/backups"
-[[ "${backup_dir}" == /opt/pmsystem-license/backups ]] \
+backup_dir="${DDREC_ROOT}/backups"
+[[ "${backup_dir}" == /opt/ddrec-license/backups ]] \
   || fail "Unsafe backup directory: ${backup_dir}"
 backup_file="${1:-}"
 target_database="${2:-}"
 [[ -n "${backup_file}" && -n "${target_database}" ]] \
-  || fail "Usage: $0 <backup.dump> <pmsystem_license_restore_NAME>"
+  || fail "Usage: $0 <backup.dump> <ddrec_license_restore_NAME>"
 case "${backup_file}" in
   "${backup_dir}"/*.dump) ;;
   *) fail "Backup must be a .dump file inside ${backup_dir}" ;;
@@ -29,7 +29,7 @@ require_file "${backup_file}.sha256"
 sha256sum --check "${backup_file}.sha256"
 [[ "${target_database}" != "${POSTGRES_DB}" ]] \
   || fail "Direct production database restore is prohibited"
-[[ "${target_database}" =~ ^pmsystem_license_restore_[a-zA-Z0-9_]+$ ]] \
+[[ "${target_database}" =~ ^ddrec_license_restore_[a-zA-Z0-9_]+$ ]] \
   || fail "Target must be a dedicated temporary restore database"
 [[ -t 0 ]] || fail "Restore confirmation requires an interactive terminal"
 expected="RESTORE-TEST ${target_database}"

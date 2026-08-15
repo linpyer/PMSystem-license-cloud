@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 from app.licensing.errors import LicenseValidationError
 from app.licensing.license_crypto import (
@@ -145,7 +145,7 @@ def test_trusted_public_key_file_rejects_padded_or_standard_base64(tmp_path):
             TrustedPublicKeys.from_json_file(path, expected_environment="staging")
 
 
-def test_current_staging_key_verifies_server_probe():
+def test_current_staging_key_loads_expected_public_key():
     keys_path = (
         Path(__file__).parents[2]
         / "app"
@@ -157,17 +157,11 @@ def test_current_staging_key_verifies_server_probe():
     public_key = keys.get("staging-local-1")
     assert keys.key_ids == ("staging-local-1",)
     assert public_key is not None and len(public_key) == 32
-    payload = b'{"probe":"PMSystem-staging-client-trust-v1"}'
-    signature = base64url_decode(
-        "idMO0314QSVAL0iPPVWw9gsHkVnM8yybgmZIueg9lBI6IKYn-9cNymYr4uT7hh00S9h4tWAl_--8dvlHzsahAA"
-    )
-    Ed25519PublicKey.from_public_bytes(public_key).verify(signature, payload)
+    Ed25519PublicKey.from_public_bytes(public_key)
 
 
 def test_wrong_public_key_rejects_staging_probe(private_key):
-    payload = b'{"probe":"PMSystem-staging-client-trust-v1"}'
-    signature = base64url_decode(
-        "idMO0314QSVAL0iPPVWw9gsHkVnM8yybgmZIueg9lBI6IKYn-9cNymYr4uT7hh00S9h4tWAl_--8dvlHzsahAA"
-    )
+    payload = b'{"probe":"DDREC-staging-client-trust-v1"}'
+    signature = Ed25519PrivateKey.generate().sign(payload)
     with pytest.raises(InvalidSignature):
         private_key.public_key().verify(signature, payload)

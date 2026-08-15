@@ -10,11 +10,11 @@ load_environment
 require_value POSTGRES_DB
 require_value POSTGRES_USER
 require_value POSTGRES_PASSWORD
-[[ "${POSTGRES_DB}" == "pmsystem_license" ]] || fail "Refusing to back up unexpected database: ${POSTGRES_DB}"
+[[ "${POSTGRES_DB}" == "ddrec_license" ]] || fail "Refusing to back up unexpected database: ${POSTGRES_DB}"
 wait_for_health postgres 20
 
-backup_dir="${PMSYSTEM_ROOT}/backups"
-[[ "${backup_dir}" == /opt/pmsystem-license/backups ]] || fail "Unsafe backup directory: ${backup_dir}"
+backup_dir="${DDREC_ROOT}/backups"
+[[ "${backup_dir}" == /opt/ddrec-license/backups ]] || fail "Unsafe backup directory: ${backup_dir}"
 install -d -m 750 "${backup_dir}"
 timestamp="$(date -u +'%Y-%m-%dT%H%M%SZ')"
 final="${backup_dir}/${POSTGRES_DB}_${timestamp}.dump"

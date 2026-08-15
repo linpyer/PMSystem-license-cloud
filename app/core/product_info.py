@@ -1,0 +1,9 @@
+from __future__ import annotations
+
+
+PRODUCT_DISPLAY_NAME = "DD Rec"
+PRODUCT_TECH_NAME = "DDREC"
+PRODUCT_TECH_NAME_LOWER = "ddrec"
+PRODUCT_SUBTITLE = "电商影像溯源"
+PRODUCT_SLOGAN = "每一单，都有迹可循"
+APP_USER_MODEL_ID = f"JsonLin.{PRODUCT_TECH_NAME}"

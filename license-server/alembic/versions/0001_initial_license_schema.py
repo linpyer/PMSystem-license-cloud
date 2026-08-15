@@ -1,4 +1,4 @@
-"""Initial PMSystem license schema.
+"""Initial DDREC license schema.
 
 Revision ID: 0001_license_schema
 Revises:

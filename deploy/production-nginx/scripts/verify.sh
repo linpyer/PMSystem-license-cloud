@@ -11,7 +11,7 @@ wait_for_health postgres 20
 wait_for_health license-api 20
 curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health/live >/dev/null
 curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health/ready >/dev/null
-require_file /var/www/pmsystem-license/admin/index.html
+require_file /var/www/ddrec-license/admin/index.html
 nginx -t
 
 if ss -lnt | awk 'NR > 1 {print $4}' | grep -Eq '(^|\]|:|\*)0\.0\.0\.0:5432$|\[::\]:5432$|\*:5432$'; then

@@ -111,7 +111,7 @@ class LicenseVerifier:
         if payload.schema_version not in SUPPORTED_SCHEMA_VERSIONS:
             raise LicenseValidationError("Unsupported license schema version")
         if payload.product != LICENSE_PRODUCT:
-            raise LicenseValidationError("License product does not match PMSystem")
+            raise LicenseValidationError("License product does not match DDREC")
         if payload.edition != LICENSE_EDITION:
             raise LicenseValidationError("License edition is not professional")
         if payload.device_id != expected_device_id:

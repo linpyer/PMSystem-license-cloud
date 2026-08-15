@@ -176,7 +176,7 @@ function Test-PlaceholderValue {
     param([string]$Value)
     $normalized = $Value.Trim().Trim('"', "'")
     return [string]::IsNullOrWhiteSpace($normalized) -or
-        $normalized -match '^(?i)(REPLACE_|replace-|CHANGE_|example|dummy|test-|ci-|development-|pmsystem_license_dev_only|\$\{|<)'
+        $normalized -match '^(?i)(REPLACE_|replace-|CHANGE_|example|dummy|test-|ci-|development-|ddrec_license_dev_only|\$\{|<)'
 }
 
 function Assert-NoSensitiveMaterial {
@@ -301,12 +301,12 @@ function Invoke-ComposeCheck {
     } else {
         $deployRoot = Join-Path $projectRoot 'deploy\production-nginx'
         $envTemplate = Join-Path $deployRoot 'env.production.example'
-        $oldEnvFile = $env:PMSYSTEM_ENV_FILE
+        $oldEnvFile = $env:DDREC_ENV_FILE
         try {
-            $env:PMSYSTEM_ENV_FILE = $envTemplate
+            $env:DDREC_ENV_FILE = $envTemplate
             Invoke-Checked $script:docker @('compose', '--env-file', $envTemplate, '-f', (Join-Path $deployRoot 'compose.yml'), 'config', '--quiet') '生产 Compose 校验失败'
         } finally {
-            $env:PMSYSTEM_ENV_FILE = $oldEnvFile
+            $env:DDREC_ENV_FILE = $oldEnvFile
         }
     }
 }
@@ -338,7 +338,7 @@ function Copy-DeploymentFiles {
     $envPath = Join-Path $Destination 'env.production.example'
     $envText = Get-Content -LiteralPath $envPath -Raw -Encoding UTF8
     $imageTag = "$script:releaseVersion-production"
-    $envText = [regex]::Replace($envText, '(?m)^PMSYSTEM_API_IMAGE_TAG=.*$', "PMSYSTEM_API_IMAGE_TAG=$imageTag")
+    $envText = [regex]::Replace($envText, '(?m)^DDREC_API_IMAGE_TAG=.*$', "DDREC_API_IMAGE_TAG=$imageTag")
     $envText = [regex]::Replace($envText, '(?m)^LICENSE_SERVICE_VERSION=.*$', "LICENSE_SERVICE_VERSION=$script:releaseVersion")
     $envText = [regex]::Replace($envText, '(?m)^LICENSE_BUILD_COMMIT=.*$', "LICENSE_BUILD_COMMIT=$script:commit")
     [System.IO.File]::WriteAllText($envPath, $envText, $script:utf8NoBom)
@@ -357,14 +357,14 @@ function Copy-ProductionComponentFiles {
         }
         $envPath = Join-Path $Destination 'env.production.example'
         $envText = Get-Content -LiteralPath $envPath -Raw -Encoding UTF8
-        $envText = [regex]::Replace($envText, '(?m)^PMSYSTEM_API_IMAGE_TAG=.*$', "PMSYSTEM_API_IMAGE_TAG=$script:releaseVersion-production")
+        $envText = [regex]::Replace($envText, '(?m)^DDREC_API_IMAGE_TAG=.*$', "DDREC_API_IMAGE_TAG=$script:releaseVersion-production")
         $envText = [regex]::Replace($envText, '(?m)^LICENSE_SERVICE_VERSION=.*$', "LICENSE_SERVICE_VERSION=$script:releaseVersion")
         $envText = [regex]::Replace($envText, '(?m)^LICENSE_BUILD_COMMIT=.*$', "LICENSE_BUILD_COMMIT=$script:commit")
         [System.IO.File]::WriteAllText($envPath, $envText, $script:utf8NoBom)
     } elseif ($Service -eq 'admin') {
         Copy-FilteredTree (Join-Path $deployRoot 'nginx') (Join-Path $Destination 'nginx') -ExcludedDirectories @() -ExcludedFiles @() -ExcludedExtensions @()
         Write-Utf8File (Join-Path $Destination 'ADMIN-DEPLOY.txt') @(
-            '将 admin 目录部署到 /var/www/pmsystem-license/admin。',
+            '将 admin 目录部署到 /var/www/ddrec-license/admin。',
             '部署前备份现有静态目录，部署后执行 nginx -t 并检查 /admin/。',
             '本组件包不会修改 API、PostgreSQL、数据库迁移或 current 软链接。'
         )
@@ -377,13 +377,13 @@ function Export-ApiImage {
     param([Parameter(Mandatory = $true)][string]$PayloadRoot)
     Write-Host '构建并导出 API Docker 镜像...'
     Invoke-Checked $script:docker @('version') 'Docker 引擎不可用'
-    $imageTag = "pmsystem-license-api:$script:releaseVersion-$Environment"
+    $imageTag = "ddrec-license-api:$script:releaseVersion-$Environment"
     Invoke-Checked $script:docker @('buildx', 'build', '--platform', 'linux/amd64', '--load', '--tag', $imageTag, $script:serverRoot) 'API 镜像构建失败'
     $script:imageDigest = (& $script:docker image inspect $imageTag --format '{{.Id}}').Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($script:imageDigest)) { throw '无法读取 API 镜像摘要。' }
     $imagesRoot = Join-Path $PayloadRoot 'images'
     New-Item -ItemType Directory -Path $imagesRoot -Force | Out-Null
-    $imageTar = Join-Path $imagesRoot "pmsystem-$Environment-images-$script:releaseVersion.tar"
+    $imageTar = Join-Path $imagesRoot "ddrec-$Environment-images-$script:releaseVersion.tar"
     if ($Environment -eq 'production') {
         Invoke-Checked $script:docker @('pull', '--platform', 'linux/amd64', 'postgres:17.5-alpine') 'PostgreSQL 基础镜像准备失败'
         Invoke-Checked $script:docker @('save', '--output', $imageTar, $imageTag, 'postgres:17.5-alpine') '生产镜像导出失败'
@@ -462,7 +462,7 @@ try {
     if (-not (Test-Path -LiteralPath $alembic -PathType Leaf)) { throw "虚拟环境缺少 Alembic：$alembic" }
 
     Write-Host '========================================'
-    Write-Host ' PMSystem 云端授权系统构建'
+    Write-Host ' DD Rec 云端授权系统构建'
     Write-Host '========================================'
     Write-Host "项目路径：$projectRoot"
     Write-Host "Git 分支：$branch"
@@ -476,7 +476,7 @@ try {
     $scratchRoot = Join-Path $artifactRoot ".build-$Environment-$Service"
     Assert-ChildPath $artifactRoot $outputRoot
     Assert-ChildPath $artifactRoot $scratchRoot
-    $releaseName = "PMSystem-License-Cloud-$releaseVersion-$Environment-$Service"
+    $releaseName = "DDREC-License-Cloud-$releaseVersion-$Environment-$Service"
     $payloadRoot = Join-Path $scratchRoot $releaseName
     $archivePath = Join-Path $outputRoot "$releaseName.tar.gz"
     $manifestPath = Join-Path $outputRoot 'RELEASE-MANIFEST.txt'
@@ -515,7 +515,7 @@ try {
             Copy-Item -LiteralPath (Join-Path $serverRoot '.env.example') -Destination (Join-Path $payloadRoot 'env.local.example')
         }
         Write-Utf8File (Join-Path $payloadRoot 'LOCAL-README.txt') @(
-            'PMSystem 云端授权系统本地构建包',
+            'DD Rec 云端授权系统本地构建包',
             "API：$($environmentConfig.ApiBaseUrl)",
             "后台环境标签：$($environmentConfig.AdminLabel)",
             '此包仅用于本地开发，不得部署到生产环境。'

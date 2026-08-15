@@ -9,7 +9,7 @@ $env:PYTHONUTF8 = "1"
 $ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $ReleaseRoot = Join-Path $ProjectRoot "release\client\$Version"
-$Installer = Join-Path $ReleaseRoot "PMSystem-Setup-$Version-x64.exe"
+$Installer = Join-Path $ReleaseRoot "DDREC-Setup.exe"
 $PublicKey = Join-Path $ProjectRoot "app\assets\license\production_ed25519_public.pem"
 
 function Invoke-Checked {
@@ -85,7 +85,7 @@ New-Item -ItemType Directory -Path $ReleaseRoot -Force | Out-Null
 
 Invoke-Checked { & $Python -m compileall -q main.py app scripts } "Python syntax check"
 Invoke-Checked { & $Python -m pytest -q tests } "client pytest suite"
-Invoke-Checked { & $Python -m PyInstaller --noconfirm --clean PMSystem.spec } "PyInstaller"
+Invoke-Checked { & $Python -m PyInstaller --noconfirm --clean DDREC.spec } "PyInstaller"
 
 $DistDirectories = @(Get-ChildItem -LiteralPath (Join-Path $ProjectRoot "dist") -Directory)
 if ($DistDirectories.Count -ne 1) {
@@ -94,7 +94,7 @@ if ($DistDirectories.Count -ne 1) {
 $DistRoot = $DistDirectories[0].FullName
 $MainExecutables = @(
     Get-ChildItem -LiteralPath $DistRoot -Filter "*.exe" -File |
-        Where-Object { $_.Name -ne "PMSystemLicenseHelper.exe" }
+        Where-Object { $_.Name -ne "DDRECLicenseHelper.exe" }
 )
 if ($MainExecutables.Count -ne 1) {
     throw "Expected exactly one main executable, found $($MainExecutables.Count)"
@@ -124,7 +124,7 @@ if (-not $Iscc) {
     throw "Inno Setup 6 compiler ISCC.exe was not found"
 }
 Invoke-Checked {
-    & $Iscc "/DMyAppVersion=$Version" (Join-Path $ProjectRoot "installer\PMSystem.iss")
+    & $Iscc "/DMyAppVersion=$Version" (Join-Path $ProjectRoot "installer\DDREC.iss")
 } "Inno Setup"
 if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) {
     throw "Installer output is missing: $Installer"
@@ -148,9 +148,9 @@ $PublicKeySha = (Get-FileHash -LiteralPath $PublicKey -Algorithm SHA256).Hash
 $InstallerHash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash
 $InstallerSize = (Get-Item -LiteralPath $Installer).Length
 
-Set-Content -LiteralPath "$Installer.sha256.txt" -Encoding ASCII -Value "$InstallerHash  PMSystem-Setup-$Version-x64.exe"
+Set-Content -LiteralPath "$Installer.sha256.txt" -Encoding ASCII -Value "$InstallerHash  DDREC-Setup.exe"
 $Manifest = @"
-ProductName=PMSystem / $AppName
+ProductName=DDREC / $AppName
 Version=$Version
 BuildTimeUtc=$BuildTime
 GitCommit=$GitCommit
@@ -168,7 +168,7 @@ OnlineActivationAcceptance=NOT COMPLETED - production HTTPS is not available yet
 "@
 Set-Content -LiteralPath (Join-Path $ReleaseRoot "RELEASE-MANIFEST.txt") -Encoding UTF8 -Value $Manifest
 $Report = @"
-# PMSystem $Version Production Client Build Report
+# DDREC $Version Production Client Build Report
 
 - Build result: succeeded
 - Build time (UTC): $BuildTime

@@ -8,7 +8,7 @@ import pytest
 
 os.environ.setdefault(
     "LICENSE_DATABASE_URL",
-    "postgresql+asyncpg://test:test@127.0.0.1:5434/pmsystem_license_test",
+    "postgresql+asyncpg://test:test@127.0.0.1:5434/ddrec_license_test",
 )
 os.environ.setdefault("LICENSE_ENVIRONMENT", "test")
 os.environ.setdefault("LICENSE_SIGNING_PRIVATE_KEY_PATH", str(Path(".secrets/test.pem")))

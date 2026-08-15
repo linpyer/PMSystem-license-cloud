@@ -15,7 +15,7 @@ verify_private_key_readable
 bash "${SCRIPT_DIR}/install-release.sh" "${release_path}"
 
 # Refresh paths after current is switched by install-release.
-exec_scripts="${PMSYSTEM_ROOT}/current/scripts"
+exec_scripts="${DDREC_ROOT}/current/scripts"
 load_environment
 compose up -d --pull never postgres
 wait_for_health postgres 120

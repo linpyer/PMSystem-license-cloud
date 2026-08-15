@@ -508,7 +508,7 @@ class AdminManagementService:
         policy = await self.repository.get_version_policy(session)
         if policy is None:
             return {
-                "product": "PMSystem", "platform": "windows",
+                "product": "DDREC", "platform": "windows",
                 "recommendedVersion": self.settings.minimum_client_version,
                 "minimumSupportedVersion": self.settings.minimum_client_version,
                 "downloadUrl": None, "releaseNotes": None, "updatedAt": None,
@@ -524,7 +524,7 @@ class AdminManagementService:
         now = _utc_now()
         policy = await self.repository.get_version_policy(session)
         if policy is None:
-            policy = AppVersionPolicy(product="PMSystem", platform="windows")
+            policy = AppVersionPolicy(product="DDREC", platform="windows")
             session.add(policy)
         policy.recommended_version = request.recommended_version
         policy.minimum_supported_version = request.minimum_supported_version

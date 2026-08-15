@@ -19,7 +19,7 @@ router = APIRouter(tags=["health"])
 
 def _base(settings: Settings) -> dict:
     return {
-        "service": "pmsystem-license-server",
+        "service": "ddrec-license-server",
         "version": settings.service_version,
         "build_commit": settings.build_commit,
         "environment": settings.environment,

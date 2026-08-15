@@ -21,27 +21,27 @@ def _values(database_url: str, environment: str = "test") -> dict:
 
 def test_sqlite_database_is_rejected() -> None:
     with pytest.raises(ValidationError):
-        Settings.model_validate(_values("sqlite+aiosqlite:///pm_system.db"))
+        Settings.model_validate(_values("sqlite+aiosqlite:///ddrec.db"))
 
 
 def test_test_mode_requires_test_database_suffix() -> None:
     with pytest.raises(ValidationError):
         Settings.model_validate(
-            _values("postgresql+asyncpg://user:pass@localhost/pmsystem_license_dev")
+            _values("postgresql+asyncpg://user:pass@localhost/ddrec_license_dev")
         )
 
 
 def test_dedicated_test_database_is_accepted() -> None:
     settings = Settings.model_validate(
-        _values("postgresql+asyncpg://user:pass@localhost/pmsystem_license_test")
+        _values("postgresql+asyncpg://user:pass@localhost/ddrec_license_test")
     )
     assert settings.environment == "test"
-    assert settings.database_url.endswith("pmsystem_license_test")
+    assert settings.database_url.endswith("ddrec_license_test")
 
 
 def _production_values() -> dict:
     values = _values(
-        "postgresql+asyncpg://app:secret@postgres/pmsystem_license_prod",
+        "postgresql+asyncpg://app:secret@postgres/ddrec_license_prod",
         environment="production",
     )
     values.update(

@@ -41,7 +41,7 @@ async def create_from_args(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create one PMSystem license code")
+    parser = argparse.ArgumentParser(description="Create one DDREC license code")
     parser.add_argument(
         "--type", required=True,
         choices=[item.value for item in LicenseType if item != LicenseType.TRIAL]

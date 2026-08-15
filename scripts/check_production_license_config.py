@@ -71,7 +71,7 @@ def validate(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate PMSystem production license trust config")
+    parser = argparse.ArgumentParser(description="Validate DDREC production license trust config")
     parser.add_argument("--api-url", default=EXPECTED_API_URL)
     parser.add_argument(
         "--public-keys",

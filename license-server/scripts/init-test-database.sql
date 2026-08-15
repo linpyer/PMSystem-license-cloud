@@ -1,1 +1,1 @@
-CREATE DATABASE pmsystem_license_test;
+CREATE DATABASE ddrec_license_test;

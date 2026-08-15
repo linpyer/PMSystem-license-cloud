@@ -16,14 +16,14 @@ def default_license_path() -> Path:
     override = (
         ""
         if getattr(sys, "frozen", False)
-        else os.getenv("PMSYSTEM_LICENSE_STORAGE_PATH", "").strip()
+        else os.getenv("DDREC_LICENSE_STORAGE_PATH", "").strip()
     )
     if override:
         return Path(override).expanduser().resolve()
     local_app_data = os.environ.get("LOCALAPPDATA")
     if not local_app_data:
         raise LicenseStorageError("LOCALAPPDATA is unavailable")
-    return Path(local_app_data) / "PMSystem" / "license" / "license.dat"
+    return Path(local_app_data) / "DDREC" / "license" / "license.dat"
 
 
 class LicenseStorage:

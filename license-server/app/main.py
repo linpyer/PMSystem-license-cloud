@@ -31,7 +31,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
     configure_logging(resolved_settings.log_level)
     logger = get_logger().bind(
-        service="pmsystem-license-server",
+        service="ddrec-license-server",
         environment=resolved_settings.environment,
     )
 
@@ -56,7 +56,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await application.state.database.engine.dispose()
 
     application = FastAPI(
-        title="PMSystem License API",
+        title="DDREC License API",
         version=resolved_settings.service_version,
         debug=False,
         docs_url="/docs" if resolved_settings.openapi_enabled else None,

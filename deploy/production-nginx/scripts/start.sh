@@ -9,8 +9,8 @@ require_root
 for command_name in docker curl; do require_command "${command_name}"; done
 load_environment
 verify_private_key_readable
-require_value PMSYSTEM_API_IMAGE_TAG
-docker image inspect "pmsystem-license-api:${PMSYSTEM_API_IMAGE_TAG}" >/dev/null 2>&1 || fail "API image is not loaded"
+require_value DDREC_API_IMAGE_TAG
+docker image inspect "ddrec-license-api:${DDREC_API_IMAGE_TAG}" >/dev/null 2>&1 || fail "API image is not loaded"
 docker image inspect postgres:17.5-alpine >/dev/null 2>&1 || fail "PostgreSQL image is not loaded"
 
 log "Starting PostgreSQL without registry pulls"

@@ -7,7 +7,7 @@ function csv() {
   const lines = props.items.map((item, index) => [index + 1, item.licenseCode, item.licenseType, item.expiresAt || '首次激活后计算', item.customerName || '', item.remark || ''])
   const text = [header, ...lines].map((row) => row.map((cell) => `"${String(cell).replaceAll('"','""')}"`).join(',')).join('\r\n')
   const link = document.createElement('a'); link.href = URL.createObjectURL(new Blob(['\ufeff' + text], { type: 'text/csv;charset=utf-8' }))
-  link.download = `pmsystem-license-codes-${new Date().toISOString().replace(/[-:T]/g,'').slice(0,14)}.csv`; link.click(); URL.revokeObjectURL(link.href)
+  link.download = `ddrec-license-codes-${new Date().toISOString().replace(/[-:T]/g,'').slice(0,14)}.csv`; link.click(); URL.revokeObjectURL(link.href)
 }
 </script>
 <template>

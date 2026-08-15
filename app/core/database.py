@@ -959,7 +959,7 @@ class DatabaseManager:
 
     def backup_database_before_dedupe(self) -> Path:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = self.db_path.with_name(f"pm_system_backup_before_dedupe_{timestamp}.db")
+        backup_path = self.db_path.with_name(f"ddrec_backup_before_dedupe_{timestamp}.db")
         try:
             with sqlite3.connect(str(backup_path)) as backup_connection:
                 self.get_connection().backup(backup_connection)

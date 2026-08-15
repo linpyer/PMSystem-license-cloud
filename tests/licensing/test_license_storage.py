@@ -66,7 +66,7 @@ def test_failed_atomic_save_preserves_existing_file(tmp_path, private_key, monke
 
 def test_delete_only_removes_license_file(tmp_path, private_key):
     storage = LicenseStorage(tmp_path / "license" / "license.dat", protector=ReversibleProtector())
-    unrelated_db, video = tmp_path / "data" / "pmsystem.db", tmp_path / "videos" / "recording.mp4"
+    unrelated_db, video = tmp_path / "data" / "ddrec.db", tmp_path / "videos" / "recording.mp4"
     unrelated_db.parent.mkdir(); video.parent.mkdir()
     unrelated_db.write_bytes(b"database"); video.write_bytes(b"video")
     storage.save(record(private_key)); storage.delete()
@@ -76,9 +76,9 @@ def test_delete_only_removes_license_file(tmp_path, private_key):
 
 def test_frozen_client_ignores_storage_path_override(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setenv("PMSYSTEM_LICENSE_STORAGE_PATH", str(tmp_path / "redirected.dat"))
+    monkeypatch.setenv("DDREC_LICENSE_STORAGE_PATH", str(tmp_path / "redirected.dat"))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
-    assert default_license_path() == tmp_path / "local-app-data" / "PMSystem" / "license" / "license.dat"
+    assert default_license_path() == tmp_path / "local-app-data" / "DDREC" / "license" / "license.dat"
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows DPAPI is only available on Windows")

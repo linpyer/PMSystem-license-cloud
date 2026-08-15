@@ -1,4 +1,4 @@
-# PMSystem License Server Preparation
+# DDREC License Server Preparation
 
 This guide targets Alibaba Cloud Linux 3 on x86_64. Run commands as `root` or through an approved root shell.
 
@@ -9,31 +9,31 @@ The server must already provide Docker Engine, Docker Compose v2, Nginx, firewal
 Create the production directories:
 
 ```bash
-install -d -m 750 /opt/pmsystem-license \
-  /opt/pmsystem-license/release \
-  /opt/pmsystem-license/backups \
-  /opt/pmsystem-license/scripts
-install -d -m 700 /opt/pmsystem-license/config \
-  /opt/pmsystem-license/secrets
-install -d -m 755 /var/www/pmsystem-license/admin \
+install -d -m 750 /opt/ddrec-license \
+  /opt/ddrec-license/release \
+  /opt/ddrec-license/backups \
+  /opt/ddrec-license/scripts
+install -d -m 700 /opt/ddrec-license/config \
+  /opt/ddrec-license/secrets
+install -d -m 755 /var/www/ddrec-license/admin \
   /var/www/certbot
 ```
 
 Production files are stored at:
 
-- Configuration: `/opt/pmsystem-license/config/.env.production`
-- Private signing key: `/opt/pmsystem-license/secrets/production_ed25519_private.pem`
-- Public signing key: `/opt/pmsystem-license/secrets/production_ed25519_public.pem`
-- Release versions: `/opt/pmsystem-license/release/<version>`
-- Current release link: `/opt/pmsystem-license/current`
-- Database backups: `/opt/pmsystem-license/backups`
-- Admin static files: `/var/www/pmsystem-license/admin`
+- Configuration: `/opt/ddrec-license/config/.env.production`
+- Private signing key: `/opt/ddrec-license/secrets/production_ed25519_private.pem`
+- Public signing key: `/opt/ddrec-license/secrets/production_ed25519_public.pem`
+- Release versions: `/opt/ddrec-license/release/<version>`
+- Current release link: `/opt/ddrec-license/current`
+- Database backups: `/opt/ddrec-license/backups`
+- Admin static files: `/var/www/ddrec-license/admin`
 
 The private signing key must be owned by `root`, assigned to group `10001`, and use mode `640`:
 
 ```bash
-chown root:10001 /opt/pmsystem-license/secrets/production_ed25519_private.pem
-chmod 640 /opt/pmsystem-license/secrets/production_ed25519_private.pem
+chown root:10001 /opt/ddrec-license/secrets/production_ed25519_private.pem
+chmod 640 /opt/ddrec-license/secrets/production_ed25519_private.pem
 ```
 
 This permits only root and the license API runtime group to read the bind-mounted key. Never use mode `644`. The API container continues to run as `10001:10001`, and the Compose mount remains read-only.

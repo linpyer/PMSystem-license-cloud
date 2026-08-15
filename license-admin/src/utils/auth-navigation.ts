@@ -23,8 +23,8 @@ export function safeInternalRedirect(value: unknown): string | null {
   }
 
   try {
-    const parsed = new URL(candidate, 'https://pmsystem-admin.invalid')
-    if (parsed.origin !== 'https://pmsystem-admin.invalid') return null
+    const parsed = new URL(candidate, 'https://ddrec-admin.invalid')
+    if (parsed.origin !== 'https://ddrec-admin.invalid') return null
     const decodedPath = decodeURIComponent(parsed.pathname)
     if (decodedPath.startsWith('//') || decodedPath.includes('\\')) return null
     return `${parsed.pathname}${parsed.search}${parsed.hash}`
@@ -69,7 +69,7 @@ export function currentInternalRoute(
 export function isCredentialSubmission(requestUrl: unknown): boolean {
   if (typeof requestUrl !== 'string') return false
   try {
-    const path = new URL(requestUrl, 'https://pmsystem-admin.invalid').pathname
+    const path = new URL(requestUrl, 'https://ddrec-admin.invalid').pathname
     return ['/api/v1/admin/auth/login', '/api/v1/admin/auth/totp/verify'].some(
       (endpoint) => path === endpoint || path.endsWith(endpoint.replace('/api/v1', '')),
     )

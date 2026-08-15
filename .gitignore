@@ -51,8 +51,7 @@ videos/
 *.tar
 *.tar.gz
 *.zip
-pm_system.db
-retired_legacy_databases/
+ddrec.db
 database backups/
 backups/
 migration_logs/
@@ -75,4 +74,5 @@ Thumbs.db
 .vscode/
 
 *.spec
+!DDREC.spec
 $env

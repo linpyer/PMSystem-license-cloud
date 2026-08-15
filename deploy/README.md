@@ -1,7 +1,7 @@
-# PMSystem License Deployment
+# DDREC License Deployment
 
 This directory contains deployment-only assets for the authorization service and administration
-portal. It is deliberately excluded from the PMSystem Windows installer.
+portal. It is deliberately excluded from the DDREC Windows installer.
 
 - `production-nginx/`: official offline Linux production package for host Nginx, Dockerized API,
   and Dockerized PostgreSQL. The server never pulls images from a registry.
@@ -9,7 +9,7 @@ portal. It is deliberately excluded from the PMSystem Windows installer.
   administrator, cookie name, and HTTP port.
 
 Real environment files, keys, certificates, database volumes, and backups must remain outside Git.
-Neither environment may connect to the PMSystem business SQLite database.
+Neither environment may connect to the DDREC business SQLite database.
 
 ## Unified cloud release builder
 
@@ -25,7 +25,7 @@ scripts/build_cloud_release.ps1 -Environment production -Service all -ExportDock
 `api`, `admin`, and `all` artifacts are isolated under `artifacts/cloud/<environment>/<service>`.
 The production `all` package contains API source, the admin static site, Compose, Nginx, migrations,
 and deployment/rollback helpers. Add `-ExportDockerImage` when creating the fully offline production
-package used by `/opt/pmsystem-license`; this exports immutable `linux/amd64` API and PostgreSQL
+package used by `/opt/ddrec-license`; this exports immutable `linux/amd64` API and PostgreSQL
 images without embedding any server environment file or secret. The legacy
 `production-nginx/build-production-release.ps1` entry now delegates to this unified implementation.
 

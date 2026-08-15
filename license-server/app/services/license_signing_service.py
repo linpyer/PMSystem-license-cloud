@@ -56,7 +56,7 @@ class LicenseSigningService:
         payload = {
             "schemaVersion": 1,
             "licenseId": str(license_record.id),
-            "product": "PMSystem",
+            "product": "DDREC",
             "edition": "professional",
             "deviceId": binding.device_id,
             "fingerprintVersion": binding.fingerprint_version,

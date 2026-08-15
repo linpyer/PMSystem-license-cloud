@@ -21,7 +21,7 @@ function Show-Menu {
 
     Write-Host ''
     Write-Host '========================================'
-    Write-Host ' PMSystem 云端授权系统一键打包'
+    Write-Host ' DD Rec 云端授权系统一键打包'
     Write-Host '========================================'
     Write-Host '1. 本地环境 - 授权后端 API'
     Write-Host '2. 本地环境 - 管理后台前端'

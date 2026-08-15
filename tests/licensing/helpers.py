@@ -25,7 +25,7 @@ def payload_dict(**overrides):
     value = {
         "schemaVersion": 1,
         "licenseId": LICENSE_ID,
-        "product": "PMSystem",
+        "product": "DDREC",
         "edition": "professional",
         "deviceId": DEVICE_ID,
         "fingerprintVersion": "win-v1",
@@ -63,7 +63,7 @@ def policy_payload(*, verified_at: datetime = NOW, expires_at=None) -> LicensePa
     return LicensePayload(
         schema_version=1,
         license_id=LICENSE_ID,
-        product="PMSystem",
+        product="DDREC",
         edition="professional",
         device_id=DEVICE_ID,
         fingerprint_version="win-v1",

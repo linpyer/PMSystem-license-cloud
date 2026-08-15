@@ -30,10 +30,10 @@ def test_production_branch_and_image_tag_are_consistent() -> None:
         ROOT / "deploy" / "production-nginx" / "env.production.example"
     ).read_text(encoding="utf-8")
     assert "ProductionBranch = 'v1.3'" in config
-    assert '"pmsystem-license-api:$script:releaseVersion-$Environment"' in build
-    assert '"pmsystem-license-api:${version}-production"' in loader
-    assert '"pmsystem-license-api:${version}"' not in loader
-    assert "PMSYSTEM_API_IMAGE_TAG=1.3.0-production" in env_template
+    assert '"ddrec-license-api:$script:releaseVersion-$Environment"' in build
+    assert '"ddrec-license-api:${version}-production"' in loader
+    assert '"ddrec-license-api:${version}"' not in loader
+    assert "DDREC_API_IMAGE_TAG=1.3.0-production" in env_template
     assert "LICENSE_SERVICE_VERSION=1.3.0" in env_template
 
 

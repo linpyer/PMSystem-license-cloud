@@ -1,4 +1,4 @@
-# PMSystem License Server
+# DDREC License Server
 
 ## Production operation
 
@@ -12,9 +12,9 @@ server timer when periodic cleanup is required. Offline deployment, backup verif
 handling, Nginx proxy, and disaster recovery procedures are documented in
 `deploy/production-nginx/README.md` and `deploy/production-nginx/DISASTER_RECOVERY.md`.
 
-PMSystem 激活码系统的独立 FastAPI/PostgreSQL 服务。该目录同时提供客户端授权 API
+DDREC 激活码系统的独立 FastAPI/PostgreSQL 服务。该目录同时提供客户端授权 API
 与网页版管理端 API，
-不会读取或修改 PMSystem 客户端的 SQLite 数据库、配置或视频目录。
+不会读取或修改 DDREC 客户端的 SQLite 数据库、配置或视频目录。
 
 ## 当前范围
 
@@ -56,7 +56,7 @@ tests            单元与专用 PostgreSQL 集成测试
 - `LICENSE_DEVICE_CREDENTIAL_PEPPER`：设备凭据 HMAC pepper。
 - `LICENSE_API_HOST`、`LICENSE_API_PORT`、`LICENSE_LOG_LEVEL`。
 - `LICENSE_OPENAPI_ENABLED`：是否开放 `/docs` 和 OpenAPI JSON。
-- `LICENSE_MINIMUM_CLIENT_VERSION`：最低允许的 PMSystem 客户端版本。
+- `LICENSE_MINIMUM_CLIENT_VERSION`：最低允许的 DDREC 客户端版本。
 - `LICENSE_ADMIN_SESSION_SECRET`：管理员会话令牌 HMAC 密钥。
 - `LICENSE_ADMIN_TOTP_ENCRYPTION_KEY`：数据库内 TOTP 密钥加密主密钥。
 - `LICENSE_ADMIN_ALLOWED_ORIGINS`：精确的管理端 CORS 来源列表。
@@ -85,9 +85,9 @@ Copy-Item .env.example .env
 docker compose up --build
 ```
 
-Compose 创建独立数据库 `pmsystem_license_dev`，并由
-`scripts/init-test-database.sql` 创建测试专用库 `pmsystem_license_test`。它不会挂载
-PMSystem 用户目录。
+Compose 创建独立数据库 `ddrec_license_dev`，并由
+`scripts/init-test-database.sql` 创建测试专用库 `ddrec_license_test`。它不会挂载
+DDREC 用户目录。
 
 ## Alembic
 
@@ -152,7 +152,7 @@ PMSystem 用户目录。
 
 ```powershell
 $env:LICENSE_ENVIRONMENT='test'
-$env:LICENSE_DATABASE_URL='postgresql+asyncpg://pmsystem_license:password@127.0.0.1:5434/pmsystem_license_test'
+$env:LICENSE_DATABASE_URL='postgresql+asyncpg://ddrec_license:password@127.0.0.1:5434/ddrec_license_test'
 .venv\Scripts\pytest
 ```
 

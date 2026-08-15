@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.core.product_info import PRODUCT_DISPLAY_NAME, PRODUCT_SLOGAN, PRODUCT_SUBTITLE
 from app.licensing.errors import LicenseApiError, localized_error
 from app.licensing.license_api import LICENSE_CODE_ALPHABET
 from app.licensing.license_worker import LicenseOperationWorker
@@ -37,7 +38,7 @@ class ActivationDialog(QDialog):
         self._busy = False
         self._allow_trial_retry = allow_trial_retry
         self.setObjectName("activationDialog")
-        self.setWindowTitle("PMSystem 软件激活")
+        self.setWindowTitle(f"{PRODUCT_DISPLAY_NAME} 软件激活")
         self.setModal(True)
         self.setMinimumWidth(500)
         self.setMaximumWidth(620)
@@ -49,11 +50,12 @@ class ActivationDialog(QDialog):
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(18)
 
-        title = QLabel("PMSystem 软件激活", self)
+        title = QLabel(f"{PRODUCT_DISPLAY_NAME} 软件激活", self)
         title.setObjectName("activationTitle")
         root.addWidget(title)
 
         intro = QLabel(
+            f"{PRODUCT_SUBTITLE} · {PRODUCT_SLOGAN}\n"
             "联网后可自动开启7天完整试用，也可以直接输入激活码。"
             "暂不激活不会影响查看已有记录。",
             self,

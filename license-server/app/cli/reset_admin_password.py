@@ -37,7 +37,7 @@ async def reset(username: str, password: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Reset a PMSystem administrator password")
+    parser = argparse.ArgumentParser(description="Reset a DDREC administrator password")
     parser.add_argument("--username", required=True)
     args = parser.parse_args()
     first = getpass.getpass("New password: ")

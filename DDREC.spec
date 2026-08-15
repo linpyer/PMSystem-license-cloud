@@ -13,7 +13,8 @@ from PyInstaller.utils.win32.versioninfo import (
 )
 from PyInstaller.utils.hooks import collect_submodules
 
-from app.core.version import APP_NAME, APP_VERSION
+from app.core.product_info import PRODUCT_DISPLAY_NAME, PRODUCT_TECH_NAME
+from app.core.version import APP_VERSION
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve()
@@ -22,7 +23,7 @@ ASSETS_DIR = PROJECT_ROOT / 'app' / 'assets'
 FFMPEG_DIR = PROJECT_ROOT / 'tools' / 'ffmpeg'
 FFMPEG_EXE = FFMPEG_DIR / 'ffmpeg.exe'
 FFPROBE_EXE = FFMPEG_DIR / 'ffprobe.exe'
-PRODUCT_NAME = 'PMSystem'
+PRODUCT_NAME = PRODUCT_TECH_NAME
 if not APP_ICON.is_file():
     raise FileNotFoundError(f'正式应用图标不存在，停止构建：{APP_ICON}')
 for required_tool in (FFMPEG_EXE, FFPROBE_EXE):
@@ -63,7 +64,7 @@ def make_version_resource(file_description, internal_name, original_filename):
     )
 
 
-version_resource = make_version_resource(APP_NAME, PRODUCT_NAME, f"{APP_NAME}.exe")
+version_resource = make_version_resource(PRODUCT_DISPLAY_NAME, PRODUCT_NAME, f"{PRODUCT_NAME}.exe")
 
 
 a = Analysis(
@@ -96,7 +97,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='电商打包发货监控溯源系统',
+    name=PRODUCT_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -117,5 +118,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=['ffmpeg.exe', 'ffprobe.exe'],
-    name='电商打包发货监控溯源系统',
+    name=PRODUCT_NAME,
 )

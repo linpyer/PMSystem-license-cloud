@@ -18,7 +18,7 @@ RUN groupadd --system --gid 10001 license \
     && python -m venv /opt/venv
 
 COPY --from=builder /wheels /wheels
-RUN python -m pip install --no-index --find-links=/wheels pmsystem-license-server \
+RUN python -m pip install --no-index --find-links=/wheels ddrec-license-server \
     && rm -rf /wheels \
     && find /opt/venv/lib/python3.12/site-packages -type d -name tests -prune -exec rm -rf '{}' + \
     && find /opt/venv/lib/python3.12/site-packages -type d -name __pycache__ -prune -exec rm -rf '{}' +

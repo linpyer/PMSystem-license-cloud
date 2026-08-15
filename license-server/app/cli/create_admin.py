@@ -60,13 +60,13 @@ def _read_password() -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create a PMSystem license administrator")
+    parser = argparse.ArgumentParser(description="Create a DDREC license administrator")
     parser.add_argument("--username", required=True)
     parser.add_argument("--display-name", required=True)
     parser.add_argument("--role", choices=[item.value for item in AdminRole], default="OWNER")
     args = parser.parse_args()
     user, secret = asyncio.run(create_admin(args, _read_password()))
-    uri = pyotp.TOTP(secret).provisioning_uri(name=user.username, issuer_name="PMSystem License Admin")
+    uri = pyotp.TOTP(secret).provisioning_uri(name=user.username, issuer_name="DD Rec License Admin")
     print("Administrator created. TOTP enrollment information is displayed once.")
     print(f"TOTP secret: {secret}")
     print(f"Provisioning URI: {uri}")

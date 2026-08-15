@@ -12,9 +12,9 @@ if "%APP_VERSION%"=="" (
     exit /b 1
 )
 
-set "APP_EXE=dist\电商打包发货监控溯源系统\电商打包发货监控溯源系统.exe"
-set "ISS_FILE=installer\PMSystem.iss"
-set "OUTPUT_EXE=release\client\%APP_VERSION%\PMSystem-Setup-%APP_VERSION%-x64.exe"
+set "APP_EXE=dist\DDREC\DDREC.exe"
+set "ISS_FILE=installer\DDREC.iss"
+set "OUTPUT_EXE=release\client\%APP_VERSION%\DDREC-Setup.exe"
 set "ISCC="
 
 if not exist "%APP_EXE%" (
@@ -47,7 +47,7 @@ if "%ISCC%"=="" (
     echo 当前用户路径应为：
     echo C:\Users\lin\AppData\Local\Programs\Inno Setup 6\ISCC.exe
     echo.
-    echo 也可以手动打开 installer\PMSystem.iss 编译安装包。
+    echo 也可以手动打开 installer\DDREC.iss 编译安装包。
     echo.
     pause
     exit /b 1

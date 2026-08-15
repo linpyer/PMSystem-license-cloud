@@ -1,13 +1,13 @@
-#define MyAppName "电商打包发货监控溯源系统"
+#define MyAppName "DD Rec"
 #ifndef MyAppVersion
   #error MyAppVersion must be supplied by build_installer.bat
 #endif
 #define MyAppPublisher "JsonLin"
-#define MyAppExeName "电商打包发货监控溯源系统.exe"
-#define MyAppUserModelID "JsonLin.PMSystem"
-#define MyLicenseHelper "PMSystemLicenseHelper.exe"
+#define MyAppExeName "DDREC.exe"
+#define MyAppUserModelID "JsonLin.DDREC"
+#define MyLicenseHelper "DDRECLicenseHelper.exe"
 #define MyAppIcon "..\app\assets\app_icon.ico"
-#define MyDistRoot "..\dist\电商打包发货监控溯源系统"
+#define MyDistRoot "..\dist\DDREC"
 #if !FileExists(MyAppIcon)
   #error Formal application icon not found: {#MyAppIcon}
 #endif
@@ -19,17 +19,17 @@
 #endif
 
 [Setup]
-AppId={{8E9E4952-8336-4B8A-A6F4-219604E6CC0F}
+AppId={{A6F47CF0-90AC-4497-875B-749A17A42C31}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} version {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 VersionInfoVersion={#MyAppVersion}
 VersionInfoProductVersion={#MyAppVersion}
-VersionInfoProductName=PMSystem
+VersionInfoProductName=DDREC
 VersionInfoDescription={#MyAppName}
 VersionInfoCompany={#MyAppPublisher}
-DefaultDirName={autopf}\PMSystem
+DefaultDirName={autopf}\DDREC
 DefaultGroupName={#MyAppName}
 UsePreviousAppDir=yes
 AllowNoIcons=yes
@@ -37,7 +37,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir=..\release\client\{#MyAppVersion}
-OutputBaseFilename=PMSystem-Setup-{#MyAppVersion}-x64
+OutputBaseFilename=DDREC-Setup
 SetupIconFile={#MyAppIcon}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma

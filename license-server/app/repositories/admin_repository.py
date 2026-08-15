@@ -475,6 +475,6 @@ class AdminRepository:
     async def get_version_policy(self, session: AsyncSession) -> AppVersionPolicy | None:
         return await session.scalar(
             select(AppVersionPolicy).where(
-                AppVersionPolicy.product == "PMSystem", AppVersionPolicy.platform == "windows"
+                AppVersionPolicy.product == "DDREC", AppVersionPolicy.platform == "windows"
             )
         )

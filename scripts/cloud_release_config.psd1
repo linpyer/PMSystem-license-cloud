@@ -1,5 +1,5 @@
 ﻿@{
-    ProjectName = 'PMSystem License Cloud'
+    ProjectName = 'DDREC License Cloud'
     ProductionBranch = 'v1.3'
     VersionFile = 'VERSION'
     Environments = @{
@@ -9,7 +9,7 @@
             AdminBaseUrl = 'http://127.0.0.1:5173'
             AdminEnvironment = 'local'
             AdminLabel = '本地环境'
-            AdminTitle = 'PMSystem授权管理（本地）'
+            AdminTitle = 'DD Rec 授权管理（本地）'
             AdminBasePath = '/admin/'
         }
         production = @{
@@ -18,7 +18,7 @@
             AdminBaseUrl = 'https://license.aixcc.top/admin/'
             AdminEnvironment = 'production'
             AdminLabel = '生产环境'
-            AdminTitle = 'PMSystem授权管理'
+            AdminTitle = 'DD Rec 授权管理'
             AdminBasePath = '/admin/'
         }
     }

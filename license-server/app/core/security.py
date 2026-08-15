@@ -38,7 +38,7 @@ def normalize_license_code(value: str) -> str:
 def validate_license_code(value: str) -> str:
     normalized = normalize_license_code(value)
     if not LICENSE_PATTERN.fullmatch(normalized):
-        raise ValueError("invalid PMSystem license code format")
+        raise ValueError("invalid DDREC license code format")
     return normalized
 
 

@@ -79,7 +79,7 @@ def scan(roots: list[Path]) -> list[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Scan PMSystem client artifacts for server secrets")
+    parser = argparse.ArgumentParser(description="Scan DDREC client artifacts for server secrets")
     parser.add_argument("roots", nargs="+", type=Path)
     args = parser.parse_args()
     errors = scan(args.roots)

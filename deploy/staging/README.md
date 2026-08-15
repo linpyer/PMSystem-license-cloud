@@ -1,7 +1,7 @@
 # Staging Environment
 
-The staging stack uses Compose project `pmsystem-license-staging`, database
-`pmsystem_license_staging`, its own named volumes, an isolated Ed25519 key, and Caddy on port 18088.
+The staging stack uses Compose project `ddrec-license-staging`, database
+`ddrec_license_staging`, its own named volumes, an isolated Ed25519 key, and Caddy on port 18088.
 It never reuses production secrets or the production database.
 
 1. Copy each `env/*.example` file to the same name without `.example` and replace placeholders.

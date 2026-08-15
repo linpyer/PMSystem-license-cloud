@@ -26,11 +26,11 @@ jobs:
         env:
           POSTGRES_USER: license_test
           POSTGRES_PASSWORD: test-password-not-for-production
-          POSTGRES_DB: pmsystem_license_test
+          POSTGRES_DB: ddrec_license_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U license_test -d pmsystem_license_test"
+          --health-cmd "pg_isready -U license_test -d ddrec_license_test"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
@@ -38,8 +38,8 @@ jobs:
       run:
         working-directory: license-server
     env:
-      LICENSE_DATABASE_URL: postgresql+asyncpg://license_test:test-password-not-for-production@127.0.0.1:5432/pmsystem_license_test
-      LICENSE_TEST_DATABASE_URL: postgresql+asyncpg://license_test:test-password-not-for-production@127.0.0.1:5432/pmsystem_license_test
+      LICENSE_DATABASE_URL: postgresql+asyncpg://license_test:test-password-not-for-production@127.0.0.1:5432/ddrec_license_test
+      LICENSE_TEST_DATABASE_URL: postgresql+asyncpg://license_test:test-password-not-for-production@127.0.0.1:5432/ddrec_license_test
       LICENSE_ENVIRONMENT: test
       LICENSE_SIGNING_PRIVATE_KEY_PATH: .secrets/dev_ed25519_private.pem
       LICENSE_SIGNING_KEY_ID: ci-test-key
@@ -96,20 +96,20 @@ jobs:
           cp deploy/staging/env/postgres.env.example deploy/staging/env/postgres.env
       - name: Validate Compose
         env:
-          PMSYSTEM_API_IMAGE_TAG: ci
-          PMSYSTEM_ENV_FILE: ${{ github.workspace }}/deploy/production-nginx/env.production.example
+          DDREC_API_IMAGE_TAG: ci
+          DDREC_ENV_FILE: ${{ github.workspace }}/deploy/production-nginx/env.production.example
         run: |
           docker compose --env-file deploy/production-nginx/env.production.example -f deploy/production-nginx/compose.yml config --quiet
           docker compose -f deploy/staging/compose.yml config --quiet
       - name: Build production images
         run: |
-          docker build --tag pmsystem-license-api:ci license-server
-          docker build --tag pmsystem-license-admin:ci license-admin
-          test "$(docker image inspect pmsystem-license-api:ci --format '{{.Config.User}}')" = "10001:10001"
+          docker build --tag ddrec-license-api:ci license-server
+          docker build --tag ddrec-license-admin:ci license-admin
+          test "$(docker image inspect ddrec-license-api:ci --format '{{.Config.User}}')" = "10001:10001"
       - name: Verify images exclude sensitive development files
         run: |
-          api_id="$(docker create pmsystem-license-api:ci)"
-          admin_id="$(docker create pmsystem-license-admin:ci)"
+          api_id="$(docker create ddrec-license-api:ci)"
+          admin_id="$(docker create ddrec-license-admin:ci)"
           trap 'docker rm -f "$api_id" "$admin_id" >/dev/null 2>&1 || true' EXIT
           ! docker export "$api_id" | tar -tf - | grep -E '(^|/)(\.env|\.git|\.secrets|tests)(/|$)|private.*\.pem$'
           ! docker export "$admin_id" | tar -tf - | grep -E '(^|/)(\.env|\.git|node_modules|tests|e2e)(/|$)'

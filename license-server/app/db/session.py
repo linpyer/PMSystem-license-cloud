@@ -24,7 +24,7 @@ def create_database_runtime(settings: Settings) -> DatabaseRuntime:
         connect_args={
             "server_settings": {
                 "statement_timeout": str(settings.database_statement_timeout_ms),
-                "application_name": "pmsystem-license-server",
+                "application_name": "ddrec-license-server",
             }
         },
     )

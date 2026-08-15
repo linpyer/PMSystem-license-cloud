@@ -1,4 +1,4 @@
-# PMSystem 生产发布检查清单
+# DDREC 生产发布检查清单
 
 > 发布版本：__________　Git SHA：________________　操作人：__________　日期：__________
 >
@@ -24,7 +24,7 @@
 
 ## B. 上传校验
 
-- [ ] 已上传到 `/opt/pmsystem-license/incoming/<VERSION>`，没有上传到 current。
+- [ ] 已上传到 `/opt/ddrec-license/incoming/<VERSION>`，没有上传到 current。
 - [ ] RELEASE-MANIFEST.txt 和 SHA256SUMS.txt 已同时上传。
 - [ ] 服务器直接计算的压缩包 SHA 与本地完全一致。
 - [ ] 压缩包可用 `tar -tzf` 读取。
@@ -39,7 +39,7 @@
 - [ ] 原 license-api 为 healthy。
 - [ ] 原 postgres 为 healthy。
 - [ ] `nginx -t` 通过，Nginx active。
-- [ ] 已记录原 `readlink -f /opt/pmsystem-license/current`。
+- [ ] 已记录原 `readlink -f /opt/ddrec-license/current`。
 - [ ] 发布前 API 返回 200。
 - [ ] 发布前 Admin 返回 200。
 - [ ] 8080 仅监听 loopback，5432 未暴露。
@@ -72,7 +72,7 @@
 ## F. API 发布
 
 - [ ] 采用路径 A（离线镜像）或路径 B（标准服务器构建），已记录路径。
-- [ ] 新标签为不可变的 `pmsystem-license-api:<VERSION>-production`。
+- [ ] 新标签为不可变的 `ddrec-license-api:<VERSION>-production`。
 - [ ] 镜像平台为 linux/amd64。
 - [ ] 已记录新镜像 ID；旧镜像未删除。
 - [ ] 当前 `load-images.sh` 标签约定已核对，未盲目执行不兼容脚本。

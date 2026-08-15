@@ -15,8 +15,8 @@ require_value POSTGRES_USER
 require_value POSTGRES_PASSWORD
 wait_for_health postgres 20
 
-backup_dir="${PMSYSTEM_ROOT}/backups"
-[[ "${backup_dir}" == /opt/pmsystem-license/backups ]] \
+backup_dir="${DDREC_ROOT}/backups"
+[[ "${backup_dir}" == /opt/ddrec-license/backups ]] \
   || fail "Unsafe backup directory: ${backup_dir}"
 require_directory "${backup_dir}"
 
@@ -35,7 +35,7 @@ require_file "${backup_file}.sha256"
 sha256sum --check "${backup_file}.sha256"
 
 suffix="$(date -u +'%Y%m%d%H%M%S')_${RANDOM}"
-database="pmsystem_license_restore_verify_${suffix}"
+database="ddrec_license_restore_verify_${suffix}"
 cleanup() {
   compose exec -T -e PGPASSWORD="${POSTGRES_PASSWORD}" postgres \
     dropdb -U "${POSTGRES_USER}" --if-exists "${database}" >/dev/null 2>&1 || true

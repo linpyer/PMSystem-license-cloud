@@ -37,7 +37,7 @@ class LicenseOperationSupport:
             if current < Version(required):
                 raise LicenseServiceError(
                     ErrorCode.CLIENT_VERSION_UNSUPPORTED,
-                    f"PMSystem {required} or newer is required",
+                    f"DD Rec {required} or newer is required",
                 )
         except InvalidVersion as exc:
             raise LicenseServiceError(ErrorCode.INVALID_REQUEST, "Invalid appVersion") from exc

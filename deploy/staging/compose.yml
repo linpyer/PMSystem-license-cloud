@@ -1,4 +1,4 @@
-name: pmsystem-license-staging
+name: ddrec-license-staging
 
 services:
   postgres:
@@ -6,7 +6,7 @@ services:
     env_file:
       - ./env/postgres.env
     volumes:
-      - staging_postgres_data:/var/lib/postgresql/data
+      - ddrec_license_staging_postgres_data:/var/lib/postgresql/data
     networks:
       - backend
     healthcheck:
@@ -56,9 +56,9 @@ services:
       - "${STAGING_HTTP_PORT:-18088}:80"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - staging_caddy_data:/data
-      - staging_caddy_config:/config
-      - staging_caddy_logs:/var/log/caddy
+      - ddrec_license_staging_caddy_data:/data
+      - ddrec_license_staging_caddy_config:/config
+      - ddrec_license_staging_caddy_logs:/var/log/caddy
     networks:
       - edge
       - backend
@@ -69,10 +69,10 @@ services:
     logging: *json-logging
 
 volumes:
-  staging_postgres_data:
-  staging_caddy_data:
-  staging_caddy_config:
-  staging_caddy_logs:
+  ddrec_license_staging_postgres_data:
+  ddrec_license_staging_caddy_data:
+  ddrec_license_staging_caddy_config:
+  ddrec_license_staging_caddy_logs:
 
 networks:
   edge:

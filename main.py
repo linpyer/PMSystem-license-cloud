@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 from app.core.config_manager import ConfigManager
 from app.core.logger import setup_logging
+from app.core.product_info import APP_USER_MODEL_ID
 from app.core.version import APP_NAME, APP_VERSION
 from app.licensing.constants import LicenseStatus
 from app.licensing.license_manager import LicenseManager
@@ -24,9 +25,6 @@ from app.utils.runtime_paths import app_dir, resource_path, user_data_dir
 
 APP_TITLE = APP_NAME
 APP_ICON_PATH = "app/assets/app_icon.ico"
-APP_USER_MODEL_ID = "JsonLin.PMSystem"
-
-
 def _license_requires_activation(_status: LicenseStatus) -> bool:
     """Startup is never blocked; activation is opened only when the user needs it."""
     return False

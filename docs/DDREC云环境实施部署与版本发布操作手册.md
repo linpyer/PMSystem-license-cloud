@@ -1,4 +1,4 @@
-# PMSystem 云环境实施部署与版本发布操作手册
+# DDREC 云环境实施部署与版本发布操作手册
 
 > 正式 Markdown 操作源文件
 >
@@ -10,7 +10,7 @@
 
 ## 第1章 文档说明
 
-本手册适用于 PMSystem 云端授权管理系统的首次生产部署、日常版本发布、备份验证、数据库迁移、验证、应用回滚和灾难恢复演练。适用人员为服务器实施人员、发布负责人、数据库负责人和安全管理员。
+本手册适用于 DDREC 云端授权管理系统的首次生产部署、日常版本发布、备份验证、数据库迁移、验证、应用回滚和灾难恢复演练。适用人员为服务器实施人员、发布负责人、数据库负责人和安全管理员。
 
 Windows 客户端不属于本手册的云端发布对象。首次部署需要准备操作系统、目录、生产秘密、数据库、Nginx 和 HTTPS；日常发布复用这些服务器资源，只替换经过验证的 API、Admin 和版本软链接。
 
@@ -28,7 +28,7 @@ Windows 客户端不属于本手册的云端发布对象。首次部署需要准
 
 ```bash
 # 【生产服务器】每次发布按实际填写，不要永久固定版本。
-PMSYSTEM_ROOT=/opt/pmsystem-license
+DDREC_ROOT=/opt/ddrec-license
 VERSION=<VERSION>
 GIT_SHA=<FULL_GIT_SHA>
 SHORT_SHA=<SHORT_GIT_SHA>
@@ -40,13 +40,13 @@ RELEASE_DIR="${VERSION}-${SHORT_SHA}"
 ## 第2章 系统架构
 
 ```text
-PMSystem Windows 客户端 ── HTTPS ──┐
+DDREC Windows 客户端 ── HTTPS ──┐
                                    │
 用户浏览器                          │
     │                              │
     ▼                              ▼
 Nginx / HTTPS（宿主机 80/443）
-    ├── /admin/  → /var/www/pmsystem-license/admin（Vue 静态文件）
+    ├── /admin/  → /var/www/ddrec-license/admin（Vue 静态文件）
     └── /api/v1/ → 127.0.0.1:8080
                          │
                          ▼
@@ -67,7 +67,7 @@ Nginx / HTTPS（宿主机 80/443）
 ## 第3章 目录结构
 
 ```text
-/opt/pmsystem-license/
+/opt/ddrec-license/
 ├── current -> release/<当前发布目录>
 ├── release/                     # 不可变历史版本
 ├── incoming/                    # 上传与解压暂存
@@ -79,7 +79,7 @@ Nginx / HTTPS（宿主机 80/443）
 │   └── production_ed25519_public.pem
 └── scripts/                     # install-release.sh 复制的运维脚本
 
-/var/www/pmsystem-license/
+/var/www/ddrec-license/
 ├── admin
 ├── admin.backup-<YYYYMMDD-HHMMSS>
 └── admin.previous-<SHORT_SHA>
@@ -91,21 +91,21 @@ Nginx / HTTPS（宿主机 80/443）
 
 | 项目 | 当前值（2026-08-04） |
 |---|---|
-| 公网 IP / SSH 别名 | `47.98.206.68` / `pmsystem-prod` |
+| 公网 IP / SSH 别名 | `47.98.206.68` / `ddrec-prod` |
 | 域名 | `license.aixcc.top` |
-| current | `/opt/pmsystem-license/release/1.0.5-54dca46` |
-| API 镜像 | `pmsystem-license-api:1.0.5-production` |
+| current | `/opt/ddrec-license/release/1.0.5-54dca46` |
+| API 镜像 | `ddrec-license-api:1.0.5-production` |
 | Git SHA | `54dca46f9836c0f92e1ed82490f487295ddf62c3` |
-| Compose 项目 | `pmsystem-license-production` |
+| Compose 项目 | `ddrec-license-production` |
 | 服务 | `license-api`、`postgres` |
-| 数据库/用户 | `pmsystem_license` / `pmsystem_license` |
+| 数据库/用户 | `ddrec_license` / `ddrec_license` |
 
 ## 第4章 账号、权限和敏感信息
 
 实施前准备：云服务器 root 或受控部署账号、SSH 密钥、DNS 管理权限、证书申请权限、密码管理工具、PostgreSQL 密码、Admin 会话密钥、TOTP 加密密钥、授权码及设备凭据 pepper、Ed25519 服务端签名私钥及对应客户端公钥、OWNER 密码和 TOTP 验证器。
 
 - 私钥不得进入 Git、发布包或普通工作站；客户端只能持有公钥。
-- `.env.production` 只保存在服务器 `/opt/pmsystem-license/config`，使用 `root:root`、权限 `600`。
+- `.env.production` 只保存在服务器 `/opt/ddrec-license/config`，使用 `root:root`、权限 `600`。
 - 私钥必须为 `root:10001`、权限 `640`；公钥为 `root:root`、权限 `644`。
 - 管理员密码和 TOTP Secret 不得作为命令参数或写入 Shell 历史。
 - PostgreSQL 不映射宿主机端口；API 只映射 `127.0.0.1:8080`。
@@ -169,14 +169,14 @@ systemctl is-active docker nginx firewalld
 
 ```bash
 # 【生产服务器】【会修改生产环境】
-install -d -m 750 /opt/pmsystem-license \
-  /opt/pmsystem-license/release \
-  /opt/pmsystem-license/incoming \
-  /opt/pmsystem-license/backups \
-  /opt/pmsystem-license/scripts
-install -d -m 700 /opt/pmsystem-license/config \
-  /opt/pmsystem-license/secrets
-install -d -m 755 /var/www/pmsystem-license/admin \
+install -d -m 750 /opt/ddrec-license \
+  /opt/ddrec-license/release \
+  /opt/ddrec-license/incoming \
+  /opt/ddrec-license/backups \
+  /opt/ddrec-license/scripts
+install -d -m 700 /opt/ddrec-license/config \
+  /opt/ddrec-license/secrets
+install -d -m 755 /var/www/ddrec-license/admin \
   /var/www/certbot
 
 firewall-cmd --permanent --add-service=ssh
@@ -209,7 +209,7 @@ getent ahostsv4 <LICENSE_DOMAIN>
 
 ### 6.2 Nginx
 
-仓库 `deploy/production-nginx/nginx/pmsystem-license.conf` 是签证前 HTTP 引导配置。`install-release.sh` 遇到不同的活动配置只写 `.conf.new`，不会覆盖线上 TLS 段。
+仓库 `deploy/production-nginx/nginx/ddrec-license.conf` 是签证前 HTTP 引导配置。`install-release.sh` 遇到不同的活动配置只写 `.conf.new`，不会覆盖线上 TLS 段。
 
 以下为仓库规则扩展出的脱敏 HTTPS 示例。先用 `nginx -T` 核对活动配置，不得直接覆盖已有证书路径或 Certbot 管理段。
 
@@ -235,10 +235,10 @@ server {
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
-    root /var/www/pmsystem-license;
+    root /var/www/ddrec-license;
     client_max_body_size 10m;
-    access_log /var/log/nginx/pmsystem-license-access.log;
-    error_log /var/log/nginx/pmsystem-license-error.log warn;
+    access_log /var/log/nginx/ddrec-license-access.log;
+    error_log /var/log/nginx/ddrec-license-error.log warn;
     add_header Strict-Transport-Security "max-age=31536000" always;
 
     location = / { return 302 /admin/; }
@@ -331,14 +331,14 @@ openssl s_client -connect <LICENSE_DOMAIN>:443 \
 
 ## 第7章 生产配置文件
 
-代码只读取 `LICENSE_*` 变量及 Compose 使用的 `PMSYSTEM_API_IMAGE_TAG`、`POSTGRES_*`。不存在通用 `APP_ENV` 或 `ENVIRONMENT`；实际变量是 `LICENSE_ENVIRONMENT=production`。Admin 标签由本地 `VITE_APP_ENV_LABEL=生产环境` 注入，不从服务器 `.env.production` 读取。
+代码只读取 `LICENSE_*` 变量及 Compose 使用的 `DDREC_API_IMAGE_TAG`、`POSTGRES_*`。不存在通用 `APP_ENV` 或 `ENVIRONMENT`；实际变量是 `LICENSE_ENVIRONMENT=production`。Admin 标签由本地 `VITE_APP_ENV_LABEL=生产环境` 注入，不从服务器 `.env.production` 读取。
 
 ```dotenv
-PMSYSTEM_API_IMAGE_TAG=<VERSION>-production
-POSTGRES_DB=pmsystem_license
-POSTGRES_USER=pmsystem_license
+DDREC_API_IMAGE_TAG=<VERSION>-production
+POSTGRES_DB=ddrec_license
+POSTGRES_USER=ddrec_license
 POSTGRES_PASSWORD=<POSTGRES_PASSWORD>
-LICENSE_DATABASE_URL=postgresql+asyncpg://pmsystem_license:<URL_ENCODED_POSTGRES_PASSWORD>@postgres:5432/pmsystem_license
+LICENSE_DATABASE_URL=postgresql+asyncpg://ddrec_license:<URL_ENCODED_POSTGRES_PASSWORD>@postgres:5432/ddrec_license
 LICENSE_ENVIRONMENT=production
 LICENSE_API_HOST=0.0.0.0
 LICENSE_API_PORT=8080
@@ -373,11 +373,11 @@ LICENSE_BUILD_COMMIT=<FULL_GIT_SHA>
 LICENSE_SERVICE_VERSION=<VERSION>
 ```
 
-首次部署必填或由 `init-production.sh` 生成：数据库密码、DATABASE_URL、会话密钥、TOTP 加密密钥、两个 pepper、签名密钥和 key ID。日常发布只允许更新 `PMSYSTEM_API_IMAGE_TAG`、`LICENSE_SERVICE_VERSION`、`LICENSE_BUILD_COMMIT`；不得覆盖其他秘密和策略。
+首次部署必填或由 `init-production.sh` 生成：数据库密码、DATABASE_URL、会话密钥、TOTP 加密密钥、两个 pepper、签名密钥和 key ID。日常发布只允许更新 `DDREC_API_IMAGE_TAG`、`LICENSE_SERVICE_VERSION`、`LICENSE_BUILD_COMMIT`；不得覆盖其他秘密和策略。
 
 ```bash
-chown root:root /opt/pmsystem-license/config/.env.production
-chmod 600 /opt/pmsystem-license/config/.env.production
+chown root:root /opt/ddrec-license/config/.env.production
+chmod 600 /opt/ddrec-license/config/.env.production
 ```
 
 ## 第8章 首次安装授权后端
@@ -401,7 +401,7 @@ chmod 600 /opt/pmsystem-license/config/.env.production
 
 ```bash
 # 【生产服务器】【会修改生产环境】前提：包和包内哈希已通过
-cd "/opt/pmsystem-license/incoming/${VERSION}/staging/${PACKAGE_ROOT}"
+cd "/opt/ddrec-license/incoming/${VERSION}/staging/${PACKAGE_ROOT}"
 find scripts -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
 find scripts -type f -name '*.sh' -exec bash -n {} \;
 bash scripts/precheck.sh
@@ -409,10 +409,10 @@ bash scripts/precheck.sh
 # 按第16章加载镜像；`load-images.sh` 会校验 `<VERSION>-production` 标签和 linux/amd64 平台。
 bash scripts/init-production.sh
 bash scripts/install-release.sh "$PWD"
-bash /opt/pmsystem-license/current/scripts/migrate.sh
-bash /opt/pmsystem-license/current/scripts/start.sh
-bash /opt/pmsystem-license/current/scripts/register-signing-key.sh
-bash /opt/pmsystem-license/current/scripts/verify.sh
+bash /opt/ddrec-license/current/scripts/migrate.sh
+bash /opt/ddrec-license/current/scripts/start.sh
+bash /opt/ddrec-license/current/scripts/register-signing-key.sh
+bash /opt/ddrec-license/current/scripts/verify.sh
 ```
 
 执行前条件：镜像标签、生产域名和密钥权限正确。执行后验证：两个容器 healthy、ready 200。失败时停止，不创建 OWNER、不开放生产流量，保留失败目录和日志。
@@ -431,8 +431,8 @@ bash /opt/pmsystem-license/current/scripts/verify.sh
 ```bash
 # 【生产服务器】【会修改生产环境】
 SHORT_SHA=<SHORT_GIT_SHA>
-ADMIN_SOURCE="/opt/pmsystem-license/release/${RELEASE_DIR}/admin"
-ADMIN_NEW="/var/www/pmsystem-license/admin.new-${SHORT_SHA}"
+ADMIN_SOURCE="/opt/ddrec-license/release/${RELEASE_DIR}/admin"
+ADMIN_NEW="/var/www/ddrec-license/admin.new-${SHORT_SHA}"
 
 test -f "${ADMIN_SOURCE}/index.html" || exit 1
 test ! -e "${ADMIN_NEW}" || exit 1
@@ -454,7 +454,7 @@ grep -oE '/admin/assets/[^" ]+\.(js|css)' "${ADMIN_NEW}/index.html"
 
 ```bash
 # 【生产服务器】【只读检查】
-cd /opt/pmsystem-license/current
+cd /opt/ddrec-license/current
 source scripts/common.sh
 load_environment
 compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc \
@@ -465,14 +465,14 @@ compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc \
 
 ```bash
 # 【生产服务器】【需要人工输入】【会修改生产环境】
-bash /opt/pmsystem-license/current/scripts/create-owner.sh \
+bash /opt/ddrec-license/current/scripts/create-owner.sh \
   <NON_DEFAULT_USERNAME> "<DISPLAY_NAME>"
 ```
 
 - 用户名至少 4 位且不能为 `admin`；登录字段是 username。
 - 密码由 Python `getpass` 两次输入，终端不回显。
 - TOTP Secret 和 provisioning URI 只显示一次；立即录入验证器并保存至批准的离线秘密库。
-- 建议在验证器中命名为 `PMSystem-生产环境`、`PMSystem-开发环境`，两者不能混用。
+- 建议在验证器中命名为 `DDREC-生产环境`、`DDREC-开发环境`，两者不能混用。
 - 不得截图、复制到聊天或保存到普通日志。
 - 当前仓库没有 TOTP 重绑脚本，只有密码重置 CLI；TOTP 丢失时必须先开发、审计并测试专用工具，禁止直接修改数据库密文字段。
 
@@ -500,7 +500,7 @@ bash /opt/pmsystem-license/current/scripts/create-owner.sh \
 
 ```text
 artifacts/cloud/<environment>/<service>/
-├── PMSystem-License-Cloud-<VERSION>-<environment>-<service>.tar.gz
+├── DDREC-License-Cloud-<VERSION>-<environment>-<service>.tar.gz
 ├── RELEASE-MANIFEST.txt
 └── SHA256SUMS.txt
 ```
@@ -534,7 +534,7 @@ free -h
 docker ps -a
 docker compose ls
 nginx -t
-readlink -f /opt/pmsystem-license/current
+readlink -f /opt/ddrec-license/current
 curl -fsS -i https://<LICENSE_DOMAIN>/api/v1/health
 curl -fsSI https://<LICENSE_DOMAIN>/admin/
 ```
@@ -549,24 +549,24 @@ $Version = '<VERSION>'
 $Service = '<api|admin|all>'
 $Package = '<ABSOLUTE_PACKAGE_PATH>'
 $Output = Split-Path -Parent $Package
-$Incoming = "/opt/pmsystem-license/incoming/$Version"
+$Incoming = "/opt/ddrec-license/incoming/$Version"
 
-ssh pmsystem-prod "install -d -m 750 '$Incoming'"
+ssh ddrec-prod "install -d -m 750 '$Incoming'"
 scp -- "$Package" `
   (Join-Path $Output 'RELEASE-MANIFEST.txt') `
   (Join-Path $Output 'SHA256SUMS.txt') `
-  "pmsystem-prod:${Incoming}/"
+  "ddrec-prod:${Incoming}/"
 ```
 
 ```bash
 # 【生产服务器】【只读检查】
 VERSION=<VERSION>
 SERVICE=<api|admin|all>
-INCOMING="/opt/pmsystem-license/incoming/${VERSION}"
+INCOMING="/opt/ddrec-license/incoming/${VERSION}"
 cd "${INCOMING}"
-sha256sum "PMSystem-License-Cloud-${VERSION}-production-${SERVICE}.tar.gz"
+sha256sum "DDREC-License-Cloud-${VERSION}-production-${SERVICE}.tar.gz"
 cat RELEASE-MANIFEST.txt
-tar -tzf "PMSystem-License-Cloud-${VERSION}-production-${SERVICE}.tar.gz" >/dev/null
+tar -tzf "DDREC-License-Cloud-${VERSION}-production-${SERVICE}.tar.gz" >/dev/null
 ```
 
 不得上传到 `current`，不得直接覆盖 Admin。必须同时上传 Manifest 和 SHA 文件，服务器哈希必须与本地和 Manifest 一致。
@@ -577,13 +577,13 @@ tar -tzf "PMSystem-License-Cloud-${VERSION}-production-${SERVICE}.tar.gz" >/dev/
 
 ```bash
 # 【生产服务器】【会修改生产环境：只新增备份】
-bash /opt/pmsystem-license/current/scripts/backup.sh
+bash /opt/ddrec-license/current/scripts/backup.sh
 
-BACKUP_FILE=$(find /opt/pmsystem-license/backups -maxdepth 1 -type f -name '*.dump' \
+BACKUP_FILE=$(find /opt/ddrec-license/backups -maxdepth 1 -type f -name '*.dump' \
   -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2- | sed -n '1p')
 test -s "$BACKUP_FILE"
 sha256sum -c "${BACKUP_FILE}.sha256"
-bash /opt/pmsystem-license/current/scripts/verify-backup.sh "$BACKUP_FILE"
+bash /opt/ddrec-license/current/scripts/verify-backup.sh "$BACKUP_FILE"
 ```
 
 `verify-backup.sh` 会恢复到随机临时数据库，检查 Alembic 和关键表，再删除临时库。必须看到成功日志；否则停止发布。
@@ -593,10 +593,10 @@ bash /opt/pmsystem-license/current/scripts/verify-backup.sh "$BACKUP_FILE"
 ```bash
 # 【生产服务器】【会修改生产环境：只新增备份】
 BACKUP_TIME=$(date +%Y%m%d-%H%M%S)
-cp -a /var/www/pmsystem-license/admin \
-  "/var/www/pmsystem-license/admin.backup-${BACKUP_TIME}"
-cp -a /opt/pmsystem-license/config/.env.production \
-  "/opt/pmsystem-license/config/.env.production.backup-${BACKUP_TIME}"
+cp -a /var/www/ddrec-license/admin \
+  "/var/www/ddrec-license/admin.backup-${BACKUP_TIME}"
+cp -a /opt/ddrec-license/config/.env.production \
+  "/opt/ddrec-license/config/.env.production.backup-${BACKUP_TIME}"
 ```
 
 不得在报告中输出配置内容。完整发布建议每次备份配置。
@@ -605,11 +605,11 @@ cp -a /opt/pmsystem-license/config/.env.production \
 
 ```bash
 # 【生产服务器】【只读检查】
-readlink -f /opt/pmsystem-license/current
+readlink -f /opt/ddrec-license/current
 docker inspect -f '{{.Config.Image}} {{.Image}} {{.State.Status}} {{.State.Health.Status}}' \
-  pmsystem-license-production-license-api-1
+  ddrec-license-production-license-api-1
 docker inspect -f '{{.Config.Image}} {{.Image}} {{.State.Status}} {{.State.Health.Status}}' \
-  pmsystem-license-production-postgres-1
+  ddrec-license-production-postgres-1
 ```
 
 同时按第20章记录 OWNER、授权、设备和审计数量。
@@ -621,10 +621,10 @@ docker inspect -f '{{.Config.Image}} {{.Image}} {{.State.Status}} {{.State.Healt
 VERSION=<VERSION>
 SERVICE=<api|admin|all>
 SHORT_SHA=<SHORT_GIT_SHA>
-PACKAGE_ROOT="PMSystem-License-Cloud-${VERSION}-production-${SERVICE}"
-ARCHIVE="/opt/pmsystem-license/incoming/${VERSION}/${PACKAGE_ROOT}.tar.gz"
-STAGING="/opt/pmsystem-license/release/.staging-${VERSION}-${SHORT_SHA}"
-FINAL="/opt/pmsystem-license/release/${VERSION}-${SHORT_SHA}"
+PACKAGE_ROOT="DDREC-License-Cloud-${VERSION}-production-${SERVICE}"
+ARCHIVE="/opt/ddrec-license/incoming/${VERSION}/${PACKAGE_ROOT}.tar.gz"
+STAGING="/opt/ddrec-license/release/.staging-${VERSION}-${SHORT_SHA}"
+FINAL="/opt/ddrec-license/release/${VERSION}-${SHORT_SHA}"
 
 test ! -e "$STAGING" || exit 1
 test ! -e "$FINAL" || exit 1
@@ -652,8 +652,8 @@ sha256sum -c SHA256SUMS.txt
 mv "$STAGING" "$FINAL"
 cd "$FINAL"
 bash scripts/precheck.sh
-docker compose --project-name pmsystem-license-production \
-  --env-file /opt/pmsystem-license/config/.env.production \
+docker compose --project-name ddrec-license-production \
+  --env-file /opt/ddrec-license/config/.env.production \
   -f compose.yml config --quiet
 nginx -t
 ```
@@ -664,21 +664,21 @@ Windows CRLF 可能让 Linux 把清单文件名末尾 `\r` 当作字符；不能
 
 ### 16.1 路径 A：加载预构建镜像（优先）
 
-`-ExportDockerImage` 生成 `images/pmsystem-production-images-<VERSION>.tar`，API 标签为 `pmsystem-license-api:<VERSION>-production`。
+`-ExportDockerImage` 生成 `images/ddrec-production-images-<VERSION>.tar`，API 标签为 `ddrec-license-api:<VERSION>-production`。
 
 ```bash
 # 【生产服务器】【会修改生产环境：新增镜像】
 IMAGE_TAR=$(find "$FINAL/images" -maxdepth 1 -type f \
-  -name 'pmsystem-production-images-*.tar' -print -quit)
+  -name 'ddrec-production-images-*.tar' -print -quit)
 test -n "$IMAGE_TAR" || exit 1
 docker load --input "$IMAGE_TAR"
-docker image inspect "pmsystem-license-api:${VERSION}-production" \
+docker image inspect "ddrec-license-api:${VERSION}-production" \
   --format '{{.Id}} {{.Os}}/{{.Architecture}}'
 docker image inspect postgres:17.5-alpine \
   --format '{{.Id}} {{.Os}}/{{.Architecture}}'
 ```
 
-必须为 `linux/amd64`，并保留旧镜像。`load-images.sh` 与统一构建均使用 `pmsystem-license-api:<VERSION>-production`，不得额外创建无 `-production` 后缀的标签。
+必须为 `linux/amd64`，并保留旧镜像。`load-images.sh` 与统一构建均使用 `ddrec-license-api:<VERSION>-production`，不得额外创建无 `-production` 后缀的标签。
 
 ### 16.2 路径 B：服务器构建
 
@@ -688,9 +688,9 @@ API_SOURCE="$FINAL/api-source"
 test -d "$API_SOURCE" || API_SOURCE="$FINAL/api"
 test -f "$API_SOURCE/Dockerfile" || exit 1
 docker build --pull=false \
-  --tag "pmsystem-license-api:${VERSION}-production" \
+  --tag "ddrec-license-api:${VERSION}-production" \
   "$API_SOURCE"
-docker image inspect "pmsystem-license-api:${VERSION}-production" --format '{{.Id}}'
+docker image inspect "ddrec-license-api:${VERSION}-production" --format '{{.Id}}'
 ```
 
 基础镜像不可用或 Docker Hub 超时时，不得切换生产；优先恢复网络、使用批准的镜像源或上传离线镜像。
@@ -703,27 +703,27 @@ docker image inspect "pmsystem-license-api:${VERSION}-production" --format '{{.I
 
 ## 第17章 Alembic 数据库迁移
 
-`migrate.sh` 从 `PMSYSTEM_ENV_FILE` 读取镜像标签。迁移发生在正式配置切换前时，先建立权限为 600 的生产配置临时副本，只替换三个非敏感版本标识；这样迁移明确使用新镜像，又不会提前改变运行中 API：
+`migrate.sh` 从 `DDREC_ENV_FILE` 读取镜像标签。迁移发生在正式配置切换前时，先建立权限为 600 的生产配置临时副本，只替换三个非敏感版本标识；这样迁移明确使用新镜像，又不会提前改变运行中 API：
 
 ```bash
 # 【生产服务器】【会修改生产数据库结构】
-MIGRATION_ENV="/opt/pmsystem-license/config/.env.production.migrate-${SHORT_SHA}"
+MIGRATION_ENV="/opt/ddrec-license/config/.env.production.migrate-${SHORT_SHA}"
 test ! -e "$MIGRATION_ENV" || exit 1
-cp -a /opt/pmsystem-license/config/.env.production "$MIGRATION_ENV"
+cp -a /opt/ddrec-license/config/.env.production "$MIGRATION_ENV"
 sed -i \
-  -e "s/^PMSYSTEM_API_IMAGE_TAG=.*/PMSYSTEM_API_IMAGE_TAG=${VERSION}-production/" \
+  -e "s/^DDREC_API_IMAGE_TAG=.*/DDREC_API_IMAGE_TAG=${VERSION}-production/" \
   -e "s/^LICENSE_SERVICE_VERSION=.*/LICENSE_SERVICE_VERSION=${VERSION}/" \
   -e "s/^LICENSE_BUILD_COMMIT=.*/LICENSE_BUILD_COMMIT=${GIT_SHA}/" \
   "$MIGRATION_ENV"
 chmod 600 "$MIGRATION_ENV"
-PMSYSTEM_ENV_FILE="$MIGRATION_ENV" bash "$FINAL/scripts/migrate.sh"
+DDREC_ENV_FILE="$MIGRATION_ENV" bash "$FINAL/scripts/migrate.sh"
 ```
 
 脚本确保 PostgreSQL healthy，执行 `alembic current`、`upgrade head`、`current`。完整发布验证成功并正式更新 `.env.production` 后，才能删除这个精确命名的临时副本。发布前另读 head时也必须指定该临时配置：
 
 ```bash
 cd "$FINAL"
-docker compose --project-name pmsystem-license-production \
+docker compose --project-name ddrec-license-production \
   --env-file "$MIGRATION_ENV" -f compose.yml \
   run --rm -T license-api alembic heads </dev/null
 ```
@@ -740,8 +740,8 @@ docker compose --project-name pmsystem-license-production \
 # 【生产服务器】【会修改生产环境】
 SHORT_SHA=<SHORT_GIT_SHA>
 ADMIN_SOURCE="$FINAL/admin"
-ADMIN_NEW="/var/www/pmsystem-license/admin.new-${SHORT_SHA}"
-ADMIN_PREVIOUS="/var/www/pmsystem-license/admin.previous-${SHORT_SHA}"
+ADMIN_NEW="/var/www/ddrec-license/admin.new-${SHORT_SHA}"
+ADMIN_PREVIOUS="/var/www/ddrec-license/admin.previous-${SHORT_SHA}"
 
 test -f "$ADMIN_SOURCE/index.html" || exit 1
 test ! -e "$ADMIN_NEW" || exit 1
@@ -755,8 +755,8 @@ grep -RIl --binary-files=without-match '生产环境' "$ADMIN_NEW" >/dev/null ||
   '开发环境|localhost|127\.0\.0\.1|<OLD_SERVER_IP>' "$ADMIN_NEW" >/dev/null || exit 1
 grep -oE '/admin/assets/[^" ]+\.(js|css)' "$ADMIN_NEW/index.html"
 
-mv /var/www/pmsystem-license/admin "$ADMIN_PREVIOUS"
-mv "$ADMIN_NEW" /var/www/pmsystem-license/admin
+mv /var/www/ddrec-license/admin "$ADMIN_PREVIOUS"
+mv "$ADMIN_NEW" /var/www/ddrec-license/admin
 ```
 
 执行前条件：第14章时间戳备份存在，扫描和资源检查通过。执行后验证：index、JS、CSS 和 SPA 路由为 200。失败处理：将失败目录移至 `admin.failed-<SHORT_SHA>`，把 previous 原子移回 `admin`，保留失败目录调查。
@@ -769,15 +769,15 @@ API-only 发布不替换 Admin；admin-only 发布不迁移数据库、不切 cu
 
 ```bash
 # 【生产服务器】【会修改生产环境】
-ln -sfn "/opt/pmsystem-license/release/${RELEASE_DIR}" \
-  /opt/pmsystem-license/current
-readlink -f /opt/pmsystem-license/current
+ln -sfn "/opt/ddrec-license/release/${RELEASE_DIR}" \
+  /opt/ddrec-license/current
+readlink -f /opt/ddrec-license/current
 ```
 
 生产 `.env.production` 只允许更新：
 
 ```text
-PMSYSTEM_API_IMAGE_TAG=<VERSION>-production
+DDREC_API_IMAGE_TAG=<VERSION>-production
 LICENSE_SERVICE_VERSION=<VERSION>
 LICENSE_BUILD_COMMIT=<FULL_GIT_SHA>
 ```
@@ -785,7 +785,7 @@ LICENSE_BUILD_COMMIT=<FULL_GIT_SHA>
 应用临时文件保留属主和权限，校验后原子替换；禁止 `cat` 或在日志输出整份生产配置。随后执行：
 
 ```bash
-bash /opt/pmsystem-license/current/scripts/restart.sh
+bash /opt/ddrec-license/current/scripts/restart.sh
 ```
 
 当前脚本执行 `docker compose up -d --pull never`；普通 API 变更通常只重建 API，PostgreSQL 配置未变时应保留原容器。重启后检查两个容器的 `StartedAt`、health 和 `RestartCount`。永远禁止 `docker compose down -v`。
@@ -796,13 +796,13 @@ bash /opt/pmsystem-license/current/scripts/restart.sh
 
 ```bash
 # 【生产服务器】【只读检查】
-bash /opt/pmsystem-license/current/scripts/status.sh
-bash /opt/pmsystem-license/current/scripts/verify.sh
-cd /opt/pmsystem-license/current
-docker compose --project-name pmsystem-license-production \
-  --env-file /opt/pmsystem-license/config/.env.production -f compose.yml ps
-docker compose --project-name pmsystem-license-production \
-  --env-file /opt/pmsystem-license/config/.env.production -f compose.yml \
+bash /opt/ddrec-license/current/scripts/status.sh
+bash /opt/ddrec-license/current/scripts/verify.sh
+cd /opt/ddrec-license/current
+docker compose --project-name ddrec-license-production \
+  --env-file /opt/ddrec-license/config/.env.production -f compose.yml ps
+docker compose --project-name ddrec-license-production \
+  --env-file /opt/ddrec-license/config/.env.production -f compose.yml \
   logs --tail=200 license-api
 nginx -t
 ```
@@ -827,7 +827,7 @@ API JSON 的 version、buildCommit、environment、database 必须符合本次�
 
 ```bash
 # 【生产服务器】【只读检查】
-cd /opt/pmsystem-license/current
+cd /opt/ddrec-license/current
 source scripts/common.sh
 load_environment
 compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At <<'SQL'
@@ -861,7 +861,7 @@ SQL
 
 ```bash
 # 【生产服务器】【会修改生产环境：删除本次临时秘密副本】
-test "$MIGRATION_ENV" = "/opt/pmsystem-license/config/.env.production.migrate-${SHORT_SHA}" || exit 1
+test "$MIGRATION_ENV" = "/opt/ddrec-license/config/.env.production.migrate-${SHORT_SHA}" || exit 1
 rm -f -- "$MIGRATION_ENV"
 ```
 
@@ -879,19 +879,19 @@ ENV_BACKUP=<ABSOLUTE_ENV_BACKUP>
 
 ```bash
 # 【生产服务器】【会修改生产环境】
-ln -sfn "$OLD_RELEASE" /opt/pmsystem-license/current
-readlink -f /opt/pmsystem-license/current
+ln -sfn "$OLD_RELEASE" /opt/ddrec-license/current
+readlink -f /opt/ddrec-license/current
 
-cp -a "$ENV_BACKUP" /opt/pmsystem-license/config/.env.production.restore
-mv -f /opt/pmsystem-license/config/.env.production.restore \
-  /opt/pmsystem-license/config/.env.production
+cp -a "$ENV_BACKUP" /opt/ddrec-license/config/.env.production.restore
+mv -f /opt/ddrec-license/config/.env.production.restore \
+  /opt/ddrec-license/config/.env.production
 
-FAILED_ADMIN="/var/www/pmsystem-license/admin.failed-$(date +%Y%m%d-%H%M%S)"
-mv /var/www/pmsystem-license/admin "$FAILED_ADMIN"
-cp -a "$OLD_ADMIN_BACKUP" /var/www/pmsystem-license/admin
+FAILED_ADMIN="/var/www/ddrec-license/admin.failed-$(date +%Y%m%d-%H%M%S)"
+mv /var/www/ddrec-license/admin "$FAILED_ADMIN"
+cp -a "$OLD_ADMIN_BACKUP" /var/www/ddrec-license/admin
 
-bash /opt/pmsystem-license/current/scripts/restart.sh
-bash /opt/pmsystem-license/current/scripts/verify.sh
+bash /opt/ddrec-license/current/scripts/restart.sh
+bash /opt/ddrec-license/current/scripts/verify.sh
 curl -fsS https://<LICENSE_DOMAIN>/api/v1/health/ready
 curl -fsSI https://<LICENSE_DOMAIN>/admin/
 ```
@@ -910,7 +910,7 @@ curl -fsSI https://<LICENSE_DOMAIN>/admin/
 
 ```bash
 # 【生产服务器】【危险操作】只停止 API，不删除容器/Volume
-cd /opt/pmsystem-license/current
+cd /opt/ddrec-license/current
 source scripts/common.sh
 load_environment
 compose stop license-api
@@ -919,14 +919,14 @@ compose stop license-api
 验证并恢复到独立临时数据库：
 
 ```bash
-BACKUP_FILE=/opt/pmsystem-license/backups/<BACKUP_FILE>.dump
+BACKUP_FILE=/opt/ddrec-license/backups/<BACKUP_FILE>.dump
 sha256sum -c "${BACKUP_FILE}.sha256"
-bash /opt/pmsystem-license/current/scripts/verify-backup.sh "$BACKUP_FILE"
+bash /opt/ddrec-license/current/scripts/verify-backup.sh "$BACKUP_FILE"
 
 # 【需要人工输入】脚本要求输入精确确认短语。
-bash /opt/pmsystem-license/current/scripts/restore-postgres.sh \
+bash /opt/ddrec-license/current/scripts/restore-postgres.sh \
   "$BACKUP_FILE" \
-  pmsystem_license_restore_<INCIDENT_ID>
+  ddrec_license_restore_<INCIDENT_ID>
 ```
 
 `restore-postgres.sh` 明确拒绝覆盖生产数据库；成功后保留临时库供审查。检查 Alembic revision、关键表、OWNER/授权/设备/审计数量和 ACTIVE signing key。生产库切换属于独立 DBA 变更：必须先保留当前失败数据库和 Volume，制定连接切换、权限、回退和停写方案；仓库没有自动覆盖生产库的脚本，不得临时拼接 `dropdb` 或直接覆盖命令。切换后再核对 Alembic、数据和签名密钥，最后启动 API并验证 ready。
@@ -989,7 +989,7 @@ nginx -T | grep -A15 'location /api/v1/'
 | `docker compose down -v` | 删除生产数据库 Volume |
 | `docker volume rm ...` | 永久丢失数据库数据 |
 | `docker system prune -a` | 删除回滚所需旧镜像 |
-| `rm -rf /opt/pmsystem-license` | 删除版本、配置、密钥和备份 |
+| `rm -rf /opt/ddrec-license` | 删除版本、配置、密钥和备份 |
 | `rm -rf /var/lib/postgresql` | 破坏数据库数据 |
 | 直接覆盖 `current` | 失去不可变版本和回滚锚点 |
 | 无备份直接覆盖 Admin | 无法恢复旧前端 |
@@ -1002,7 +1002,7 @@ nginx -T | grep -A15 'location /api/v1/'
 ## 第25章 发布记录模板
 
 ```text
-PMSystem 云端授权系统发布记录
+DDREC 云端授权系统发布记录
 
 发布时间：                 操作人：
 发布环境：production       发布服务：api / admin / all
@@ -1045,6 +1045,6 @@ Nginx/HTTPS：              浏览器人工验收：
 - 构建实现：`scripts/build_cloud_release.ps1`
 - Compose：`deploy/production-nginx/compose.yml`
 - 部署脚本：`deploy/production-nginx/scripts/`
-- Nginx HTTP 引导模板：`deploy/production-nginx/nginx/pmsystem-license.conf`
+- Nginx HTTP 引导模板：`deploy/production-nginx/nginx/ddrec-license.conf`
 - 当前 API：`https://license.aixcc.top/api/v1/`
 - 当前 Admin：`https://license.aixcc.top/admin/`

@@ -9,7 +9,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ["PMSYSTEM_TEST_MODE"] = "1"
+os.environ["DDREC_TEST_MODE"] = "1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))

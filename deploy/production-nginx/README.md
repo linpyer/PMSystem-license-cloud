@@ -1,6 +1,6 @@
-# PMSystem License Production Offline Deployment
+# DDREC License Production Offline Deployment
 
-This package deploys the PMSystem licensing API and PostgreSQL with Docker while host Nginx serves the Vue admin application. The server does not need Internet access to Docker Hub and does not run Caddy or a Vite development server.
+This package deploys the DDREC licensing API and PostgreSQL with Docker while host Nginx serves the Vue admin application. The server does not need Internet access to Docker Hub and does not run Caddy or a Vite development server.
 
 ## Verified application entry points
 
@@ -17,13 +17,13 @@ The API startup lifespan derives the Ed25519 public key from the mounted private
 Upload the release archive and its `SHA256SUMS.txt` file to the server. Then run:
 
 ```bash
-cd /opt/pmsystem-license/incoming/1.3.0
+cd /opt/ddrec-license/incoming/1.3.0
 sha256sum -c SHA256SUMS.txt
-mkdir -p /opt/pmsystem-license/release/1.3.0-<short-git-sha>
-tar -xzf PMSystem-License-Cloud-1.3.0-production-all.tar.gz \
+mkdir -p /opt/ddrec-license/release/1.3.0-<short-git-sha>
+tar -xzf DDREC-License-Cloud-1.3.0-production-all.tar.gz \
   --strip-components=1 \
-  -C /opt/pmsystem-license/release/1.3.0-<short-git-sha>
-cd /opt/pmsystem-license/release/1.3.0-<short-git-sha>
+  -C /opt/ddrec-license/release/1.3.0-<short-git-sha>
+cd /opt/ddrec-license/release/1.3.0-<short-git-sha>
 
 bash scripts/precheck.sh
 bash scripts/load-images.sh
@@ -48,14 +48,14 @@ The private key is installed as `root:10001` with mode `640`. Initialization and
 Create the first OWNER interactively after the API is ready:
 
 ```bash
-bash /opt/pmsystem-license/current/scripts/create-owner.sh owner_name "System Owner"
+bash /opt/ddrec-license/current/scripts/create-owner.sh owner_name "System Owner"
 ```
 
 The password prompt and one-time TOTP enrollment output must be handled only in the secure server terminal and saved in approved offline secret storage.
 
 ## Nginx and HTTPS
 
-The initial file `/etc/nginx/conf.d/pmsystem-license.conf` serves:
+The initial file `/etc/nginx/conf.d/ddrec-license.conf` serves:
 
 - `http://license.aixcc.top/admin/`
 - `http://license.aixcc.top/api/v1/`
@@ -78,7 +78,7 @@ Review Certbot's changes and the TLS policy before enabling production traffic.
 Only the public key may be copied from:
 
 ```text
-/opt/pmsystem-license/secrets/production_ed25519_public.pem
+/opt/ddrec-license/secrets/production_ed25519_public.pem
 ```
 
 The Windows production client must trust `production-2026-01` and the matching public key before release. The production private key must never be downloaded to an ordinary workstation, copied into the Windows client, committed to Git, included in this package, or sent through chat.
@@ -86,19 +86,19 @@ The Windows production client must trust `production-2026-01` and the matching p
 ## Operations
 
 ```bash
-bash /opt/pmsystem-license/current/scripts/status.sh
-bash /opt/pmsystem-license/current/scripts/verify.sh
-bash /opt/pmsystem-license/current/scripts/backup.sh
-bash /opt/pmsystem-license/current/scripts/backup.sh 30
-bash /opt/pmsystem-license/current/scripts/verify-backup.sh
-bash /opt/pmsystem-license/current/scripts/restore-postgres.sh \
-  /opt/pmsystem-license/backups/<backup>.dump \
-  pmsystem_license_restore_review
-bash /opt/pmsystem-license/current/scripts/restart.sh
-bash /opt/pmsystem-license/current/scripts/stop.sh
+bash /opt/ddrec-license/current/scripts/status.sh
+bash /opt/ddrec-license/current/scripts/verify.sh
+bash /opt/ddrec-license/current/scripts/backup.sh
+bash /opt/ddrec-license/current/scripts/backup.sh 30
+bash /opt/ddrec-license/current/scripts/verify-backup.sh
+bash /opt/ddrec-license/current/scripts/restore-postgres.sh \
+  /opt/ddrec-license/backups/<backup>.dump \
+  ddrec_license_restore_review
+bash /opt/ddrec-license/current/scripts/restart.sh
+bash /opt/ddrec-license/current/scripts/stop.sh
 ```
 
-`backup.sh` creates a PostgreSQL custom-format dump and SHA-256 file without stopping the database. Retention deletion occurs only when an explicit positive day count is supplied and only inside `/opt/pmsystem-license/backups`.
+`backup.sh` creates a PostgreSQL custom-format dump and SHA-256 file without stopping the database. Retention deletion occurs only when an explicit positive day count is supplied and only inside `/opt/ddrec-license/backups`.
 
 `verify-backup.sh` restores a backup into a temporary database, verifies Alembic and critical tables,
 then removes only that temporary database. `restore-postgres.sh` requires an explicit temporary
@@ -110,7 +110,7 @@ incident recovery or cutover.
 
 1. Run `backup.sh` and verify its checksum.
 2. Upload and verify the new release archive.
-3. Extract it into a new `/opt/pmsystem-license/release/<version>` directory.
+3. Extract it into a new `/opt/ddrec-license/release/<version>` directory.
 4. Run the new `load-images.sh`.
 5. Run `install-release.sh` to switch `current` and deploy admin assets.
 6. Review any generated Nginx `.conf.new` file.
@@ -121,7 +121,7 @@ Old images, releases, backups and the PostgreSQL named volume are retained.
 
 ## Rollback boundary
 
-Application rollback can switch `/opt/pmsystem-license/current` back to a compatible old release and run that release's `restart.sh`. Database migrations may be irreversible; inspect migration compatibility before rolling back application code. The scripts never run `alembic downgrade`, never delete the production volume, and never use `docker compose down -v`.
+Application rollback can switch `/opt/ddrec-license/current` back to a compatible old release and run that release's `restart.sh`. Database migrations may be irreversible; inspect migration compatibility before rolling back application code. The scripts never run `alembic downgrade`, never delete the production volume, and never use `docker compose down -v`.
 
 ## Security notes
 
@@ -129,5 +129,5 @@ Application rollback can switch `/opt/pmsystem-license/current` back to a compat
 - The API binds only to host loopback `127.0.0.1:8080`.
 - Both images use immutable version tags and `pull_policy: never`.
 - The API runs as UID/GID 10001, with a read-only root filesystem, `/tmp` tmpfs and a read-only private-key mount.
-- Production secrets live only in `/opt/pmsystem-license/config` and `/opt/pmsystem-license/secrets`; the signing key is exactly `root:10001` mode `640` and is mounted read-only.
+- Production secrets live only in `/opt/ddrec-license/config` and `/opt/ddrec-license/secrets`; the signing key is exactly `root:10001` mode `640` and is mounted read-only.
 - Production OpenAPI is disabled, cookies are Secure, origins and hosts are explicit, and request rate limiting is enabled.

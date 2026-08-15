@@ -1,4 +1,4 @@
-name: pmsystem-license-production
+name: ddrec-license-production
 
 x-json-logging: &json-logging
   driver: json-file
@@ -16,7 +16,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
-      - production_postgres_data:/var/lib/postgresql/data
+      - ddrec_license_postgres_data:/var/lib/postgresql/data
     networks:
       - backend
     healthcheck:
@@ -30,11 +30,11 @@ services:
     logging: *json-logging
 
   license-api:
-    image: pmsystem-license-api:${PMSYSTEM_API_IMAGE_TAG:?PMSYSTEM_API_IMAGE_TAG is required}
+    image: ddrec-license-api:${DDREC_API_IMAGE_TAG:?DDREC_API_IMAGE_TAG is required}
     pull_policy: never
     restart: unless-stopped
     env_file:
-      - ${PMSYSTEM_ENV_FILE:-/opt/pmsystem-license/config/.env.production}
+      - ${DDREC_ENV_FILE:-/opt/ddrec-license/config/.env.production}
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,7 +48,7 @@ services:
       - /tmp:size=64m,mode=1777
     volumes:
       - type: bind
-        source: /opt/pmsystem-license/secrets/production_ed25519_private.pem
+        source: /opt/ddrec-license/secrets/production_ed25519_private.pem
         target: /run/secrets/license_signing_private_key.pem
         read_only: true
     security_opt:
@@ -67,4 +67,4 @@ networks:
   edge:
 
 volumes:
-  production_postgres_data:
+  ddrec_license_postgres_data:

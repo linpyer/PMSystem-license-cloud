@@ -21,9 +21,9 @@ from app.db.models.enums import AdminRole, AdminSessionStatus, AdminStatus
 
 
 def _smoke_database_url(value: str) -> str:
-    override = os.getenv("PMSYSTEM_SMOKE_DATABASE_URL")
+    override = os.getenv("DDREC_SMOKE_DATABASE_URL")
     url = make_url(override or value)
-    if url.database not in {"pmsystem_license_dev", "pmsystem_license_staging"}:
+    if url.database not in {"ddrec_license_dev", "ddrec_license_staging"}:
         raise RuntimeError("Smoke test may only use development or staging license databases")
     if not override:
         url = url.set(host="127.0.0.1", port=5433)
@@ -31,7 +31,7 @@ def _smoke_database_url(value: str) -> str:
 
 
 def _smoke_base_url() -> str:
-    value = os.getenv("PMSYSTEM_SMOKE_BASE_URL", "http://localhost:8000/api/v1").rstrip("/")
+    value = os.getenv("DDREC_SMOKE_BASE_URL", "http://localhost:8000/api/v1").rstrip("/")
     parsed = urlparse(value)
     if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "caddy"}:
         raise RuntimeError("Smoke API must be a local development or staging HTTP endpoint")
@@ -143,7 +143,7 @@ async def main() -> None:
             original_policy = (await client.get("/admin/version-policy")).json()["policy"]
             policy_test = await client.put("/admin/version-policy", headers=headers(), json={
                 "recommendedVersion": "9.9.9", "minimumSupportedVersion": "9.0.0",
-                "downloadUrl": "https://example.invalid/pmsystem", "releaseNotes": "smoke only",
+                "downloadUrl": "https://example.invalid/ddrec", "releaseNotes": "smoke only",
             })
             policy_test.raise_for_status()
             unsupported = await client.post("/licenses/refresh", json={

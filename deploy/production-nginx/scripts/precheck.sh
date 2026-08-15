@@ -21,7 +21,7 @@ log "Architecture: $(uname -m)"
 log "Docker: $(docker version --format '{{.Server.Version}}')"
 log "Compose: $(docker compose version --short)"
 log "Nginx: $(nginx -v 2>&1)"
-df -h / "${PMSYSTEM_ROOT}" 2>/dev/null || df -h /
+df -h / "${DDREC_ROOT}" 2>/dev/null || df -h /
 free -h
 
 log "Listening ports (80, 443, 8080, 5432):"
@@ -42,8 +42,8 @@ else
   log "WARNING: license.aixcc.top does not currently resolve"
 fi
 
-for directory in "${PMSYSTEM_ROOT}" "${PMSYSTEM_ROOT}/release" "${PMSYSTEM_ROOT}/config" \
-  "${PMSYSTEM_ROOT}/secrets" "${PMSYSTEM_ROOT}/backups" /var/www/pmsystem-license/admin /var/www/certbot; do
+for directory in "${DDREC_ROOT}" "${DDREC_ROOT}/release" "${DDREC_ROOT}/config" \
+  "${DDREC_ROOT}/secrets" "${DDREC_ROOT}/backups" /var/www/ddrec-license/admin /var/www/certbot; do
   if [[ -e "${directory}" ]]; then
     log "Present: ${directory}"
   else

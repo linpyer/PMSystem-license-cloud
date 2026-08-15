@@ -1,15 +1,15 @@
-# PMSystem 授权管理端
+# DD Rec 授权管理端
 
 ## Production build
 
 `Dockerfile` uses Node 22 LTS only in the build stage, runs `npm ci` and the typed Vite build, then
 copies only `dist` into a fixed Caddy runtime image. Production uses `VITE_BASE_PATH=/admin/` and
 `VITE_API_BASE_URL=/api/v1` so the portal and API are same-origin. No server secret is a Vite
-variable. The administration image and its dependencies are never included in the PMSystem Windows
+variable. The administration image and its dependencies are never included in the DDREC Windows
 installer; deployment, CSP, caching, HTTPS, and rollback are documented under `deploy/production`.
 
 独立的网页版授权管理后台，通过 `license-server` 的 `/api/v1/admin` API 工作，不直接连接
-PostgreSQL，也不会进入 PMSystem Windows 安装包。
+PostgreSQL，也不会进入 DDREC Windows 安装包。
 
 “试用设备”页只用于查看每台设备唯一的 168 小时试用、转正式状态与审计记录。管理端不提供重置、延长或删除试用的操作。
 
@@ -49,7 +49,7 @@ npm install
 
 ```text
 VITE_API_BASE_URL=http://localhost:8000/api/v1
-VITE_APP_TITLE=PMSystem授权管理
+VITE_APP_TITLE=DD Rec 授权管理
 VITE_APP_ENVIRONMENT=development
 ```
 
@@ -64,7 +64,7 @@ npm run build
 ```
 
 开发地址为 `http://127.0.0.1:5173`，后端必须把该精确来源加入 CORS。生产构建输出到
-`dist/`，该目录被 Git 忽略，并与 PMSystem 客户端发布流程完全分离。
+`dist/`，该目录被 Git 忽略，并与 DDREC 客户端发布流程完全分离。
 
 ## 测试
 

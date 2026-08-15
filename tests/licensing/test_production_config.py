@@ -20,16 +20,16 @@ from scripts.check_production_license_config import validate
 
 
 def test_environment_selects_separate_production_public_keys(monkeypatch):
-    monkeypatch.setenv("PMSYSTEM_LICENSE_ENVIRONMENT", "production")
+    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "production")
     assert trusted_public_keys_resource().endswith("public_keys.production.json")
-    monkeypatch.setenv("PMSYSTEM_LICENSE_ENVIRONMENT", "staging")
+    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "staging")
     assert trusted_public_keys_resource().endswith("public_keys.staging.json")
-    monkeypatch.setenv("PMSYSTEM_LICENSE_ENVIRONMENT", "development")
+    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "development")
     assert trusted_public_keys_resource().endswith("public_keys.json")
 
 
 def test_unknown_environment_does_not_reuse_another_trust_store(monkeypatch):
-    monkeypatch.setenv("PMSYSTEM_LICENSE_ENVIRONMENT", "test")
+    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "test")
     with pytest.raises(ValueError, match="Unsupported license environment"):
         trusted_public_keys_resource()
 
@@ -71,8 +71,8 @@ def test_production_public_key_pem_matches_registry():
 
 def test_frozen_client_ignores_environment_overrides(monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setenv("PMSYSTEM_LICENSE_API_BASE_URL", "http://127.0.0.1:8000/api/v1")
-    monkeypatch.setenv("PMSYSTEM_LICENSE_ENVIRONMENT", "development")
+    monkeypatch.setenv("DDREC_LICENSE_API_BASE_URL", "http://127.0.0.1:8000/api/v1")
+    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "development")
     assert license_api_base_url() == PRODUCTION_LICENSE_API_BASE_URL
     assert license_environment() == "production"
     assert trusted_public_keys_resource().endswith("public_keys.production.json")

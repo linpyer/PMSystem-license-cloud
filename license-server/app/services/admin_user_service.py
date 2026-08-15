@@ -61,7 +61,7 @@ class AdminUserService:
             "user": self._as_dict(user),
             "totpSecret": secret,
             "provisioningUri": pyotp.TOTP(secret).provisioning_uri(
-                name=user.username, issuer_name="PMSystem License Admin"
+                name=user.username, issuer_name="DD Rec License Admin"
             ),
             "enrollmentVisibleOnce": True,
         }

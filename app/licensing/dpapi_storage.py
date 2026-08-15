@@ -17,7 +17,7 @@ def _blob(data: bytes) -> tuple[_DataBlob, ctypes.Array]:
 
 
 class WindowsDpapiProtector:
-    def __init__(self, entropy: bytes = b"PMSystem-License-v1") -> None:
+    def __init__(self, entropy: bytes = b"DDREC-License-v1") -> None:
         self.entropy = bytes(entropy)
 
     def protect(self, plaintext: bytes) -> bytes:

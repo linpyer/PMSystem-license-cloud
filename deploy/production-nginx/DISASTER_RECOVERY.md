@@ -7,7 +7,7 @@ temporary database before any cutover. Verify SHA-256, Alembic version, critical
 counts, the ACTIVE signing key, and the mounted private key. Never run `docker compose down -v`.
 
 `verify-backup.sh` creates and removes an isolated verification database. `restore-postgres.sh`
-requires an explicit `pmsystem_license_restore_*` database name, never overwrites the configured
+requires an explicit `ddrec_license_restore_*` database name, never overwrites the configured
 production database, and retains a successful temporary restore for review. Production replacement
 is always a separate, documented manual operation.
 
@@ -33,7 +33,7 @@ is always a separate, documented manual operation.
   rules for 80/443. Keep ports 5432 and 8080 private and never bypass TLS in production clients.
 - **Admin portal unavailable:** test `/admin/`, liveness, and readiness independently; validate the
   Nginx SPA fallback and immutable static assets before changing application state.
-- **Failed deployment:** switch `/opt/pmsystem-license/current` back to a compatible retained release
+- **Failed deployment:** switch `/opt/ddrec-license/current` back to a compatible retained release
   and run its `restart.sh`. Never run automatic Alembic downgrade; prefer a forward fix unless a
   migration-specific recovery plan has been reviewed.
 - **Corrupt backup:** reject it on checksum or restore failure, preserve it for investigation, and

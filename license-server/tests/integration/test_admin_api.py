@@ -412,7 +412,7 @@ async def test_version_policy_rejects_old_client_and_advises_supported_client(ad
     csrf = await login(client)
     response = await client.put("/api/v1/admin/version-policy", json={
         "recommendedVersion": "1.1.0", "minimumSupportedVersion": "1.0.5",
-        "downloadUrl": "https://example.test/pmsystem", "releaseNotes": "升级建议",
+        "downloadUrl": "https://example.test/ddrec", "releaseNotes": "升级建议",
     }, headers=write_headers(csrf))
     assert response.status_code == 200
     created = await client.post("/api/v1/admin/licenses", json={

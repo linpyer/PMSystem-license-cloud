@@ -51,17 +51,17 @@ class LicenseApiClient:
             else (base_url or license_api_base_url()).rstrip("/")
         )
         self.connect_timeout = float(
-            connect_timeout or os.getenv("PMSYSTEM_LICENSE_CONNECT_TIMEOUT", "3")
+            connect_timeout or os.getenv("DDREC_LICENSE_CONNECT_TIMEOUT", "3")
         )
-        self.read_timeout = float(read_timeout or os.getenv("PMSYSTEM_LICENSE_READ_TIMEOUT", "8"))
+        self.read_timeout = float(read_timeout or os.getenv("DDREC_LICENSE_READ_TIMEOUT", "8"))
         if self.is_frozen_production_client:
             allow_insecure_http = False
         elif allow_insecure_http is None:
-            configured = os.getenv("PMSYSTEM_LICENSE_ALLOW_INSECURE_HTTP")
+            configured = os.getenv("DDREC_LICENSE_ALLOW_INSECURE_HTTP")
             if configured is not None:
                 allow_insecure_http = configured.lower() in {"1", "true", "yes", "on"}
             else:
-                environment = os.getenv("PMSYSTEM_LICENSE_ENVIRONMENT", "development").lower()
+                environment = os.getenv("DDREC_LICENSE_ENVIRONMENT", "development").lower()
                 host = (urlparse(self.base_url).hostname or "").lower()
                 allow_insecure_http = environment in {"development", "test"} and host in {
                     "127.0.0.1",
@@ -75,7 +75,7 @@ class LicenseApiClient:
         self.session = session or requests.Session()
         self.verify_tls = True
         self.session.headers.update(
-            {"Accept": "application/json", "User-Agent": f"PMSystem/{APP_VERSION} (Windows)"}
+            {"Accept": "application/json", "User-Agent": f"DDREC/{APP_VERSION} (Windows)"}
         )
         self.logger = logger or logging.getLogger(__name__)
 

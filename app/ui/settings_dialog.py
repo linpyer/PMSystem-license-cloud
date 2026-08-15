@@ -1026,7 +1026,7 @@ class SettingsDialog(QDialog):
         return widget
 
     def _export_config(self) -> None:
-        default_name = f"PMSystem_Config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        default_name = f"DDREC_Config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         selected, _ = QFileDialog.getSaveFileName(
             self,
             "导出配置",

@@ -43,10 +43,10 @@ def test_insecure_http_requires_explicit_development_opt_in():
 
 
 def test_loopback_http_is_allowed_by_default_only_in_development(monkeypatch):
-    monkeypatch.delenv("PMSYSTEM_LICENSE_ALLOW_INSECURE_HTTP", raising=False)
-    monkeypatch.setenv("PMSYSTEM_LICENSE_ENVIRONMENT", "development")
+    monkeypatch.delenv("DDREC_LICENSE_ALLOW_INSECURE_HTTP", raising=False)
+    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "development")
     assert LicenseApiClient(BASE_URL).base_url == BASE_URL
-    monkeypatch.setenv("PMSYSTEM_LICENSE_ENVIRONMENT", "production")
+    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "production")
     with pytest.raises(LicenseApiError):
         LicenseApiClient(BASE_URL)
 
@@ -67,8 +67,8 @@ class SuccessfulSession(requests.Session):
 
 def test_frozen_production_client_locks_url_and_tls(monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setenv("PMSYSTEM_LICENSE_API_BASE_URL", BASE_URL)
-    monkeypatch.setenv("PMSYSTEM_LICENSE_ALLOW_INSECURE_HTTP", "true")
+    monkeypatch.setenv("DDREC_LICENSE_API_BASE_URL", BASE_URL)
+    monkeypatch.setenv("DDREC_LICENSE_ALLOW_INSECURE_HTTP", "true")
     session = SuccessfulSession()
     api = LicenseApiClient(BASE_URL, allow_insecure_http=True, session=session)
     assert api.base_url == PRODUCTION_LICENSE_API_BASE_URL

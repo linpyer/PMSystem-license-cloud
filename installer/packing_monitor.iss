@@ -1,10 +1,10 @@
-#define MyAppName "电商打包发货监控溯源系统"
+#define MyAppName "DD Rec"
 #ifndef MyAppVersion
   #error MyAppVersion must be supplied by build_installer.bat
 #endif
 #define MyAppPublisher "JsonLin"
-#define MyAppExeName "电商打包发货监控溯源系统.exe"
-#define MyAppUserModelID "JsonLin.PMSystem"
+#define MyAppExeName "DDREC.exe"
+#define MyAppUserModelID "JsonLin.DDREC"
 #define MyAppIcon "..\app\assets\app_icon.ico"
 #if !FileExists(MyAppIcon)
   #error Formal application icon not found: {#MyAppIcon}
@@ -16,14 +16,14 @@ AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} version {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\PMSystem
+DefaultDirName={autopf}\DDREC
 DefaultGroupName={#MyAppName}
 UsePreviousAppDir=yes
 AllowNoIcons=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=output
-OutputBaseFilename=电商打包发货监控溯源系统_Setup_v{#MyAppVersion}
+OutputBaseFilename=DDREC-Setup
 SetupIconFile={#MyAppIcon}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma
@@ -37,7 +37,7 @@ Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
 
 [Files]
-Source: "..\dist\电商打包发货监控溯源系统\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\DDREC\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; IconFilename: "{app}\{#MyAppExeName}"; AppUserModelID: "{#MyAppUserModelID}"

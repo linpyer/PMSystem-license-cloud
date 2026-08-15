@@ -1,6 +1,6 @@
 # Bundled FFmpeg tools
 
-PMSystem resolves ffmpeg.exe and ffprobe.exe from this directory before
+DDREC resolves ffmpeg.exe and ffprobe.exe from this directory before
 checking the system PATH. Both executables must come from the same trusted
 Windows build and the FFmpeg build must include the libx264 encoder.
 

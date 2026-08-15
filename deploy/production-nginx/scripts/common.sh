@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PMSYSTEM_ROOT="${PMSYSTEM_ROOT:-/opt/pmsystem-license}"
-ENV_FILE="${PMSYSTEM_ENV_FILE:-${PMSYSTEM_ROOT}/config/.env.production}"
-CURRENT_LINK="${PMSYSTEM_ROOT}/current"
+DDREC_ROOT="${DDREC_ROOT:-/opt/ddrec-license}"
+ENV_FILE="${DDREC_ENV_FILE:-${DDREC_ROOT}/config/.env.production}"
+CURRENT_LINK="${DDREC_ROOT}/current"
 SCRIPT_RELEASE_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 if [[ -f "${SCRIPT_RELEASE_ROOT}/compose.yml" ]]; then
@@ -14,7 +14,7 @@ elif [[ -L "${CURRENT_LINK}" || -d "${CURRENT_LINK}" ]]; then
 else
   RELEASE_ROOT="${SCRIPT_RELEASE_ROOT}"
 fi
-COMPOSE_FILE="${PMSYSTEM_COMPOSE_FILE:-${RELEASE_ROOT}/compose.yml}"
+COMPOSE_FILE="${DDREC_COMPOSE_FILE:-${RELEASE_ROOT}/compose.yml}"
 
 log() { printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 fail() { log "ERROR: $*" >&2; exit 1; }
@@ -30,7 +30,7 @@ load_environment() {
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
   set +a
-  export PMSYSTEM_ENV_FILE="${ENV_FILE}"
+  export DDREC_ENV_FILE="${ENV_FILE}"
 }
 
 compose() {
@@ -53,7 +53,7 @@ wait_for_health() {
 }
 
 check_private_key() {
-  local path="${PMSYSTEM_ROOT}/secrets/production_ed25519_private.pem" owner group mode
+  local path="${DDREC_ROOT}/secrets/production_ed25519_private.pem" owner group mode
   require_file "${path}"
   owner="$(stat -c '%u' "${path}")"
   group="$(stat -c '%g' "${path}")"
@@ -64,17 +64,17 @@ check_private_key() {
 }
 
 verify_private_key_readable() {
-  local path="${PMSYSTEM_ROOT}/secrets/production_ed25519_private.pem"
+  local path="${DDREC_ROOT}/secrets/production_ed25519_private.pem"
   require_command docker
-  require_value PMSYSTEM_API_IMAGE_TAG
+  require_value DDREC_API_IMAGE_TAG
   check_private_key
-  docker image inspect "pmsystem-license-api:${PMSYSTEM_API_IMAGE_TAG}" >/dev/null 2>&1 \
-    || fail "API image is not loaded: pmsystem-license-api:${PMSYSTEM_API_IMAGE_TAG}"
+  docker image inspect "ddrec-license-api:${DDREC_API_IMAGE_TAG}" >/dev/null 2>&1 \
+    || fail "API image is not loaded: ddrec-license-api:${DDREC_API_IMAGE_TAG}"
   docker run --rm --pull never \
     --user 10001:10001 \
     --entrypoint python \
     --volume "${path}:/run/secrets/license_signing_private_key.pem:ro" \
-    "pmsystem-license-api:${PMSYSTEM_API_IMAGE_TAG}" \
+    "ddrec-license-api:${DDREC_API_IMAGE_TAG}" \
     -c "from pathlib import Path; Path('/run/secrets/license_signing_private_key.pem').read_bytes(); print('signing key readable')" \
     || fail "The license-api runtime user cannot read the production signing key"
 }

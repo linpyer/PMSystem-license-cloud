@@ -18,12 +18,12 @@ echo [2/2] Building Windows executable with PyInstaller...
 "%PYTHON%" -m PyInstaller ^
     --noconfirm ^
     --clean ^
-    "PMSystem.spec"
+    "DDREC.spec"
 
 if errorlevel 1 (
     echo PyInstaller build failed.
     exit /b 1
 )
 
-echo Build completed: dist\电商打包发货监控溯源系统\电商打包发货监控溯源系统.exe
+echo Build completed: dist\DDREC\DDREC.exe
 endlocal
