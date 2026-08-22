@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="DD Rec logo">
+  <rect x="20" y="20" width="216" height="216" rx="44" fill="#0f2742"/>
+  <rect x="34" y="34" width="188" height="188" rx="34" fill="none" stroke="#2f6f8f" stroke-width="8"/>
+  <rect x="55" y="64" width="110" height="76" rx="18" fill="#f8fafc"/>
+  <rect x="162" y="84" width="34" height="36" rx="8" fill="#f8fafc"/>
+  <path d="M196 94 L220 82 V122 L196 110 Z" fill="#f8fafc"/>
+  <circle cx="110" cy="102" r="30" fill="#0f2742"/>
+  <circle cx="110" cy="102" r="19" fill="#1d6f8f"/>
+  <circle cx="101" cy="92" r="7" fill="#e8f7fb"/>
+  <rect x="82" y="152" width="98" height="58" rx="9" fill="#dce8ef"/>
+  <path d="M82 170 L131 146 L180 170" fill="none" stroke="#8aa3b3" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M131 146 V210" stroke="#8aa3b3" stroke-width="5" stroke-linecap="round"/>
+  <rect x="96" y="182" width="5" height="18" rx="2" fill="#0f2742"/>
+  <rect x="106" y="182" width="3" height="18" rx="1.5" fill="#0f2742"/>
+  <rect x="115" y="182" width="7" height="18" rx="2" fill="#0f2742"/>
+  <rect x="128" y="182" width="3" height="18" rx="1.5" fill="#0f2742"/>
+  <rect x="137" y="182" width="5" height="18" rx="2" fill="#0f2742"/>
+  <rect x="148" y="182" width="9" height="18" rx="2" fill="#0f2742"/>
+  <rect x="162" y="182" width="3" height="18" rx="1.5" fill="#0f2742"/>
+</svg>

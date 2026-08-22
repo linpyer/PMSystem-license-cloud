@@ -25,7 +25,8 @@ class ClientReleaseDraftRequest(CamelModel):
     architecture: Literal["x64"] = "x64"
     channel: Literal["stable", "dev"]
     title: str = Field(min_length=1, max_length=200)
-    release_notes: str = Field(min_length=1, max_length=20_000)
+    # Retained for wire/database compatibility; new Admin builds intentionally omit it.
+    release_notes: str = Field(default="", max_length=20_000)
     file_name: str = Field(max_length=260)
     download_path: str = Field(min_length=1, max_length=1000)
     file_size: int = Field(gt=0)

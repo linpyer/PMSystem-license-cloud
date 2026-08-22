@@ -11,7 +11,6 @@ const auth = useAuthStore()
 const loading = ref(false)
 const saving = ref(false)
 const visible = ref(false)
-const editing = ref<ClientRelease | null>(null)
 const items = ref<ClientRelease[]>([])
 const total = ref(0)
 const page = ref(1)
@@ -20,7 +19,7 @@ const isOwner = computed(() => auth.user?.role === 'OWNER')
 const form = reactive({
   product: 'DDREC', version: '', buildNumber: 1, gitCommit: '', edition: 'standard',
   environment: 'production', architecture: 'x64', channel: 'stable', title: '',
-  releaseNotes: '', fileName: '', downloadPath: '', fileSize: 1, sha256: '', signature: '',
+  fileName: '', downloadPath: '', fileSize: 1, sha256: '', signature: '',
   mandatory: false, publishedAt: '',
 })
 
@@ -36,17 +35,14 @@ async function load() {
 }
 
 function openCreate() {
-  editing.value = null
-  Object.assign(form, { product:'DDREC',version:'',buildNumber:1,gitCommit:'',edition:'standard',environment:'production',architecture:'x64',channel:'stable',title:'',releaseNotes:'',fileName:'',downloadPath:'',fileSize:1,sha256:'',signature:'',mandatory:false,publishedAt:new Date().toISOString() })
+  Object.assign(form, { product:'DDREC',version:'',buildNumber:1,gitCommit:'',edition:'standard',environment:'production',architecture:'x64',channel:'stable',title:'',fileName:'',downloadPath:'',fileSize:1,sha256:'',signature:'',mandatory:false,publishedAt:new Date().toISOString() })
   visible.value = true
 }
-function openEdit(row: ClientRelease) { editing.value = row; form.title = row.title; form.releaseNotes = row.releaseNotes; visible.value = true }
 async function save() {
   saving.value = true
   try {
-    if (editing.value) await clientReleasesApi.edit(editing.value.id, { title: form.title, releaseNotes: form.releaseNotes })
-    else await clientReleasesApi.create({ ...form } as ClientReleaseDraft)
-    ElMessage.success(editing.value ? '更新说明已保存' : '客户端更新草稿已创建')
+    await clientReleasesApi.create({ ...form } as ClientReleaseDraft)
+    ElMessage.success('客户端更新草稿已创建')
     visible.value = false; await load()
   } catch (error) { ElMessage.error(apiErrorMessage(error)) }
   finally { saving.value = false }
@@ -80,18 +76,17 @@ onMounted(load)
       <el-table-column label="状态" width="100"><template #default="s"><el-tag :type="statusType(s.row.status)">{{ statusLabel(s.row.status) }}</el-tag></template></el-table-column>
       <el-table-column label="安装包大小" width="120"><template #default="s">{{ formatSize(s.row.fileSize) }}</template></el-table-column>
       <el-table-column label="发布时间" min-width="170"><template #default="s">{{ formatUtc(s.row.publishedAt) }}</template></el-table-column>
-      <el-table-column label="操作" width="260" fixed="right"><template #default="s">
+      <el-table-column label="操作" width="210" fixed="right"><template #default="s">
         <el-button link @click="showIntegrity(s.row)">SHA / Commit</el-button>
-        <el-button v-if="canEdit && s.row.status==='draft'" link type="primary" @click="openEdit(s.row)">编辑说明</el-button>
         <el-button v-if="isOwner && s.row.status==='draft'" link type="success" @click="publish(s.row)">发布</el-button>
         <el-button v-if="isOwner && s.row.status==='published'" link type="warning" @click="withdraw(s.row)">下架</el-button>
       </template></el-table-column>
     </el-table>
     <el-pagination v-model:current-page="page" :total="total" :page-size="50" layout="total, prev, pager, next" @change="load"/>
   </section>
-  <el-dialog v-model="visible" :title="editing ? '编辑更新说明' : '新建客户端更新草稿'" width="760px">
+  <el-dialog v-model="visible" title="新建客户端更新草稿" width="760px">
     <el-form label-position="top">
-      <div v-if="!editing" class="grid">
+      <div class="grid">
         <el-form-item label="版本"><el-input v-model="form.version" placeholder="1.3.1"/></el-form-item><el-form-item label="Build"><el-input-number v-model="form.buildNumber" :min="1"/></el-form-item>
         <el-form-item label="Edition"><el-select v-model="form.edition"><el-option label="standard" value="standard"/><el-option label="license" value="license"/></el-select></el-form-item>
         <el-form-item label="环境"><el-select v-model="form.environment"><el-option label="production" value="production"/><el-option label="local" value="local"/></el-select></el-form-item>
@@ -103,7 +98,6 @@ onMounted(load)
         <el-form-item label="Manifest发布时间"><el-input v-model="form.publishedAt"/></el-form-item>
       </div>
       <el-form-item label="标题"><el-input v-model="form.title" placeholder="DD Rec V1.3.1"/></el-form-item>
-      <el-form-item label="更新说明"><el-input v-model="form.releaseNotes" type="textarea" :rows="6"/></el-form-item>
     </el-form>
     <template #footer><el-button @click="visible=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存草稿</el-button></template>
   </el-dialog>

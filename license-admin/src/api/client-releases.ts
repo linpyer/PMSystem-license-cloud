@@ -23,7 +23,9 @@ export type ClientRelease = {
   createdAt: string
 }
 
-export type ClientReleaseDraft = Omit<ClientRelease, 'id' | 'status' | 'createdAt'>
+export type ClientReleaseDraft = Omit<ClientRelease, 'id' | 'status' | 'createdAt' | 'releaseNotes'> & {
+  releaseNotes?: string
+}
 
 export const clientReleasesApi = {
   list: (page = 1, pageSize = 50) => api.get('/admin/client-releases', { params: { page, pageSize } }),

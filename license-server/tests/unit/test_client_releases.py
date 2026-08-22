@@ -72,6 +72,14 @@ def test_invalid_release_lanes_are_rejected(changes):
     with pytest.raises(ValueError): ClientReleaseDraftRequest.model_validate(data)
 
 
+def test_release_notes_remain_api_compatible_but_are_optional_for_new_drafts():
+    data=dict(product="DDREC",version="1.3.1",buildNumber=79,gitCommit="abcdef123456",edition="standard",environment="production",architecture="x64",channel="stable",title="DD Rec V1.3.1",fileName="DDREC-1.3.1-standard-Setup.exe",downloadPath="/releases/stable/standard/1.3.1/DDREC-1.3.1-standard-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-22T10:00:00Z")
+    payload = ClientReleaseDraftRequest.model_validate(data)
+    assert payload.release_notes == ""
+    data["releaseNotes"] = "旧管理端仍可提交此字段"
+    assert ClientReleaseDraftRequest.model_validate(data).release_notes == "旧管理端仍可提交此字段"
+
+
 def test_publish_requires_real_file_sha_and_valid_signature(settings, tmp_path):
     private=Ed25519PrivateKey.generate(); public=tmp_path/"public.pem"
     public.write_bytes(private.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))

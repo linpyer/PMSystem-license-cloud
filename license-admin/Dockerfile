@@ -6,6 +6,7 @@ RUN npm ci --ignore-scripts
 COPY index.html tsconfig*.json vite.config.ts vitest.config.ts ./
 COPY src ./src
 COPY scripts ./scripts
+COPY public ./public
 ARG VITE_API_BASE_URL=https://license.aixcc.top/api/v1
 ARG VITE_BASE_PATH=/admin/
 ARG VITE_APP_TITLE="DD Rec 授权管理"
