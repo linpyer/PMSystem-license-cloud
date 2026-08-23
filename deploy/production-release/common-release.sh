@@ -38,7 +38,9 @@ load_environment() {
   set +a
   DDREC_ADMIN_ROOT="${DDREC_ADMIN_ROOT:-/var/www/pmsystem-license/admin}"
   DDREC_LICENSE_NGINX_CONF="${DDREC_LICENSE_NGINX_CONF:-/etc/nginx/conf.d/pmsystem-license.conf}"
-  export DDREC_ADMIN_ROOT DDREC_LICENSE_NGINX_CONF
+  DDREC_DOWNLOADS_HTTP_NGINX_CONF="${DDREC_DOWNLOADS_HTTP_NGINX_CONF:-/etc/nginx/conf.d/ddrec-downloads.conf}"
+  DDREC_DOWNLOADS_HTTPS_NGINX_CONF="${DDREC_DOWNLOADS_HTTPS_NGINX_CONF:-/etc/nginx/conf.d/ddrec-downloads-https.conf}"
+  export DDREC_ADMIN_ROOT DDREC_LICENSE_NGINX_CONF DDREC_DOWNLOADS_HTTP_NGINX_CONF DDREC_DOWNLOADS_HTTPS_NGINX_CONF
 }
 
 compose_at() {

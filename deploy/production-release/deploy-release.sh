@@ -62,10 +62,17 @@ final="${DDREC_ROOT}/release/${release_id}"
 if [[ -d "${final}" ]]; then
   installed_commit="$(tr -d '\r\n' <"${final}/RELEASE-GIT-COMMIT.txt")"
   [[ "${installed_commit}" == "${expected_commit}" ]] || die "${EXIT_DEPLOY}" 'immutable release directory conflict'
+  installed_version="$(tr -d '\r\n' <"${final}/RELEASE-VERSION.txt")"
+  [[ "${installed_version}" == "${version}" ]] || die "${EXIT_DEPLOY}" 'immutable release version conflict'
+  python3 "${SCRIPT_DIR}/verify-immutable-release.py" \
+    --installed "${final}" --staging "${staging}" --archive-sha "${archive_sha}" \
+    || die "${EXIT_DEPLOY}" 'immutable release content conflict'
   rm -rf -- "${staging}"
 elif [[ -e "${final}" ]]; then
   die "${EXIT_DEPLOY}" 'immutable release path exists and is not a directory'
 else
+  printf '%s\n' "${archive_sha,,}" >"${staging}/.DDREC-ARCHIVE-SHA256"
+  chmod 0444 "${staging}/.DDREC-ARCHIVE-SHA256"
   mv "${staging}" "${final}"
   release_installed=true
 fi
@@ -77,10 +84,28 @@ if [[ "${current}" == "${final}" ]] && curl -fsS https://license.aixcc.top/api/v
   exit 0
 fi
 
-release_nginx="${final}/nginx/ddrec-license.conf"
-if [[ -f "${release_nginx}" && -f "${DDREC_LICENSE_NGINX_CONF}" ]] && ! cmp -s "${release_nginx}" "${DDREC_LICENSE_NGINX_CONF}"; then
-  ${allow_nginx_change} || die "${EXIT_DEPLOY}" 'Nginx configuration changed; explicit audited deployment is required'
-fi
+${allow_nginx_change} && die "${EXIT_DEPLOY}" '--allow-nginx-change is disabled for application releases; use the separate audited Nginx deployment workflow'
+nginx_changed=false
+audit_nginx_config() {
+  local name="$1" expected="$2" active="$3" audit_output='' audit_code=0
+  set +e
+  audit_output="$(python3 "${SCRIPT_DIR}/audit-nginx-config.py" \
+    --name "${name}" --expected "${expected}" --active "${active}" 2>&1)"
+  audit_code=$?
+  set -e
+  [[ -n "${audit_output}" ]] && printf '%s\n' "${audit_output}" | tee -a "${SERVER_LOG}"
+  if (( audit_code == EXIT_DEPLOY )); then
+    nginx_changed=true
+  elif (( audit_code != 0 )); then
+    die "${EXIT_PREFLIGHT}" "Nginx comparison failed for ${name} with exit ${audit_code}"
+  fi
+}
+audit_nginx_config 'ddrec-downloads-http.conf' \
+  "${final}/nginx/ddrec-downloads-http.conf" "${DDREC_DOWNLOADS_HTTP_NGINX_CONF}"
+audit_nginx_config 'ddrec-downloads-https.conf' \
+  "${final}/nginx/ddrec-downloads-https.conf.template" "${DDREC_DOWNLOADS_HTTPS_NGINX_CONF}"
+log 'nginxConfig=ddrec-license.conf policy=bootstrap-template excludedFromProductionComparison=true'
+${nginx_changed} && die "${EXIT_DEPLOY}" 'Nginx semantic configuration changed; separate explicit audited deployment is required'
 
 postgres_container="$(compose_at "${current}" "${ENV_FILE}" ps -q postgres)"
 current_postgres_image="$(docker inspect --format '{{.Config.Image}}' "${postgres_container}")"
@@ -193,15 +218,7 @@ compose_at "${final}" "${ENV_FILE}" up -d --no-deps --pull never license-api
 container_recreated=true
 wait_healthy "${final}" "${ENV_FILE}" license-api 120
 
-if [[ -f "${release_nginx}" ]] && ! cmp -s "${release_nginx}" "${DDREC_LICENSE_NGINX_CONF}"; then
-  cp -a "${DDREC_LICENSE_NGINX_CONF}" "${backup}/nginx-before-change.conf"
-  install -m 0644 "${release_nginx}" "${DDREC_LICENSE_NGINX_CONF}"
-  if ! nginx -t; then cp -a "${backup}/nginx-before-change.conf" "${DDREC_LICENSE_NGINX_CONF}"; nginx -t; die "${EXIT_DEPLOY}" 'new Nginx configuration failed validation'; fi
-  systemctl reload nginx
-  log 'Nginx configuration changed, validated and reloaded'
-else
-  log 'Nginx configuration unchanged; reload skipped'
-fi
+log 'Nginx is outside the application release transaction; configuration write and reload skipped'
 
 bash "${SCRIPT_DIR}/health-check.sh" "${expected_commit}" "${counts_before}"
 trap - ERR
