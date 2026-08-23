@@ -7,9 +7,24 @@ Set-StrictMode -Version Latest
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptRoot '..'))
 $buildScript = [System.IO.Path]::GetFullPath((Join-Path $scriptRoot 'build_cloud_release.ps1'))
+$artifactScript = [System.IO.Path]::GetFullPath((Join-Path $scriptRoot 'cloud_build_artifacts.ps1'))
 
-if (-not (Test-Path -LiteralPath $buildScript -PathType Leaf)) {
-    Write-Host "错误：找不到统一构建脚本：$buildScript" -ForegroundColor Red
+foreach ($requiredScript in @($buildScript, $artifactScript)) {
+    if (-not (Test-Path -LiteralPath $requiredScript -PathType Leaf)) {
+        Write-Host "错误：找不到云端构建脚本：$requiredScript" -ForegroundColor Red
+        exit 2
+    }
+}
+. $artifactScript
+
+$versionPath = Join-Path $projectRoot 'VERSION'
+if (-not (Test-Path -LiteralPath $versionPath -PathType Leaf)) {
+    Write-Host "错误：找不到统一版本文件：$versionPath" -ForegroundColor Red
+    exit 2
+}
+$releaseVersion = (Get-Content -LiteralPath $versionPath -Raw -Encoding UTF8).Trim()
+if ($releaseVersion -notmatch '^\d+\.\d+\.\d+$') {
+    Write-Host "错误：VERSION 格式非法：$releaseVersion" -ForegroundColor Red
     exit 2
 }
 
@@ -51,11 +66,30 @@ while ($true) {
     }
 
     $choice = $choices[$selection]
+    $target = Get-CloudBuildTarget `
+        -ProjectRoot $projectRoot `
+        -Environment $choice.Environment `
+        -Service $choice.Service `
+        -Version $releaseVersion
+    $decision = Get-CloudBuildDecision -Target $target
+    if (-not $decision.ShouldBuild) {
+        Write-Host ''
+        Write-Host '已取消打包，现有云端构建产物保持不变。' -ForegroundColor Yellow
+        exit 0
+    }
+
     Write-Host ''
     Write-Host "构建环境：$($choice.Environment)"
     Write-Host "构建服务：$($choice.Service)"
     try {
-        & $buildScript -Environment $choice.Environment -Service $choice.Service
+        $buildArguments = @{
+            Environment = $choice.Environment
+            Service = $choice.Service
+        }
+        if ($decision.UseClean) {
+            $buildArguments.Clean = $true
+        }
+        & $buildScript @buildArguments
         $exitCode = 0
     } catch {
         Write-Host "错误：$($_.Exception.Message)" -ForegroundColor Red

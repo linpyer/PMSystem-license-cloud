@@ -18,6 +18,12 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$artifactScript = Join-Path $PSScriptRoot 'cloud_build_artifacts.ps1'
+if (-not (Test-Path -LiteralPath $artifactScript -PathType Leaf)) {
+    throw "缺少云端构建产物安全脚本：$artifactScript"
+}
+. $artifactScript
+
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptRoot '..'))
@@ -424,7 +430,13 @@ try {
     if ($Environment -eq 'production') {
         Assert-ProductionGitState
         Assert-ProductionEnvironment $environmentConfig
-        $trackedScopes = @('deploy', 'scripts/build_cloud_menu.ps1', 'scripts/build_cloud_release.ps1', 'scripts/cloud_release_config.psd1')
+        $trackedScopes = @(
+            'deploy',
+            'scripts/build_cloud_menu.ps1',
+            'scripts/build_cloud_release.ps1',
+            'scripts/cloud_build_artifacts.ps1',
+            'scripts/cloud_release_config.psd1'
+        )
         if ($Service -in @('api', 'all')) { $trackedScopes += 'license-server' }
         if ($Service -in @('admin', 'all')) { $trackedScopes += 'license-admin' }
         $trackedRelative = @(& $git -C $projectRoot ls-files -- @trackedScopes)
@@ -434,7 +446,21 @@ try {
         Write-Warning "本地构建使用未提交工作区（$($dirtyLines.Count) 项变更）。"
     }
 
-    $artifactRoot = Join-Path $projectRoot 'artifacts\cloud'
+    $buildTarget = Get-CloudBuildTarget `
+        -ProjectRoot $projectRoot `
+        -Environment $Environment `
+        -Service $Service `
+        -Version $releaseVersion
+    $existingBuild = Get-ExistingCloudBuildArtifacts -Target $buildTarget
+    if ($existingBuild.HasExistingOutput -and -not $Clean) {
+        throw "产物已存在；请确认后使用 -Clean 重建：$($buildTarget.OutputRoot)"
+    }
+    if ($Clean) {
+        Remove-CloudBuildArtifactsSafely -Target $buildTarget
+        Write-Host '旧构建产物已安全清除，将从当前源码重新完整构建。' -ForegroundColor Green
+    }
+
+    $artifactRoot = $buildTarget.ArtifactBase
     $script:pythonBuildPath = $null
     Initialize-PythonBuildEnvironment $basePython $artifactRoot
     $python = $script:pythonBuildPath
@@ -452,21 +478,14 @@ try {
     Write-Host "服务：$Service"
     Write-Host "API：$($environmentConfig.ApiBaseUrl)"
 
-    $outputRoot = Join-Path $artifactRoot "$Environment\$Service"
-    $scratchRoot = Join-Path $artifactRoot ".build-$Environment-$Service"
-    Assert-ChildPath $artifactRoot $outputRoot
-    Assert-ChildPath $artifactRoot $scratchRoot
-    $releaseName = "DDREC-License-Cloud-$releaseVersion-$Environment-$Service"
+    $outputRoot = $buildTarget.OutputRoot
+    $scratchRoot = $buildTarget.ScratchRoot
+    $releaseName = $buildTarget.ReleaseName
     $payloadRoot = Join-Path $scratchRoot $releaseName
-    $archivePath = Join-Path $outputRoot "$releaseName.tar.gz"
-    $manifestPath = Join-Path $outputRoot 'RELEASE-MANIFEST.txt'
-    $checksumsPath = Join-Path $outputRoot 'SHA256SUMS.txt'
+    $archivePath = $buildTarget.ArchivePath
+    $manifestPath = $buildTarget.ManifestPath
+    $checksumsPath = $buildTarget.ChecksumsPath
 
-    if (Test-Path -LiteralPath $scratchRoot) { Remove-Item -LiteralPath $scratchRoot -Recurse -Force }
-    if (Test-Path -LiteralPath $archivePath) {
-        if (-not $Clean) { throw "产物已存在；请确认后使用 -Clean 重建：$archivePath" }
-        Remove-Item -LiteralPath $archivePath -Force
-    }
     New-Item -ItemType Directory -Path $payloadRoot, $outputRoot -Force | Out-Null
 
     Assert-ProductionComposeTemplate
