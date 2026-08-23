@@ -205,6 +205,209 @@ function Show-DDRECPackageMetadata {
         Format-List | Out-Host
 }
 
+function Read-DDRECColonMetadataFile {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Cloud 发布包 Manifest 不存在：$Path" }
+    $values = @{}
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $separator = $line.IndexOf(':')
+        if ($separator -lt 1) { throw "Cloud 发布包 Manifest 行格式无效：$line" }
+        $name = $line.Substring(0, $separator).Trim()
+        $value = $line.Substring($separator + 1).Trim()
+        if ($values.ContainsKey($name)) { throw "Cloud 发布包 Manifest 字段重复：$name" }
+        $values[$name] = $value
+    }
+    return $values
+}
+
+function Assert-DDRECCloudPackageMetadata {
+    param([Parameter(Mandatory)]$Metadata)
+    if ($Metadata.PSObject.TypeNames -notcontains 'DDREC.CloudPackageMetadata') {
+        throw "Cloud 发布包元数据无效：预期 DDREC.CloudPackageMetadata，实际 $($Metadata.GetType().FullName)"
+    }
+    foreach ($field in @(
+        'Path','FileName','FileSize','SHA256','Version','GitCommit','Environment','Service',
+        'ManifestPath','ChecksumsPath','BuildTime'
+    )) {
+        $property = $Metadata.PSObject.Properties[$field]
+        if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            throw "Cloud 发布包元数据无效：CloudPackageMetadata 缺少 $field"
+        }
+    }
+    return $true
+}
+
+function Get-DDRECCloudPackageMetadata {
+    param(
+        [Parameter(Mandatory)][string]$CloudRoot,
+        [Parameter(Mandatory)][string]$ExpectedCommit,
+        [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$ExpectedVersion,
+        [string]$ExpectedBranch = 'v1.3'
+    )
+    $root = [IO.Path]::GetFullPath((Join-Path $CloudRoot 'artifacts\cloud\production\all'))
+    $manifestPath = Join-Path $root 'RELEASE-MANIFEST.txt'
+    $checksumsPath = Join-Path $root 'SHA256SUMS.txt'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "Cloud 发布包 Manifest 不存在：$manifestPath"
+    }
+    if (-not (Test-Path -LiteralPath $checksumsPath -PathType Leaf)) {
+        throw "Cloud 发布包 SHA256SUMS 不存在：$checksumsPath"
+    }
+
+    $manifest = Read-DDRECColonMetadataFile -Path $manifestPath
+    $required = @(
+        'Release version','Environment','Service','Git branch','Git commit','Git worktree clean',
+        'Build time UTC','Archive','Archive size bytes','Archive SHA-256'
+    )
+    foreach ($field in $required) {
+        if (-not $manifest.ContainsKey($field) -or [string]::IsNullOrWhiteSpace([string]$manifest[$field])) {
+            throw "Cloud 发布包元数据无效：RELEASE-MANIFEST 缺少 $field"
+        }
+    }
+
+    $archiveName = [string]$manifest['Archive']
+    if ([IO.Path]::GetFileName($archiveName) -cne $archiveName) {
+        throw "Cloud 发布包 Manifest 的 Archive 必须是文件名：$archiveName"
+    }
+    $archivePath = Join-Path $root $archiveName
+    if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+        throw "Cloud 发布包不存在：$archivePath"
+    }
+    $archives = @(Get-ChildItem -LiteralPath $root -Filter '*.tar.gz' -File)
+    if ($archives.Count -ne 1 -or $archives[0].FullName -cne ([IO.Path]::GetFullPath($archivePath))) {
+        throw "Cloud 正式目录必须且只能包含 Manifest 指定的一个 tar.gz，实际：$($archives.Count)"
+    }
+
+    $version = [string]$manifest['Release version']
+    $environment = [string]$manifest['Environment']
+    $service = [string]$manifest['Service']
+    $branch = [string]$manifest['Git branch']
+    $commit = [string]$manifest['Git commit']
+    if ($version -cne $ExpectedVersion) { throw "Cloud 发布包 Version 与当前版本不一致：$version != $ExpectedVersion" }
+    if ($environment -cne 'production') { throw "Cloud 发布包 Environment 错误：$environment；正式发布必须为 production" }
+    if ($service -cne 'all') { throw "Cloud 发布包 Service 错误：$service；正式发布必须为 all" }
+    if ($branch -cne $ExpectedBranch) { throw "Cloud 发布包 Git branch 错误：$branch != $ExpectedBranch" }
+    if ([string]$manifest['Git worktree clean'] -cne 'True') { throw 'Cloud 发布包 Manifest 表明构建工作区不干净。' }
+    if ($commit -cne $ExpectedCommit) {
+        throw "当前 Cloud 构建产物已过期：`n`nPackage GitCommit : $commit`nCurrent Git HEAD  : $ExpectedCommit"
+    }
+
+    $file = Get-Item -LiteralPath $archivePath
+    [int64]$manifestSize = 0
+    if (-not [int64]::TryParse([string]$manifest['Archive size bytes'], [ref]$manifestSize) -or $manifestSize -lt 1) {
+        throw 'Cloud 发布包 Manifest 的 Archive size bytes 无效。'
+    }
+    if ($file.Length -ne $manifestSize) {
+        throw "Cloud 发布包实际大小与 Manifest 不一致：$($file.Length) != $manifestSize"
+    }
+
+    $checksumLines = @(Get-Content -LiteralPath $checksumsPath -Encoding UTF8 | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($checksumLines.Count -ne 1 -or $checksumLines[0] -notmatch '^([0-9A-Fa-f]{64})\s{2}(.+)$') {
+        throw 'Cloud 发布包 SHA256SUMS 格式无效；必须只有一条 SHA256 记录。'
+    }
+    $checksumsHash = $matches[1].ToUpperInvariant()
+    $checksumsName = $matches[2]
+    if ($checksumsName -cne $archiveName) { throw "Cloud 发布包 SHA256SUMS 文件名不匹配：$checksumsName != $archiveName" }
+    $manifestHash = [string]$manifest['Archive SHA-256']
+    if ($manifestHash -notmatch '^[0-9A-Fa-f]{64}$') { throw 'Cloud 发布包 Manifest 的 Archive SHA-256 无效。' }
+    $manifestHash = $manifestHash.ToUpperInvariant()
+    $actualHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
+    if ($checksumsHash -cne $manifestHash) { throw 'Cloud 发布包 SHA256SUMS 与 Manifest SHA256 不一致。' }
+    if ($actualHash -cne $manifestHash) { throw 'Cloud 发布包实际 SHA256 与 Manifest 不一致。' }
+
+    $buildTime = [string]$manifest['Build time UTC']
+    [DateTimeOffset]$parsedBuildTime = [DateTimeOffset]::MinValue
+    if (-not [DateTimeOffset]::TryParse($buildTime, [ref]$parsedBuildTime)) { throw "Cloud 发布包 BuildTime 无效：$buildTime" }
+
+    $metadata = [pscustomobject]@{
+        Path = $file.FullName
+        FileName = $file.Name
+        FileSize = [int64]$file.Length
+        SHA256 = $actualHash
+        Version = $version
+        GitCommit = $commit
+        Environment = $environment
+        Service = $service
+        ManifestPath = $manifestPath
+        ChecksumsPath = $checksumsPath
+        BuildTime = $buildTime
+    }
+    $metadata.PSObject.TypeNames.Insert(0, 'DDREC.CloudPackageMetadata')
+    Assert-DDRECCloudPackageMetadata -Metadata $metadata | Out-Null
+    return $metadata
+}
+
+function Get-DDRECCloudPackageState {
+    param(
+        [Parameter(Mandatory)][string]$CloudRoot,
+        [Parameter(Mandatory)][string]$ExpectedCommit,
+        [Parameter(Mandatory)][string]$ExpectedVersion,
+        [string]$ExpectedBranch = 'v1.3'
+    )
+    $outputRoot = [IO.Path]::GetFullPath((Join-Path $CloudRoot 'artifacts\cloud\production\all'))
+    $scratchRoot = [IO.Path]::GetFullPath((Join-Path $CloudRoot 'artifacts\cloud\.build-production-all'))
+    $entries = @()
+    foreach ($path in @($outputRoot, $scratchRoot)) {
+        if (Test-Path -LiteralPath $path) {
+            $entries += @(Get-Item -LiteralPath $path -Force)
+            $entries += @(Get-ChildItem -LiteralPath $path -Force -Recurse)
+        }
+    }
+    if ($entries.Count -eq 0) {
+        return [pscustomobject]@{ HasExistingOutput=$false; IsValid=$false; Metadata=$null; ValidationError=$null; OutputRoot=$outputRoot; ScratchRoot=$scratchRoot }
+    }
+    try {
+        $metadata = Get-DDRECCloudPackageMetadata -CloudRoot $CloudRoot -ExpectedCommit $ExpectedCommit -ExpectedVersion $ExpectedVersion -ExpectedBranch $ExpectedBranch
+        return [pscustomobject]@{ HasExistingOutput=$true; IsValid=$true; Metadata=$metadata; ValidationError=$null; OutputRoot=$outputRoot; ScratchRoot=$scratchRoot }
+    } catch {
+        return [pscustomobject]@{ HasExistingOutput=$true; IsValid=$false; Metadata=$null; ValidationError=$_.Exception.Message; OutputRoot=$outputRoot; ScratchRoot=$scratchRoot }
+    }
+}
+
+function Get-DDRECCloudPackageDecision {
+    param(
+        [Parameter(Mandatory)]$State,
+        [switch]$DryRun,
+        [switch]$NonInteractive,
+        [scriptblock]$InputReader,
+        [scriptblock]$OutputWriter
+    )
+    if (-not $State.HasExistingOutput) { return [pscustomobject]@{Action='Build'} }
+    if ($null -eq $OutputWriter) {
+        $OutputWriter = { param($Message,$Color) if ($Color) { Write-Host $Message -ForegroundColor $Color } else { Write-Host $Message } }
+    }
+    if ($State.IsValid) {
+        if ($DryRun -or $NonInteractive) { return [pscustomobject]@{Action='Use'} }
+        & $OutputWriter '[Y] 使用当前云端发布包' ''
+        & $OutputWriter '[R] 清除并重新完整构建' ''
+        & $OutputWriter '[N] 取消本次发布（默认）' ''
+        $allowed = @('Y','R','N')
+    } else {
+        & $OutputWriter "当前 Cloud 构建产物无效：`n$($State.ValidationError)" 'Yellow'
+        if ($DryRun -or $NonInteractive) { throw $State.ValidationError }
+        & $OutputWriter '[R] 清除并重新完整构建' ''
+        & $OutputWriter '[N] 取消本次发布（默认）' ''
+        $allowed = @('R','N')
+    }
+    if ($null -eq $InputReader) { $InputReader = { param($Prompt) Read-Host $Prompt } }
+    while ($true) {
+        $answer = [string](& $InputReader '请选择 [Y/R/N]')
+        if ([string]::IsNullOrWhiteSpace($answer)) { return [pscustomobject]@{Action='Cancel'} }
+        $answer = $answer.Trim().ToUpperInvariant()
+        if ($answer -eq 'Y' -and $allowed -contains 'Y') { return [pscustomobject]@{Action='Use'} }
+        if ($answer -eq 'R') { return [pscustomobject]@{Action='Rebuild'} }
+        if ($answer -eq 'N') { return [pscustomobject]@{Action='Cancel'} }
+        & $OutputWriter "输入无效；允许的选择：$($allowed -join '/')，直接按 Enter 将取消。" 'Yellow'
+    }
+}
+
+function Show-DDRECCloudPackageMetadata {
+    param([Parameter(Mandatory)]$Metadata)
+    Assert-DDRECCloudPackageMetadata -Metadata $Metadata | Out-Null
+    $Metadata | Select-Object FileName,Version,GitCommit,Environment,Service,FileSize,SHA256,BuildTime | Format-List | Out-Host
+}
+
 function Get-DDRECInstallerMetadata {
     param(
         [Parameter(Mandatory)][string]$InstallerPath,
@@ -607,19 +810,23 @@ function Publish-DDRECClientDraft {
 }
 
 function Invoke-DDRECCloudBuild {
-    param([Parameter(Mandatory)]$Context)
+    param(
+        [Parameter(Mandatory)]$Context,
+        [Parameter(Mandatory)][string]$ExpectedCommit,
+        [Parameter(Mandatory)][string]$ExpectedVersion,
+        [switch]$Clean
+    )
     $script=Join-Path $Context.CloudRoot 'scripts\build_cloud_release.ps1'
-    Invoke-DDRECNative pwsh @('-NoProfile','-ExecutionPolicy','Bypass','-File',$script,'-Environment','production','-Service','all') -WorkingDirectory $Context.CloudRoot -Context $Context | Out-Null
-    $root=Join-Path $Context.CloudRoot 'artifacts\cloud\production\all'
-    $archive=Get-ChildItem -LiteralPath $root -Filter '*.tar.gz' -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-    if (-not $archive) { throw 'Cloud 生产发布包未生成。' }
-    $hash=(Get-FileHash $archive.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
-    return [pscustomobject]@{Path=$archive.FullName;Name=$archive.Name;SHA256=$hash;Size=$archive.Length}
+    $arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$script,'-Environment','production','-Service','all')
+    if ($Clean) { $arguments += '-Clean' }
+    Invoke-DDRECNative pwsh $arguments -WorkingDirectory $Context.CloudRoot -Context $Context | Out-Null
+    return Get-DDRECCloudPackageMetadata -CloudRoot $Context.CloudRoot -ExpectedCommit $ExpectedCommit -ExpectedVersion $ExpectedVersion -ExpectedBranch $Context.Config.RequiredBranch
 }
 
 function Invoke-DDRECCloudDeploy {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Package,[Parameter(Mandatory)][string]$CloudCommit,[bool]$ApproveMigration=$false)
-    $incoming="$($Context.Config.RemoteRoot)/incoming/$($Context.SessionId)-$($Package.Name)"
+    Assert-DDRECCloudPackageMetadata -Metadata $Package | Out-Null
+    $incoming="$($Context.Config.RemoteRoot)/incoming/$($Context.SessionId)-$($Package.FileName)"
     Invoke-DDRECSsh -Context $Context -Command "install -d -m 750 $(ConvertTo-DDRECShellSingleQuote "$($Context.Config.RemoteRoot)/incoming")" | Out-Null
     $scp=Invoke-DDRECNative scp @('-o','BatchMode=yes',$Package.Path,"$($Context.Config.ServerHost):$incoming") -AllowFailure -Context $Context
     if($scp.ExitCode -ne 0){throw 'Cloud 发布包上传失败。'}

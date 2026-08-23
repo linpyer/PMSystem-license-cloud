@@ -153,7 +153,7 @@ function Show-Plan {
         Write-Host "备份             : $($config.RemoteRoot)/backups/release-$($context.SessionId)"
         Write-Host 'Admin            : 部署（临时目录校验后原子替换）'
         Write-Host 'Nginx            : 配置无变化不 reload；变化默认阻止'
-        if($Packages){Write-Host "Cloud Package    : $($Packages.Name) / $($Packages.SHA256)"}
+        if($Packages){Write-Host "Cloud Package    : $($Packages.FileName) / $($Packages.SHA256)"}
     }
     foreach($item in $Targets){
         Write-Host "`n$($item.Metadata.Edition) Build $($item.Metadata.BuildNumber)"
@@ -214,20 +214,39 @@ try {
         Add-DDRECStage -Context $context -Stage 'Migration 只读分析'
     }
 
+    $package=$null
+    if($plan.Cloud){
+        $stage='Cloud 生产发布包识别与真实性校验'
+        $cloudVersion=(Get-Content -LiteralPath (Join-Path $context.CloudRoot 'VERSION') -Raw -Encoding UTF8).Trim()
+        $packageState=Get-DDRECCloudPackageState -CloudRoot $context.CloudRoot -ExpectedCommit $cloudState.Head -ExpectedVersion $cloudVersion -ExpectedBranch $config.RequiredBranch
+        if($packageState.IsValid){
+            Write-Host "`nCloud 生产发布包" -ForegroundColor Green
+            Show-DDRECCloudPackageMetadata -Metadata $packageState.Metadata
+        }
+        $decision=Get-DDRECCloudPackageDecision -State $packageState -DryRun:$dryRun -NonInteractive:$NonInteractive
+        if($decision.Action -eq 'Cancel'){
+            Write-DDRECLog -Context $context -Level WARN -Message '用户取消 Cloud 发布包准备；生产未修改。'
+            exit $exitCodes.Cancelled
+        }
+        if($decision.Action -eq 'Use'){
+            $package=$packageState.Metadata
+        } else {
+            $stage='构建 Cloud 生产发布包（本地）'
+            $package=Invoke-DDRECCloudBuild -Context $context -ExpectedCommit $cloudState.Head -ExpectedVersion $cloudVersion -Clean:($decision.Action -eq 'Rebuild')
+            Write-Host "`nCloud 生产发布包" -ForegroundColor Green
+            Show-DDRECCloudPackageMetadata -Metadata $package
+        }
+        Add-DDRECStage -Context $context -Stage 'Cloud 本地发布包准备与验证'
+    }
+
     if($dryRun){
-        Show-Plan -Plan $plan -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState -MigrationPlan $migrationPlan -Packages $null -Targets $targets
+        Show-Plan -Plan $plan -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState -MigrationPlan $migrationPlan -Packages $package -Targets $targets
         Write-Header 'Dry Run 结果'
         Write-Host 'PASS：未上传、未备份、未部署、未 Migration、未修改数据库、未创建 Draft、未 Published、未 reload。' -ForegroundColor Green
         Add-DDRECStage -Context $context -Stage 'Dry Run（只读）'
         exit $exitCodes.Success
     }
 
-    $package=$null
-    if($plan.Cloud){
-        $stage='构建 Cloud 生产发布包（本地）'
-        $package=Invoke-DDRECCloudBuild -Context $context
-        Add-DDRECStage -Context $context -Stage 'Cloud 本地发布包准备'
-    }
     Show-Plan -Plan $plan -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState -MigrationPlan $migrationPlan -Packages $package -Targets $targets
     if($NonInteractive -or (Read-Host '请输入 DEPLOY 才允许生产写操作') -cne 'DEPLOY'){
         Write-DDRECLog -Context $context -Level WARN -Message '用户取消 DEPLOY；生产未修改。'
