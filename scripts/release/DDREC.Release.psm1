@@ -551,7 +551,7 @@ function Publish-DDRECClientDraft {
 function Invoke-DDRECCloudBuild {
     param([Parameter(Mandatory)]$Context)
     $script=Join-Path $Context.CloudRoot 'scripts\build_cloud_release.ps1'
-    Invoke-DDRECNative pwsh @('-NoProfile','-ExecutionPolicy','Bypass','-File',$script,'-Environment','production','-Service','all','-ExportDockerImage') -WorkingDirectory $Context.CloudRoot -Context $Context | Out-Null
+    Invoke-DDRECNative pwsh @('-NoProfile','-ExecutionPolicy','Bypass','-File',$script,'-Environment','production','-Service','all') -WorkingDirectory $Context.CloudRoot -Context $Context | Out-Null
     $root=Join-Path $Context.CloudRoot 'artifacts\cloud\production\all'
     $archive=Get-ChildItem -LiteralPath $root -Filter '*.tar.gz' -File | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
     if (-not $archive) { throw 'Cloud 生产发布包未生成。' }

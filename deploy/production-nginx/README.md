@@ -1,6 +1,6 @@
-# DDREC License Production Offline Deployment
+# DDREC License Production Deployment
 
-This package deploys the DDREC licensing API and PostgreSQL with Docker while host Nginx serves the Vue admin application. The server does not need Internet access to Docker Hub and does not run Caddy or a Vite development server.
+This package deploys the DDREC licensing API and PostgreSQL with Docker while host Nginx serves the Vue admin application. Docker build and Compose run on the production server; the Windows packaging workstation does not need Docker Desktop.
 
 ## Verified application entry points
 
@@ -26,7 +26,7 @@ tar -xzf DDREC-License-Cloud-1.3.0-production-all.tar.gz \
 cd /opt/ddrec-license/release/1.3.0-<short-git-sha>
 
 bash scripts/precheck.sh
-bash scripts/load-images.sh
+bash scripts/build-api-image.sh
 bash scripts/init-production.sh
 bash scripts/install-release.sh "$PWD"
 bash scripts/migrate.sh        # starts PostgreSQL only, then applies Alembic head
@@ -35,7 +35,7 @@ bash scripts/register-signing-key.sh
 bash scripts/verify.sh
 ```
 
-For a new installation, the ordered wrapper can be used after images and secrets exist:
+For an existing production installation, the ordered wrapper can be used after secrets exist. The image build reuses the audited current production API image as its dependency base:
 
 ```bash
 bash scripts/deploy.sh "$PWD"
@@ -111,13 +111,13 @@ incident recovery or cutover.
 1. Run `backup.sh` and verify its checksum.
 2. Upload and verify the new release archive.
 3. Extract it into a new `/opt/ddrec-license/release/<version>` directory.
-4. Run the new `load-images.sh`.
+4. Run the new `build-api-image.sh`; it builds a commit-specific API image on the server and runs `pip check`.
 5. Run `install-release.sh` to switch `current` and deploy admin assets.
 6. Review any generated Nginx `.conf.new` file.
 7. Run `migrate.sh`.
 8. Run `restart.sh`, then `verify.sh`.
 
-Old images, releases, backups and the PostgreSQL named volume are retained.
+Old images, releases, backups and the PostgreSQL named volume are retained. A first installation without a current production API image requires an explicitly audited `DDREC_BASE_API_IMAGE`.
 
 ## Rollback boundary
 

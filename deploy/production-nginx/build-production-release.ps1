@@ -22,7 +22,6 @@ if (-not (Test-Path -LiteralPath $buildScript -PathType Leaf)) {
 $arguments = @{
     Environment = 'production'
     Service = 'all'
-    ExportDockerImage = $true
 }
 if ($PSBoundParameters.ContainsKey('Version')) {
     $arguments.Version = $Version

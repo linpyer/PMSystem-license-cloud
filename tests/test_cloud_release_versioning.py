@@ -23,16 +23,16 @@ def test_cloud_product_versions_are_1_3_0() -> None:
 def test_production_branch_and_image_tag_are_consistent() -> None:
     config = (ROOT / "scripts" / "cloud_release_config.psd1").read_text(encoding="utf-8")
     build = (ROOT / "scripts" / "build_cloud_release.ps1").read_text(encoding="utf-8")
-    loader = (
-        ROOT / "deploy" / "production-nginx" / "scripts" / "load-images.sh"
+    executor = (
+        ROOT / "deploy" / "production-release" / "deploy-release.sh"
     ).read_text(encoding="utf-8")
     env_template = (
         ROOT / "deploy" / "production-nginx" / "env.production.example"
     ).read_text(encoding="utf-8")
     assert "ProductionBranch = 'v1.3'" in config
-    assert '"ddrec-license-api:$script:releaseVersion-$Environment"' in build
-    assert '"ddrec-license-api:${version}-production"' in loader
-    assert '"ddrec-license-api:${version}"' not in loader
+    assert '"$script:releaseVersion-$($script:commit.Substring(0, 7))-production"' in build
+    assert 'target_api_tag="${version}-${expected_commit:0:7}-production"' in executor
+    assert 'docker build --pull=false' in executor
     assert "DDREC_API_IMAGE_TAG=1.3.0-production" in env_template
     assert "LICENSE_SERVICE_VERSION=1.3.0" in env_template
 

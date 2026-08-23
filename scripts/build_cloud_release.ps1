@@ -12,10 +12,7 @@ param(
     [string]$Version,
 
     [switch]$Clean,
-    [switch]$SkipTests,
-    [switch]$ExportDockerImage,
-
-    [string]$OfflineBaseApiImage
+    [switch]$SkipTests
 )
 
 $ErrorActionPreference = 'Stop'
@@ -293,20 +290,29 @@ function Invoke-AdminBuild {
     $script:builtAdminDist = $distRoot
 }
 
-function Invoke-ComposeCheck {
-    param([Parameter(Mandatory = $true)][string]$ScratchRoot)
-    Write-Host '验证 Docker Compose 配置...'
-    $composeRoot = Join-Path $ScratchRoot 'compose-check'
-    New-Item -ItemType Directory -Path $composeRoot -Force | Out-Null
+function Assert-ProductionComposeTemplate {
+    Write-Host '静态验证生产 Compose 配置...'
     $deployRoot = Join-Path $projectRoot 'deploy\production-nginx'
-    $envTemplate = Join-Path $deployRoot 'env.production.example'
-    $oldEnvFile = $env:DDREC_ENV_FILE
-    try {
-        $env:DDREC_ENV_FILE = $envTemplate
-        Invoke-Checked $script:docker @('compose', '--env-file', $envTemplate, '-f', (Join-Path $deployRoot 'compose.yml'), 'config', '--quiet') '生产 Compose 校验失败'
-    } finally {
-        $env:DDREC_ENV_FILE = $oldEnvFile
+    $composePath = Join-Path $deployRoot 'compose.yml'
+    $composeText = Get-Content -LiteralPath $composePath -Raw -Encoding UTF8
+    foreach ($required in @(
+        'services:', 'postgres:', 'license-api:', 'postgres:17.5-alpine',
+        'ddrec-license-api:${DDREC_API_IMAGE_TAG:', 'pull_policy: never'
+    )) {
+        if (-not $composeText.Contains($required)) { throw "生产 Compose 缺少必要配置：$required" }
     }
+    if ($composeText -match '(?im)^\s*build\s*:') { throw '生产 Compose 不得隐式 build；API 镜像由服务器执行器显式构建。' }
+}
+
+function Add-ApiUpgradeWheel {
+    param([Parameter(Mandatory = $true)][string]$Destination)
+    Write-Host '生成服务器侧 API 镜像构建 wheel...'
+    Invoke-Checked $script:pythonBuildPath @(
+        '-m', 'pip', 'wheel', '--disable-pip-version-check', '--no-deps',
+        '--wheel-dir', $Destination, $script:serverRoot
+    ) '生成 API wheel 失败'
+    $wheels = @(Get-ChildItem -LiteralPath $Destination -File -Filter 'ddrec_license_server-*.whl')
+    if ($wheels.Count -ne 1) { throw "API 发布目录必须且只能包含一个 wheel，实际：$($wheels.Count)" }
 }
 
 function Copy-ApiRelease {
@@ -330,7 +336,7 @@ function Copy-DeploymentFiles {
     Copy-FilteredTree (Join-Path $deployRoot 'config') (Join-Path $Destination 'config') -ExcludedDirectories @() -ExcludedFiles @() -ExcludedExtensions @()
     $envPath = Join-Path $Destination 'env.production.example'
     $envText = Get-Content -LiteralPath $envPath -Raw -Encoding UTF8
-    $imageTag = "$script:releaseVersion-production"
+    $imageTag = "$script:releaseVersion-$($script:commit.Substring(0, 7))-production"
     $envText = [regex]::Replace($envText, '(?m)^DDREC_API_IMAGE_TAG=.*$', "DDREC_API_IMAGE_TAG=$imageTag")
     $envText = [regex]::Replace($envText, '(?m)^LICENSE_SERVICE_VERSION=.*$', "LICENSE_SERVICE_VERSION=$script:releaseVersion")
     $envText = [regex]::Replace($envText, '(?m)^LICENSE_BUILD_COMMIT=.*$', "LICENSE_BUILD_COMMIT=$script:commit")
@@ -351,7 +357,8 @@ function Copy-ProductionComponentFiles {
         Copy-FilteredTree (Join-Path $deployRoot 'config') (Join-Path $Destination 'config') -ExcludedDirectories @() -ExcludedFiles @() -ExcludedExtensions @()
         $envPath = Join-Path $Destination 'env.production.example'
         $envText = Get-Content -LiteralPath $envPath -Raw -Encoding UTF8
-        $envText = [regex]::Replace($envText, '(?m)^DDREC_API_IMAGE_TAG=.*$', "DDREC_API_IMAGE_TAG=$script:releaseVersion-production")
+        $imageTag = "$script:releaseVersion-$($script:commit.Substring(0, 7))-production"
+        $envText = [regex]::Replace($envText, '(?m)^DDREC_API_IMAGE_TAG=.*$', "DDREC_API_IMAGE_TAG=$imageTag")
         $envText = [regex]::Replace($envText, '(?m)^LICENSE_SERVICE_VERSION=.*$', "LICENSE_SERVICE_VERSION=$script:releaseVersion")
         $envText = [regex]::Replace($envText, '(?m)^LICENSE_BUILD_COMMIT=.*$', "LICENSE_BUILD_COMMIT=$script:commit")
         [System.IO.File]::WriteAllText($envPath, $envText, $script:utf8NoBom)
@@ -365,60 +372,6 @@ function Copy-ProductionComponentFiles {
     } else {
         Copy-DeploymentFiles $Destination
     }
-}
-
-function Export-ApiImage {
-    param([Parameter(Mandatory = $true)][string]$PayloadRoot)
-    Write-Host '构建并导出 API Docker 镜像...'
-    Invoke-Checked $script:docker @('version') 'Docker 引擎不可用'
-    $imageTag = "ddrec-license-api:$script:releaseVersion-$Environment"
-    $buildArguments = @(
-        'buildx', 'build', '--platform', 'linux/amd64', '--load', '--tag', $imageTag,
-        '--build-arg', "DDREC_VERSION=$script:releaseVersion",
-        '--build-arg', "DDREC_GIT_COMMIT=$script:commit"
-    )
-    $buildContext = $script:serverRoot
-    if (-not [string]::IsNullOrWhiteSpace($OfflineBaseApiImage)) {
-        if ($Environment -ne 'production') { throw '离线基础镜像只允许用于 production 构建。' }
-        $basePlatform = (& $script:docker image inspect $OfflineBaseApiImage --format '{{.Os}}/{{.Architecture}}').Trim()
-        if ($LASTEXITCODE -ne 0 -or $basePlatform -ne 'linux/amd64') {
-            throw "离线基础镜像必须已存在且为 linux/amd64：$OfflineBaseApiImage"
-        }
-        $buildContext = Join-Path $script:scratchRoot 'offline-image-context'
-        New-Item -ItemType Directory -Path $buildContext -Force | Out-Null
-        Invoke-Checked $script:pythonBuildPath @(
-            '-m', 'pip', 'wheel', '--disable-pip-version-check', '--no-deps',
-            '--wheel-dir', $buildContext, $script:serverRoot
-        ) '生成离线 API wheel 失败'
-        Copy-Item -LiteralPath (Join-Path $script:serverRoot 'Dockerfile.offline-upgrade') -Destination $buildContext
-        Copy-Item -LiteralPath (Join-Path $script:serverRoot 'alembic.ini') -Destination $buildContext
-        Copy-Item -LiteralPath (Join-Path $script:serverRoot 'alembic') -Destination $buildContext -Recurse
-        $buildArguments += @(
-            '--file', (Join-Path $buildContext 'Dockerfile.offline-upgrade'),
-            '--build-arg', "BASE_API_IMAGE=$OfflineBaseApiImage"
-        )
-    }
-    $buildArguments += $buildContext
-    Invoke-Checked $script:docker $buildArguments 'API 镜像构建失败'
-    $script:imageDigest = (& $script:docker image inspect $imageTag --format '{{.Id}}').Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($script:imageDigest)) { throw '无法读取 API 镜像摘要。' }
-    $imagesRoot = Join-Path $PayloadRoot 'images'
-    New-Item -ItemType Directory -Path $imagesRoot -Force | Out-Null
-    $imageTar = Join-Path $imagesRoot "ddrec-$Environment-images-$script:releaseVersion.tar"
-    if ($Environment -eq 'production') {
-        if ([string]::IsNullOrWhiteSpace($OfflineBaseApiImage)) {
-            Invoke-Checked $script:docker @('pull', '--platform', 'linux/amd64', 'postgres:17.5-alpine') 'PostgreSQL 基础镜像准备失败'
-        } else {
-            $postgresPlatform = (& $script:docker image inspect 'postgres:17.5-alpine' --format '{{.Os}}/{{.Architecture}}').Trim()
-            if ($LASTEXITCODE -ne 0 -or $postgresPlatform -ne 'linux/amd64') {
-                throw '离线生产构建要求本地已有 linux/amd64 的 postgres:17.5-alpine。'
-            }
-        }
-        Invoke-Checked $script:docker @('save', '--output', $imageTar, $imageTag, 'postgres:17.5-alpine') '生产镜像导出失败'
-    } else {
-        Invoke-Checked $script:docker @('save', '--output', $imageTar, $imageTag) '本地镜像导出失败'
-    }
-    $script:exportedImageName = $imageTag
 }
 
 function Get-DatabaseMigrationHead {
@@ -436,7 +389,6 @@ try {
 
     $git = Get-CommandPath 'git.exe'
     $basePython = Get-CommandPath 'python.exe'
-    $docker = Get-CommandPath 'docker.exe'
     $npm = Get-CommandPath 'npm.cmd'
     $tar = Get-CommandPath 'tar.exe'
 
@@ -517,7 +469,7 @@ try {
     }
     New-Item -ItemType Directory -Path $payloadRoot, $outputRoot -Force | Out-Null
 
-    Invoke-ComposeCheck $scratchRoot
+    Assert-ProductionComposeTemplate
     if ($Service -in @('api', 'all')) { Invoke-ApiChecks }
     $adminDist = $null
     if ($Service -in @('admin', 'all')) {
@@ -527,23 +479,22 @@ try {
     }
 
     if ($Service -eq 'api') {
-        Copy-ApiRelease (Join-Path $payloadRoot 'api')
+        $apiRoot = Join-Path $payloadRoot 'api'
+        Copy-ApiRelease $apiRoot
+        Add-ApiUpgradeWheel $apiRoot
     } elseif ($Service -eq 'admin') {
         Copy-FilteredTree $adminDist (Join-Path $payloadRoot 'admin') -ExcludedDirectories @() -ExcludedFiles @() -ExcludedExtensions @()
     } else {
-        Copy-ApiRelease (Join-Path $payloadRoot 'api-source')
+        $apiRoot = Join-Path $payloadRoot 'api-source'
+        Copy-ApiRelease $apiRoot
+        Add-ApiUpgradeWheel $apiRoot
         Copy-FilteredTree $adminDist (Join-Path $payloadRoot 'admin') -ExcludedDirectories @() -ExcludedFiles @() -ExcludedExtensions @()
     }
 
     Copy-ProductionComponentFiles $payloadRoot
 
-    $imageName = 'NOT_EXPORTED'
-    $imageDigest = 'NOT_EXPORTED'
-    if ($ExportDockerImage -and $Service -in @('api', 'all')) {
-        $script:exportedImageName = $null
-        Export-ApiImage $payloadRoot
-        $imageName = $script:exportedImageName
-    }
+    $imageName = if ($Service -in @('api', 'all')) { 'SERVER_BUILD' } else { 'NOT_APPLICABLE' }
+    $imageDigest = if ($Service -in @('api', 'all')) { 'SERVER_BUILD' } else { 'NOT_APPLICABLE' }
 
     Write-Utf8File (Join-Path $payloadRoot 'RELEASE-VERSION.txt') @($releaseVersion)
     Write-Utf8File (Join-Path $payloadRoot 'RELEASE-GIT-COMMIT.txt') @($commit)

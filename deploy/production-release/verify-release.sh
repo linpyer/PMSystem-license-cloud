@@ -18,9 +18,11 @@ actual_sha="$(sha256sum "${archive}" | awk '{print $1}')"
 [[ ! -e "${staging}" ]] || die "${EXIT_DEPLOY}" "staging already exists: ${staging}"
 install -d -m 0750 "${staging}"
 tar -xzf "${archive}" --strip-components=1 -C "${staging}"
-for item in compose.yml SHA256SUMS.txt RELEASE-VERSION.txt RELEASE-GIT-COMMIT.txt admin scripts api-source/alembic/versions; do
+for item in compose.yml SHA256SUMS.txt RELEASE-VERSION.txt RELEASE-GIT-COMMIT.txt admin scripts api-source/alembic/versions api-source/Dockerfile.offline-upgrade; do
   [[ -e "${staging}/${item}" ]] || die "${EXIT_DEPLOY}" "release item missing: ${item}"
 done
+wheel_count="$(find "${staging}/api-source" -maxdepth 1 -type f -name 'ddrec_license_server-*.whl' | wc -l | tr -d ' ')"
+[[ "${wheel_count}" == 1 ]] || die "${EXIT_DEPLOY}" "release must contain exactly one API wheel: ${wheel_count}"
 (cd "${staging}" && sha256sum -c SHA256SUMS.txt)
 commit="$(tr -d '\r\n' <"${staging}/RELEASE-GIT-COMMIT.txt")"
 [[ "${commit}" == "${expected_commit}" ]] || die "${EXIT_DEPLOY}" "release commit mismatch: ${commit}"

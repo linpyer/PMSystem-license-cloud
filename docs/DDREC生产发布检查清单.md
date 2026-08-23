@@ -14,7 +14,7 @@
 - [ ] `git status --short` 为空。
 - [ ] 根目录 `VERSION` 与后端、前端版本一致。
 - [ ] 已选择 production / api、admin 或 all；完整生产发布选择 production / all。
-- [ ] 需要离线镜像时已使用 `-ExportDockerImage`。
+- [ ] 已确认本地打包不调用 Docker；API wheel 与 `Dockerfile.offline-upgrade` 已进入发布包。
 - [ ] 后端编译、依赖、pytest 和 Alembic heads 检查通过。
 - [ ] 前端依赖、类型检查、测试和 production build 通过。
 - [ ] Admin 包含“生产环境”和 `/admin/` base path。
@@ -71,12 +71,12 @@
 
 ## F. API 发布
 
-- [ ] 采用路径 A（离线镜像）或路径 B（标准服务器构建），已记录路径。
+- [ ] 已通过统一服务器构建路径生成 commit 专属 API image，并记录 image ID。
 - [ ] 新标签为不可变的 `ddrec-license-api:<VERSION>-production`。
 - [ ] 镜像平台为 linux/amd64。
 - [ ] 已记录新镜像 ID；旧镜像未删除。
-- [ ] 当前 `load-images.sh` 标签约定已核对，未盲目执行不兼容脚本。
-- [ ] Docker Hub 超时时没有切换生产。
+- [ ] `build-api-image.sh` 使用 commit 专属标签，且当前 production API image 基础层已核对。
+- [ ] 当前 production API 基础镜像不可用或 `pip check` 失败时没有切换生产。
 - [ ] 若使用 wheel 应急方案，全部准入条件和审批记录齐全。
 - [ ] 新镜像可在生产变量下导入应用。
 - [ ] UID 10001 能读取只读挂载的签名私钥。

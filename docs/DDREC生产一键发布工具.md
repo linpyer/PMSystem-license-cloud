@@ -217,7 +217,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass `
 
 ## 9. Cloud-only 与完整发布
 
-Cloud 包由现有 `scripts/build_cloud_release.ps1` 从当前 clean commit 生成，运行原有测试和生产构建，生成 tar.gz 与 SHA-256。服务端再校验 archive SHA、内部 `SHA256SUMS.txt`、Git commit、版本、必需文件和 Shell 语法。
+Cloud 包由现有 `scripts/build_cloud_release.ps1` 从当前 clean commit 生成，运行原有测试和生产构建，生成源码、API wheel、Admin、部署文件、tar.gz 与 SHA-256。该过程不调用本机 Docker。服务端再校验 archive SHA、内部 `SHA256SUMS.txt`、Git commit、版本、必需文件和 Shell 语法。
 
 Cloud-only 执行：
 
@@ -225,8 +225,8 @@ Cloud-only 执行：
 2. `flock` 获取 `/opt/pmsystem-license/.deploy.lock`；已有发布时拒绝并发。
 3. 解压到 `.staging-<session>` 并验证，再安装为不可变 `release/<version>-<short-sha>`。
 4. 比较现用 PostgreSQL 镜像和新 Compose；任何 PostgreSQL 镜像变化默认阻止。
-5. 备份成功后才继续。
-6. 使用新 API image 只读检查数据库 revision 与代码 head。
+5. 备份成功后，服务器以现用 production API image 为基础，用发布包内 wheel 构建带 commit 的新 API image；执行 `pip check` 并核对 image commit、environment 和平台标签。
+6. 使用服务器新建的 API image 只读检查数据库 revision 与代码 head。
 7. 无 pending Migration 则继续；有 pending Migration 时必须再次回答 Y；破坏性模式直接停止并要求人工审计。
 8. Admin 构建先进入临时目录，验证 `index.html` 后再原子替换。
 9. 新 `.env.production` 在独立临时文件中只更新 image tag、version 与 build commit，再原子替换。
@@ -236,6 +236,8 @@ Cloud-only 执行：
 13. 验证 Docker、API、数据库、Admin、buildCommit 和核心数量。
 
 完整发布在 Cloud 健康和数据数量检查通过后才上传客户端、签名、创建 Draft，Published 始终是最后一步。
+
+Windows 发布入口、PowerShell 模块和 Cloud 包准备均不要求 Docker Desktop。`docker build`、`docker compose`、health 与数据库容器查询只通过 SSH 或生产执行器在 ECS 上运行。
 
 ## 10. 备份
 

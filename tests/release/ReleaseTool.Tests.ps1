@@ -108,3 +108,56 @@ Describe 'DDREC successful safety policies' {
     It 'keeps standard and license-production isolated' { Assert-DDRECReleaseIsolation standard standard published | Should Be $true }
     It 'rejects standard receiving license-production stable' { Assert-Throws { Assert-DDRECReleaseIsolation standard license-production published } }
 }
+
+Describe 'DDREC release works without local Docker' {
+    BeforeAll {
+        $script:cloudRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+        $script:workspaceRoot = (Resolve-Path (Join-Path $script:cloudRoot '..')).Path
+        $script:releaseScript = Join-Path $script:cloudRoot 'scripts\release\release-all.ps1'
+        $script:moduleScript = Join-Path $script:cloudRoot 'scripts\release\DDREC.Release.psm1'
+        $script:buildScript = Join-Path $script:cloudRoot 'scripts\build_cloud_release.ps1'
+        $script:executorScript = Join-Path $script:cloudRoot 'deploy\production-release\deploy-release.sh'
+        $script:verifyScript = Join-Path $script:cloudRoot 'deploy\production-release\verify-release.sh'
+    }
+
+    It '31 workstation PATH has no docker executable' {
+        (Get-Command docker -ErrorAction SilentlyContinue) | Should Be $null
+    }
+    It '32 release entry parses without Docker installed' {
+        $errors = $null
+        [Management.Automation.Language.Parser]::ParseFile($script:releaseScript, [ref]$null, [ref]$errors) | Out-Null
+        @($errors).Count | Should Be 0
+    }
+    It '33 release module imports without Docker installed' {
+        Import-Module $script:moduleScript -Force
+        (Get-Command Get-DDRECRemoteState -ErrorAction Stop).Name | Should Be 'Get-DDRECRemoteState'
+    }
+    It '34 cloud package builder has no local docker command' {
+        $text = Get-Content -LiteralPath $script:buildScript -Raw
+        $text.Contains("Get-CommandPath 'docker.exe'") | Should Be $false
+        $text.Contains('script:docker') | Should Be $false
+    }
+    It '35 release orchestrator does not request a local image export' {
+        $text = Get-Content -LiteralPath $script:moduleScript -Raw
+        $text.Contains('ExportDockerImage') | Should Be $false
+        $text.Contains('Invoke-DDRECNative docker') | Should Be $false
+    }
+    It '36 production executor builds the API image on the server' {
+        $text = Get-Content -LiteralPath $script:executorScript -Raw
+        $text | Should Match 'docker build --pull=false'
+        $text | Should Match 'target_api_tag=.*expected_commit'
+    }
+    It '37 server verifies the packaged API wheel' {
+        $text = Get-Content -LiteralPath $script:verifyScript -Raw
+        $text | Should Match 'ddrec_license_server-.*\.whl'
+        $text | Should Match 'wheel_count'
+    }
+    It '38 menu and installer discovery contain only formal lanes' {
+        $menu = Get-Content -LiteralPath $script:releaseScript -Raw
+        $menu | Should Match 'Standard'
+        $menu | Should Match 'License-Production'
+        $menu.Contains('License Local') | Should Be $false
+        $candidate = Get-DDRECInstallerCandidate -ClientRoot (Join-Path $script:workspaceRoot 'client') -Lane standard
+        ($null -ne $candidate) | Should Be $true
+    }
+}

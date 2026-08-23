@@ -8,7 +8,7 @@ require_root
 release_path="$(readlink -f "${1:-${RELEASE_ROOT}}")"
 
 bash "${SCRIPT_DIR}/precheck.sh"
-bash "${SCRIPT_DIR}/load-images.sh"
+bash "${SCRIPT_DIR}/build-api-image.sh"
 require_file "${ENV_FILE}"
 load_environment
 verify_private_key_readable

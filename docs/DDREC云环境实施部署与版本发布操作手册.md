@@ -382,12 +382,12 @@ chmod 600 /opt/ddrec-license/config/.env.production
 
 ## 第8章 首次安装授权后端
 
-推荐顺序：上传 production/all 离线包；双层 SHA 校验；解压 staging；转换 Shell 为 LF；运行 `precheck.sh`；加载镜像；首次运行 `init-production.sh`；安装版本；启动 PostgreSQL；执行 Alembic；启动 API；验证 ready；最后创建 OWNER。
+推荐顺序：上传 production/all 包；双层 SHA 校验；解压 staging；转换 Shell 为 LF；运行 `precheck.sh`；在服务器构建 API 镜像；首次运行 `init-production.sh`；安装版本；启动 PostgreSQL；执行 Alembic；启动 API；验证 ready；最后创建 OWNER。
 
 | 脚本 | 实际职责 | 边界 |
 |---|---|---|
 | `precheck.sh` | root、命令、x86_64、Docker/Compose/Nginx、资源、端口、DNS和目录只读检查 | 不创建资源 |
-| `load-images.sh` | 校验并加载离线包镜像、检查平台 | 生产 API 标签固定为 `<VERSION>-production`，不会创建无后缀兼容标签 |
+| `build-api-image.sh` | 使用包内 wheel 在服务器构建并校验 commit 专属 API 镜像 | Windows 工作站不需要 Docker；首次安装必须先审计基础镜像 |
 | `init-production.sh` | 首次生成 `.env.production`、Ed25519 密钥和随机秘密 | 默认拒绝覆盖；普通发布禁止 `--force` |
 | `install-release.sh` | 校验、安装纯版本目录、切 current、同步 Admin、复制脚本、保护 Nginx | 不启动容器；同版本重发会拒绝 |
 | `migrate.sh` | 启动/等待 PostgreSQL，执行 `upgrade head` 并显示前后 revision | 不启动 API、不 downgrade |
@@ -406,7 +406,7 @@ find scripts -type f -name '*.sh' -exec sed -i 's/\r$//' {} +
 find scripts -type f -name '*.sh' -exec bash -n {} \;
 bash scripts/precheck.sh
 
-# 按第16章加载镜像；`load-images.sh` 会校验 `<VERSION>-production` 标签和 linux/amd64 平台。
+# 按第16章在服务器构建镜像；脚本会校验依赖和 linux/amd64 平台。
 bash scripts/init-production.sh
 bash scripts/install-release.sh "$PWD"
 bash /opt/ddrec-license/current/scripts/migrate.sh
@@ -478,22 +478,16 @@ bash /opt/ddrec-license/current/scripts/create-owner.sh \
 
 ## 第11章 本地一键打包
 
-双击根目录 `一键打包-云端授权系统.bat`，PowerShell 菜单提供：local/api、local/admin、local/all、production/api、production/admin、production/all 和退出。正式完整发布选择“生产环境 - 全部服务”。
+双击根目录 `一键打包-云端授权系统.bat`，PowerShell 菜单只提供 License-Production API、Admin、全部服务和退出。正式完整发布选择“License-Production 全部服务”。
 
 ```powershell
-# 【本地 Windows】普通完整源码/静态包
+# 【本地 Windows】完整源码、API wheel、Admin 与部署包；不依赖 Docker Desktop
 .\scripts\build_cloud_release.ps1 -Environment production -Service all
-
-# 离线服务器优先：同时导出 linux/amd64 API 与 PostgreSQL 镜像
-.\scripts\build_cloud_release.ps1 `
-  -Environment production `
-  -Service all `
-  -ExportDockerImage
 ```
 
 - `api`：后端源码、Dockerfile、依赖声明、Alembic，以及有限 API 部署辅助文件。
 - `admin`：生产静态文件、Nginx 参考配置和 Admin 部署说明。
-- `all`：API 源码、Admin、Compose、全套部署脚本和说明。
+- `all`：API 源码与 wheel、Admin、Compose、全套部署脚本和说明。
 - Windows 客户端与 PostgreSQL 数据都不进入上述包。
 
 输出：
@@ -505,7 +499,7 @@ artifacts/cloud/<environment>/<service>/
 └── SHA256SUMS.txt
 ```
 
-版本来自根目录 `VERSION`，并强制与 `license-server/pyproject.toml`、`license-admin/package.json` 和 lock 文件一致。生产构建要求配置分支、干净工作区、测试、HTTPS API、生产标签和敏感信息扫描全部通过。菜单本身不传 `-ExportDockerImage`；需要离线镜像时使用上述命令行。
+版本来自根目录 `VERSION`，并强制与 `license-server/pyproject.toml`、`license-admin/package.json` 和 lock 文件一致。生产构建要求配置分支、干净工作区、测试、HTTPS API、生产标签和敏感信息扫描全部通过。本地打包不调用 Docker；Docker build 与 Compose 仅在生产服务器执行器获得明确部署批准后运行。
 
 ## 第12章 生产发布前检查
 
@@ -662,44 +656,20 @@ Windows CRLF 可能让 Linux 把清单文件名末尾 `\r` 当作字符；不能
 
 ## 第16章 API 发布
 
-### 16.1 路径 A：加载预构建镜像（优先）
-
-`-ExportDockerImage` 生成 `images/ddrec-production-images-<VERSION>.tar`，API 标签为 `ddrec-license-api:<VERSION>-production`。
-
-```bash
-# 【生产服务器】【会修改生产环境：新增镜像】
-IMAGE_TAR=$(find "$FINAL/images" -maxdepth 1 -type f \
-  -name 'ddrec-production-images-*.tar' -print -quit)
-test -n "$IMAGE_TAR" || exit 1
-docker load --input "$IMAGE_TAR"
-docker image inspect "ddrec-license-api:${VERSION}-production" \
-  --format '{{.Id}} {{.Os}}/{{.Architecture}}'
-docker image inspect postgres:17.5-alpine \
-  --format '{{.Id}} {{.Os}}/{{.Architecture}}'
-```
-
-必须为 `linux/amd64`，并保留旧镜像。`load-images.sh` 与统一构建均使用 `ddrec-license-api:<VERSION>-production`，不得额外创建无 `-production` 后缀的标签。
-
-### 16.2 路径 B：服务器构建
+### 16.1 服务器构建（统一正式路径）
 
 ```bash
 # 【生产服务器】【会修改生产环境：构建新镜像】
-API_SOURCE="$FINAL/api-source"
-test -d "$API_SOURCE" || API_SOURCE="$FINAL/api"
-test -f "$API_SOURCE/Dockerfile" || exit 1
-docker build --pull=false \
-  --tag "ddrec-license-api:${VERSION}-production" \
-  "$API_SOURCE"
-docker image inspect "ddrec-license-api:${VERSION}-production" --format '{{.Id}}'
+bash "$FINAL/scripts/build-api-image.sh"
+docker image inspect "ddrec-license-api:${VERSION}-${SHORT_SHA}-production" \
+  --format '{{.Id}} {{.Os}}/{{.Architecture}} {{index .Config.Labels "org.opencontainers.image.revision"}}'
 ```
 
-基础镜像不可用或 Docker Hub 超时时，不得切换生产；优先恢复网络、使用批准的镜像源或上传离线镜像。
+脚本使用当前 production API image 作为基础层，安装发布包内经 SHA 清单保护的 wheel，执行 `pip check`，并生成 commit 专属标签。旧镜像保持不变，回滚继续引用旧标签。本步骤只允许在生产服务器上执行；Windows 工作站不调用 Docker。
 
-### 16.3 受控 wheel 应急方案
+### 16.2 首次安装边界
 
-2026-08-04 因 `python:3.12.10-slim-bookworm` 下载超时，生产未切换；确认新旧后端差异仅为版本元数据且依赖、迁移兼容后，才以已验证旧 API 镜像为基础层安装经哈希校验的新 wheel，生成新不可变标签。
-
-仅当以下全部成立才允许：代码审查证明 wheel 覆盖不遗漏系统包、入口、依赖或镜像层变化；wheel 来自当前 Git SHA 并记录 SHA；Python ABI/依赖兼容；Alembic 随镜像复制；生产变量下应用可导入；UID 10001 可读取只读私钥；生成新标签和镜像 ID；不修改运行中容器、不删除旧镜像。任一条件无法证明即停止。该方案不是常规流程。
+没有现用 production API image 的首次安装，不得猜测基础镜像。必须单独审计并设置 `DDREC_BASE_API_IMAGE`，确认平台、依赖、来源和镜像 ID 后才能构建；不属于普通发布流程。
 
 ## 第17章 Alembic 数据库迁移
 
@@ -711,7 +681,7 @@ MIGRATION_ENV="/opt/ddrec-license/config/.env.production.migrate-${SHORT_SHA}"
 test ! -e "$MIGRATION_ENV" || exit 1
 cp -a /opt/ddrec-license/config/.env.production "$MIGRATION_ENV"
 sed -i \
-  -e "s/^DDREC_API_IMAGE_TAG=.*/DDREC_API_IMAGE_TAG=${VERSION}-production/" \
+  -e "s/^DDREC_API_IMAGE_TAG=.*/DDREC_API_IMAGE_TAG=${VERSION}-${SHORT_SHA}-production/" \
   -e "s/^LICENSE_SERVICE_VERSION=.*/LICENSE_SERVICE_VERSION=${VERSION}/" \
   -e "s/^LICENSE_BUILD_COMMIT=.*/LICENSE_BUILD_COMMIT=${GIT_SHA}/" \
   "$MIGRATION_ENV"
@@ -941,9 +911,9 @@ Windows CRLF 会让文件名尾部出现 `\r`。先直接计算压缩包 SHA 与
 
 只对 `scripts/*.sh` 转 LF，再执行 `bash -n`；转换后建立服务器工作清单，不批量修改业务文件。
 
-### 23.3 Docker Hub 基础镜像下载超时
+### 23.3 服务器 API 基础镜像或 wheel 校验失败
 
-保持旧服务，不切 current。检查 DNS、代理和镜像源，优先上传离线镜像。仅在第16.3全部条件满足时使用受控 wheel 方案。
+保持旧服务，不切 current。核对当前 production API image、包内 wheel、Python ABI 与依赖；`pip check` 未通过时禁止切换。首次安装必须单独审计 `DDREC_BASE_API_IMAGE`，不得临时改用未知镜像。
 
 ### 23.4 Admin 仍显示开发环境
 
