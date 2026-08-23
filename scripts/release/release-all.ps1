@@ -1,10 +1,11 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Menu','Standard','LicenseProduction','BothClients','Cloud','CloudStandard','CloudBoth','DryRun','Status')]
+    [ValidateSet('Menu','Standard','LicenseProduction','BothClients','Cloud','CloudStandard','CloudBoth','DryRun','Status','Resume')]
     [string]$Mode = 'Menu',
     [ValidateSet('Standard','LicenseProduction','BothClients','Cloud','CloudStandard','CloudBoth')]
     [string]$DryRunScope = 'CloudBoth',
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'production-config.json'),
+    [string]$ResumeSessionId,
     [switch]$NonInteractive
 )
 
@@ -21,6 +22,7 @@ $workspaceRoot = (Resolve-Path (Join-Path $cloudRoot '..')).Path
 $config = Import-DDRECReleaseConfig -Path $ConfigPath -WorkspaceRoot $workspaceRoot
 $context = New-DDRECReleaseContext -WorkspaceRoot $workspaceRoot -Config $config
 $stage = '初始化'
+$sessionState = $null
 
 function Write-Header {
     param([string]$Title)
@@ -55,6 +57,7 @@ function Select-MenuMode {
 [6] 云端服务 + Standard + License-Production
 [7] Dry Run / 发布预检
 [8] 查看当前生产状态
+[9] 继续未完成发布 / Resume Release
 [0] 退出
 '@
     $result = switch ((Read-Host '选择').Trim()) {
@@ -66,6 +69,7 @@ function Select-MenuMode {
         '6' { 'CloudBoth' }
         '7' { 'DryRun' }
         '8' { 'Status' }
+        '9' { 'Resume' }
         '0' { 'Exit' }
         default { throw '菜单选择无效。' }
     }
@@ -163,8 +167,112 @@ function Show-Plan {
     }
 }
 
+function Get-SessionClientItem {
+    param($State,[string]$Lane)
+    if($Lane -eq 'standard'){return $State.Standard}
+    return $State.License
+}
+
+function Save-ReleaseSession {
+    param($State,[string]$CompletedStage)
+    if($null -eq $State){return}
+    Update-DDRECReleaseSessionFromContext -Context $context -State $State -CompletedStage $CompletedStage | Out-Null
+}
+
+function Invoke-ClientPackageStages {
+    param([object[]]$Targets,$State)
+    foreach($item in $Targets){
+        $stateItem=Get-SessionClientItem -State $State -Lane $item.Lane
+        $script:stage="客户端人工上传：$($item.Lane)"
+        $remote=Test-DDRECRemoteClientTarget -Context $context -Target $item.Target -Metadata $item.Metadata
+        if($remote.Exists){
+            $stateItem.Uploaded=$true; $stateItem.Installed=$true
+            Write-DDRECLog -Context $context -Message "$($item.Lane) 最终不可变文件已存在且 size/SHA 一致，幂等复用。"
+        } else {
+            $upload=Wait-DDRECManualClientUpload -Context $context -Metadata $item.Metadata -Lane $item.Lane -NonInteractive:$NonInteractive
+            if($upload.Action -ne 'Verified'){
+                Save-ReleaseSession -State $State -CompletedStage "Awaiting-$($item.Lane)-Upload"
+                Write-DDRECLog -Context $context -Level WARN -Message "Cloud部署：成功；客户端发布：未完成；线上API：正常。已保存 Session，可使用 Resume Release 继续。"
+                return $false
+            }
+            $stateItem.Uploaded=$true
+            Save-ReleaseSession -State $State -CompletedStage "$($item.Lane)-IncomingVerified"
+            Install-DDRECVerifiedClientPackage -Context $context -Metadata $item.Metadata -Target $item.Target | Out-Null
+            $stateItem.Installed=$true
+        }
+        $script:stage="客户端最终下载验证：$($item.Lane)"
+        $final=Test-DDRECRemoteClientTarget -Context $context -Target $item.Target -Metadata $item.Metadata
+        if(-not $final.Exists){throw '客户端最终不可变文件在安装后不存在。'}
+        $probe=Test-DDRECDownloadUrl -Url $item.Target.Url -ExpectedLength $item.Metadata.FileSize -TimeoutSeconds ([int]$config.HttpTimeoutSeconds)
+        Write-DDRECLog -Context $context -Message "$($item.Lane) 下载验证 PASS：HTTP=$($probe.StatusCode) Range=$($probe.RangeStatusCode) Size=$($probe.ContentLength) SHA=$($final.SHA256)"
+        $item.Signed=Invoke-DDRECManifestSigning -Context $context -Metadata $item.Metadata
+        $stateItem.Verified=$true
+        Save-ReleaseSession -State $State -CompletedStage "$($item.Lane)-DownloadVerified"
+        Add-DDRECStage -Context $context -Stage "$($item.Lane) 人工上传/SHA/原子安装/HTTP 200/Range 206/签名"
+    }
+    return $true
+}
+
+function Invoke-ClientDraftAndPublishStages {
+    param([object[]]$Targets,$State)
+    if($Targets.Count -eq 0){return}
+    $script:stage='OWNER 登录与 Draft 创建'
+    $auth=Connect-DDRECAdminApi -Context $context
+    foreach($item in $Targets){
+        $item.Draft=New-DDRECClientDraft -Context $context -Auth $auth -Metadata $item.Metadata -Target $item.Target -Signed $item.Signed
+        Test-UpdateIsolation -Draft $item.Draft
+        $stateItem=Get-SessionClientItem -State $State -Lane $item.Lane
+        $stateItem.DraftId=$item.Draft.id; $stateItem.DraftStatus=$item.Draft.status
+        if($item.Draft.status -eq 'published'){$stateItem.Published=$true}
+        Save-ReleaseSession -State $State -CompletedStage 'DraftReady'
+    }
+    Add-DDRECStage -Context $context -Stage 'Draft 创建/幂等复用与更新通道隔离验证'
+    Write-Header '发布确认'
+    foreach($item in $Targets){Write-Host "$($item.Lane): V$($item.Metadata.Version) Build $($item.Metadata.BuildNumber) / $($item.Metadata.SHA256) / $($item.Draft.status.ToUpperInvariant())"}
+    $publishable=@(for($i=0;$i -lt $Targets.Count;$i++){if($Targets[$i].Draft.status -eq 'draft'){$i}})
+    if($publishable.Count -eq 0){
+        Write-DDRECLog -Context $context -Message '相同 Build 已 Published；幂等完成，没有创建重复记录。'
+        Save-ReleaseSession -State $State -CompletedStage 'Completed'
+        return
+    }
+    Write-Host "`n默认保持 Draft。只有先选择目标并再次输入 PUBLISH 才会发布。"
+    $publishSelection=if($publishable.Count -eq 1){if((Read-Host '[1] 发布唯一 Draft / [4] 保持 Draft / [0] 退出') -eq '1'){@($publishable[0])}else{@()}}else{
+        switch(Read-Host '[1] Standard [2] License-Production [3] 两个 [4] 全部保持 Draft [0] 退出'){'1'{@(0)}'2'{@(1)}'3'{@(0,1)}default{@()}}
+    }
+    if($publishSelection.Count -gt 0 -and (Read-Host '请输入 PUBLISH 二次确认') -ceq 'PUBLISH'){
+        $script:stage='Published API'
+        foreach($index in $publishSelection){
+            Publish-DDRECClientDraft -Context $context -Auth $auth -Draft $Targets[$index].Draft | Out-Null
+            (Get-SessionClientItem -State $State -Lane $Targets[$index].Lane).Published=$true
+        }
+        Add-DDRECStage -Context $context -Stage 'Published（最后一步）'
+        Save-ReleaseSession -State $State -CompletedStage 'Completed'
+    } else {
+        Write-DDRECLog -Context $context -Level WARN -Message '所有目标保持 Draft；没有 Published。'
+        Save-ReleaseSession -State $State -CompletedStage 'DraftReady'
+    }
+}
+
+function Get-ResumeTargets {
+    param($State)
+    $items=[Collections.Generic.List[object]]::new()
+    $entries=@(
+        [pscustomobject]@{Lane='standard';SessionItem=$State.Standard},
+        [pscustomobject]@{Lane='license-production';SessionItem=$State.License}
+    )
+    foreach($entry in $entries){
+        $lane=[string]$entry.Lane;$sessionItem=$entry.SessionItem
+        if($null -eq $sessionItem){continue}
+        $metadata=Get-DDRECInstallerMetadata -InstallerPath ([string]$sessionItem.Path) -Lane $lane -ExpectedCommit ([string]$State.ClientGitCommit)
+        Assert-DDRECSessionClientMetadata -SessionItem $sessionItem -Metadata $metadata | Out-Null
+        $target=Get-DDRECClientTarget -Metadata $metadata -Config $config
+        if($target.RemotePath -cne [string]$sessionItem.RemoteFinalPath -or $target.Url -cne [string]$sessionItem.DownloadUrl){throw 'Resume 阻止：客户端最终路径或 URL 与 Session 不一致。'}
+        $items.Add([pscustomobject]@{Lane=$lane;Metadata=$metadata;Target=$target;Remote=$null;Signed=$null;Draft=$null})
+    }
+    return $items
+}
+
 try {
-    Write-DDRECLog -Context $context -Message "发布 Session：$($context.SessionId)"
     $stage='读取 Git 状态'
     $clientState=Get-DDRECGitState -Repository $context.ClientRoot
     $cloudState=Get-DDRECGitState -Repository $context.CloudRoot
@@ -176,6 +284,41 @@ try {
         if($selectedMode -eq 'Exit'){exit $exitCodes.Success}
         $Mode=$selectedMode
     }
+    if($Mode -eq 'Resume'){
+        if([string]::IsNullOrWhiteSpace($ResumeSessionId)){
+            $latest=Get-DDRECLatestIncompleteSessionState -Context $context
+            if($null -eq $latest){throw '没有可恢复的未完成发布 Session。'}
+            $ResumeSessionId=[string]$latest.SessionId
+        }
+        $context=New-DDRECReleaseContext -WorkspaceRoot $workspaceRoot -Config $config -SessionId $ResumeSessionId
+        Write-DDRECLog -Context $context -Message "Resume Release Session：$($context.SessionId)"
+        $stage='读取并验证 Resume Session'
+        $sessionState=Read-DDRECReleaseSessionState -Context $context -SessionId $ResumeSessionId
+        Assert-DDRECGitReleaseState -State $clientState -RequiredBranch $config.RequiredBranch | Out-Null
+        if($clientState.Head -cne [string]$sessionState.ClientGitCommit){throw 'Resume 阻止：当前 client HEAD 与 Session 不一致。'}
+        Assert-DDRECResumeProductionState -State $sessionState -RemoteState $remoteState | Out-Null
+        if(-not (Test-Path -LiteralPath $config.UpdatePrivateKey -PathType Leaf)){throw '本地更新签名私钥不存在。'}
+        $context.CurrentSwitched=[bool]$sessionState.CurrentSwitched
+        $context.DatabaseModified=[bool]$sessionState.DatabaseModified
+        $context.MigrationExecuted=[bool]$sessionState.MigrationExecuted
+        $context.AdminReplaced=[bool]$sessionState.AdminReplaced
+        $context.PreparedProductionArtifacts=$true
+        $context.ProductionApplicationModified=$context.CurrentSwitched -or $context.AdminReplaced
+        $context.ProductionModified=$true
+        Write-Header '继续未完成发布'
+        [pscustomobject]@{
+            Session=$sessionState.SessionId;Cloud='已部署成功';Current=$remoteState.Current;ApiCommit=$remoteState.BuildCommit
+            ClientUploaded=([bool]$sessionState.Standard.Uploaded -and [bool]$sessionState.License.Uploaded)
+            DraftCreated=$sessionState.DraftCreated;Published=$sessionState.Published;CompletedStage=$sessionState.CompletedStage
+        }|Format-List
+        Write-DDRECLog -Context $context -Message 'Resume 仅从客户端人工上传阶段继续；不会重新构建、上传或部署 Cloud。'
+        $targets=Get-ResumeTargets -State $sessionState
+        if(-not (Invoke-ClientPackageStages -Targets $targets -State $sessionState)){exit $exitCodes.Cancelled}
+        Invoke-ClientDraftAndPublishStages -Targets $targets -State $sessionState
+        Write-DDRECLog -Context $context -Message "Resume 流程完成。日志：$($context.LogPath)"
+        exit $exitCodes.Success
+    }
+    Write-DDRECLog -Context $context -Message "发布 Session：$($context.SessionId)"
     if($Mode -eq 'Status'){
         Show-ProductionStatus -RemoteState $remoteState -CloudState $cloudState
         Add-DDRECStage -Context $context -Stage 'Production Status（只读）'
@@ -259,6 +402,13 @@ try {
         if((Read-Host '是否执行 Migration？[Y/N]') -notmatch '^(?i)y$'){throw '用户拒绝 pending Migration，部署停止。'}
         $approveMigration=$true
     }
+    if($targets.Count -gt 0){
+        $sessionCloudCommit=if($plan.Cloud){$cloudState.Head}else{$remoteState.BuildCommit}
+        $sessionCloudRelease=if($plan.Cloud){"$($config.RemoteRoot)/release/$cloudVersion-$($cloudState.Head.Substring(0,7))"}else{$remoteState.Current}
+        $sessionState=New-DDRECReleaseSessionState -Context $context -CloudGitCommit $sessionCloudCommit -CloudRelease $sessionCloudRelease -ClientGitCommit $clientState.Head -DbRevision $remoteState.DbRevision -Targets $targets -CloudDeployed:(-not $plan.Cloud)
+        if(-not $plan.Cloud){$sessionState.CurrentSwitched=$true}
+        Write-DDRECReleaseSessionState -Context $context -State $sessionState | Out-Null
+    }
     if($plan.Cloud){
         $stage='Cloud 备份/部署/Migration/Admin/Health'
         Invoke-DDRECCloudDeploy -Context $context -Package $package -CloudCommit $cloudState.Head -ApproveMigration $approveMigration|Out-Null
@@ -266,44 +416,24 @@ try {
         Assert-DDRECHealthSnapshot -Snapshot ([pscustomobject]@{ApiStatus=$postCloud.ApiStatus;Database=$postCloud.Database;AdminHttp=$postCloud.AdminHttp;ApiContainerHealthy=$postCloud.ApiContainer -eq 'healthy';PostgresHealthy=$postCloud.PostgresContainer -eq 'healthy';BuildCommit=$postCloud.BuildCommit}) -ExpectedCommit $cloudState.Head|Out-Null
         Assert-DDRECCoreCounts -Before $remoteState.Counts -After $postCloud.Counts|Out-Null
         Add-DDRECStage -Context $context -Stage 'Cloud 生产部署与健康检查'
-    }
-
-    foreach($item in $targets){
-        $stage="客户端上传：$($item.Lane)"
-        Invoke-DDRECClientUpload -Context $context -Metadata $item.Metadata -Target $item.Target|Out-Null
-        Test-DDRECDownloadUrl -Url $item.Target.Url -ExpectedLength $item.Metadata.FileSize -TimeoutSeconds ([int]$config.HttpTimeoutSeconds)|Out-Null
-        $item.Signed=Invoke-DDRECManifestSigning -Context $context -Metadata $item.Metadata
-        Add-DDRECStage -Context $context -Stage "$($item.Lane) 上传/SHA/下载/Range/签名"
+        if($null -ne $sessionState){
+            $sessionState.CloudDeployed=$true
+            $sessionState.CloudRelease=$postCloud.Current
+            Save-ReleaseSession -State $sessionState -CompletedStage 'CloudDeployed'
+        }
     }
 
     if($targets.Count -gt 0){
-        $stage='OWNER 登录与 Draft 创建'
-        $auth=Connect-DDRECAdminApi -Context $context
-        foreach($item in $targets){
-            $item.Draft=New-DDRECClientDraft -Context $context -Auth $auth -Metadata $item.Metadata -Target $item.Target -Signed $item.Signed
-            Test-UpdateIsolation -Draft $item.Draft
-        }
-        Add-DDRECStage -Context $context -Stage 'Draft 创建与更新通道隔离验证'
-        Write-Header '发布确认'
-        foreach($item in $targets){
-            Write-Host "$($item.Lane): V$($item.Metadata.Version) Build $($item.Metadata.BuildNumber) / $($item.Metadata.SHA256) / $($item.Draft.status.ToUpperInvariant())"
-        }
-        $publishable=@(for($i=0;$i -lt $targets.Count;$i++){if($targets[$i].Draft.status -eq 'draft'){$i}})
-        if($publishable.Count -eq 0){Write-DDRECLog -Context $context -Message '相同 Build 已 Published；幂等完成，没有创建重复记录。';exit $exitCodes.Success}
-        Write-Host "`n默认保持 Draft。只有先选择目标并再次输入 PUBLISH 才会发布。"
-        $publishSelection=if($publishable.Count -eq 1){ if((Read-Host '[1] 发布唯一 Draft / [4] 保持 Draft / [0] 退出') -eq '1'){@($publishable[0])}else{@()} } else {
-            switch(Read-Host '[1] Standard [2] License-Production [3] 两个 [4] 全部保持 Draft [0] 退出'){'1'{@(0)}'2'{@(1)}'3'{@(0,1)}default{@()}}
-        }
-        if($publishSelection.Count -gt 0 -and (Read-Host '请输入 PUBLISH 二次确认') -ceq 'PUBLISH'){
-            $stage='Published API'
-            foreach($index in $publishSelection){Publish-DDRECClientDraft -Context $context -Auth $auth -Draft $targets[$index].Draft|Out-Null}
-            Add-DDRECStage -Context $context -Stage 'Published（最后一步）'
-        } else {Write-DDRECLog -Context $context -Level WARN -Message '所有目标保持 Draft；没有 Published。'}
+        if(-not (Invoke-ClientPackageStages -Targets $targets -State $sessionState)){exit $exitCodes.Cancelled}
+        Invoke-ClientDraftAndPublishStages -Targets $targets -State $sessionState
     }
     Write-DDRECLog -Context $context -Message "流程完成。日志：$($context.LogPath)"
     exit $exitCodes.Success
 }
 catch {
+    if($null -ne $sessionState){
+        try{Save-ReleaseSession -State $sessionState -CompletedStage "Failed:$stage"}catch{}
+    }
     $report=Get-DDRECFailureReport -Context $context -Stage $stage -ErrorRecord $_
     Write-Header '发布停止'
     Write-DDRECLog -Context $context -Level ERROR -Message ($report|ConvertTo-Json -Depth 6)

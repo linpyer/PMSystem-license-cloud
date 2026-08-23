@@ -45,6 +45,7 @@ function New-DDRECReleaseContext {
         CloudRoot = [IO.Path]::GetFullPath((Join-Path $WorkspaceRoot 'cloud-license'))
         SessionId = $SessionId
         LogPath = Join-Path $logRoot "$SessionId.log"
+        SessionStatePath = Join-Path (Join-Path $WorkspaceRoot 'cloud-license\artifacts\release-sessions') "$SessionId.json"
         Config = $Config
         CompletedStages = [Collections.Generic.List[string]]::new()
         ProductionModified = $false
@@ -67,6 +68,121 @@ function New-DDRECReleaseContext {
         Published = [Collections.Generic.List[object]]::new()
     }
     return $context
+}
+
+function Write-DDRECReleaseSessionState {
+    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$State)
+    $path = [string]$Context.SessionStatePath
+    $directory = [IO.Path]::GetDirectoryName($path)
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    if ($State.PSObject.Properties['UpdatedAt']) {
+        $State.UpdatedAt = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+    } else {
+        Add-Member -InputObject $State -NotePropertyName UpdatedAt -NotePropertyValue ([DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ'))
+    }
+    $temporary = "$path.$([guid]::NewGuid().ToString('N')).tmp"
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($State | ConvertTo-Json -Depth 12))
+    try {
+        $stream = [IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+        try {
+            $stream.Write($bytes,0,$bytes.Length)
+            $stream.Flush($true)
+        } finally {
+            $stream.Dispose()
+        }
+        [IO.File]::Move($temporary,$path,$true)
+    } finally {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+    }
+    return $path
+}
+
+function Read-DDRECReleaseSessionState {
+    param([Parameter(Mandatory)]$Context,[string]$SessionId=$Context.SessionId)
+    if ($SessionId -notmatch '^\d{8}-\d{6}$') { throw "无效发布 SessionId：$SessionId" }
+    $path = Join-Path (Join-Path $Context.CloudRoot 'artifacts\release-sessions') "$SessionId.json"
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "发布 Session 状态不存在：$path" }
+    $state = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$state.SessionId -cne $SessionId -or [int]$state.SchemaVersion -ne 1) { throw '发布 Session 状态标识或版本无效。' }
+    return $state
+}
+
+function Get-DDRECLatestIncompleteSessionState {
+    param([Parameter(Mandatory)]$Context)
+    $root = Join-Path $Context.CloudRoot 'artifacts\release-sessions'
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
+    foreach ($file in @(Get-ChildItem -LiteralPath $root -Filter '*.json' -File | Sort-Object Name -Descending)) {
+        try {
+            $state = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($state.CloudDeployed -and -not $state.Published -and $state.CompletedStage -ne 'Completed') { return $state }
+        } catch { continue }
+    }
+    return $null
+}
+
+function Get-DDRECClientIncomingPaths {
+    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata)
+    Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
+    if ([string]$Context.SessionId -notmatch '^\d{8}-\d{6}$') { throw '客户端 incoming SessionId 不安全。' }
+    if ([IO.Path]::GetFileName([string]$Metadata.FileName) -cne [string]$Metadata.FileName -or $Metadata.FileName -notmatch '^DDREC-[0-9.]+-(standard|license)-Setup\.exe$') {
+        throw '客户端安装包文件名不安全。'
+    }
+    $root = ([string]$Context.Config.RemoteRoot).TrimEnd('/')
+    if ($root -cne '/opt/pmsystem-license') { throw '客户端 incoming 根目录不符合生产安全契约。' }
+    $directory = "$root/incoming/client/$($Context.SessionId)"
+    return [pscustomobject]@{
+        Directory = $directory
+        FileName = "$($Metadata.FileName).part"
+        Path = "$directory/$($Metadata.FileName).part"
+    }
+}
+
+function New-DDRECClientSessionItem {
+    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)][string]$Lane,[Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Target)
+    $incoming = Get-DDRECClientIncomingPaths -Context $Context -Metadata $Metadata
+    return [pscustomobject]@{
+        Lane=$Lane; Path=$Metadata.Path; FileName=$Metadata.FileName; Version=$Metadata.Version
+        BuildNumber=[int]$Metadata.BuildNumber; GitCommit=$Metadata.GitCommit; Edition=$Metadata.Edition
+        Environment=$Metadata.Environment; FileSize=[int64]$Metadata.FileSize; SHA256=$Metadata.SHA256
+        RemoteIncomingDirectory=$incoming.Directory; RemoteIncomingPath=$incoming.Path
+        RemoteFinalPath=$Target.RemotePath; DownloadUrl=$Target.Url; RelativePath=$Target.RelativePath
+        Uploaded=$false; Installed=$false; Verified=$false; DraftId=$null; DraftStatus=$null; Published=$false
+    }
+}
+
+function New-DDRECReleaseSessionState {
+    param(
+        [Parameter(Mandatory)]$Context,[Parameter(Mandatory)][string]$CloudGitCommit,
+        [Parameter(Mandatory)][string]$CloudRelease,[Parameter(Mandatory)][string]$ClientGitCommit,
+        [Parameter(Mandatory)][string]$DbRevision,[object[]]$Targets=@(),[bool]$CloudDeployed=$false
+    )
+    $standard=$null; $license=$null
+    foreach ($item in $Targets) {
+        $sessionItem=New-DDRECClientSessionItem -Context $Context -Lane $item.Lane -Metadata $item.Metadata -Target $item.Target
+        if ($item.Lane -eq 'standard') {$standard=$sessionItem} else {$license=$sessionItem}
+    }
+    return [pscustomobject]@{
+        SchemaVersion=1; SessionId=$Context.SessionId
+        CreatedAt=[DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ'); UpdatedAt=$null
+        CloudGitCommit=$CloudGitCommit; CloudRelease=$CloudRelease; CloudDeployed=$CloudDeployed
+        CurrentSwitched=$Context.CurrentSwitched; ClientGitCommit=$ClientGitCommit; DbRevision=$DbRevision
+        DatabaseModified=$Context.DatabaseModified; MigrationExecuted=$Context.MigrationExecuted; AdminReplaced=$Context.AdminReplaced
+        CompletedStage=$(if($CloudDeployed){'CloudDeployed'}else{'Prepared'}); Standard=$standard; License=$license
+        DraftCreated=$false; Published=$false
+    }
+}
+
+function Update-DDRECReleaseSessionFromContext {
+    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$State,[string]$CompletedStage)
+    $State.CurrentSwitched=[bool]$Context.CurrentSwitched
+    $State.DatabaseModified=[bool]$Context.DatabaseModified
+    $State.MigrationExecuted=[bool]$Context.MigrationExecuted
+    $State.AdminReplaced=[bool]$Context.AdminReplaced
+    $State.DraftCreated=[bool]$Context.DraftCreated
+    $State.Published=[bool]$Context.PublishedCreated
+    if ($CompletedStage) {$State.CompletedStage=$CompletedStage}
+    Write-DDRECReleaseSessionState -Context $Context -State $State | Out-Null
+    return $State
 }
 
 function Protect-DDRECLogText {
@@ -546,9 +662,48 @@ function Assert-DDRECCoreCounts {
 
 function Assert-DDRECDownloadProbe {
     param($Probe,[int64]$ExpectedLength)
-    if ($Probe.StatusCode -notin @(200,206) -or $Probe.RangeStatusCode -ne 206) { throw '客户端下载或 HTTP Range 验证失败。' }
+    if ($Probe.StatusCode -ne 200 -or $Probe.RangeStatusCode -ne 206) { throw '客户端下载或 HTTP Range 验证失败（要求 HTTP 200 / Range 206）。' }
     if ([int64]$Probe.ContentLength -ne $ExpectedLength) { throw '客户端下载 Content-Length 不一致。' }
     if (-not $Probe.AcceptRanges) { throw '客户端下载缺少 Accept-Ranges: bytes。' }
+    return $true
+}
+
+function Assert-DDRECResumeProductionState {
+    param([Parameter(Mandatory)]$State,[Parameter(Mandatory)]$RemoteState)
+    if(-not $State.CloudDeployed -or -not $State.CurrentSwitched){throw 'Session 未记录 Cloud 部署及 current 切换成功，禁止 Resume。'}
+    if([string]$RemoteState.Current -cne [string]$State.CloudRelease){throw "Resume 阻止：current 与 Session 不一致：$($RemoteState.Current) != $($State.CloudRelease)"}
+    if(([string]$RemoteState.BuildCommit).ToLowerInvariant() -cne ([string]$State.CloudGitCommit).ToLowerInvariant()){throw "Resume 阻止：API buildCommit 与 Session 不一致。"}
+    if($RemoteState.ApiStatus -ne 'ok' -or $RemoteState.Database -ne 'ok' -or $RemoteState.ApiContainer -ne 'healthy' -or $RemoteState.PostgresContainer -ne 'healthy' -or [int]$RemoteState.AdminHttp -ne 200){
+        throw 'Resume 阻止：API、PostgreSQL、容器或 Admin 健康检查失败。'
+    }
+    if([string]$RemoteState.DbRevision -cne [string]$State.DbRevision -or [string]$RemoteState.CodeHead -cne [string]$State.DbRevision){throw 'Resume 阻止：数据库 revision 与 Session 不一致。'}
+    return $true
+}
+
+function Assert-DDRECSessionClientMetadata {
+    param([Parameter(Mandatory)]$SessionItem,[Parameter(Mandatory)]$Metadata)
+    foreach($field in @('Path','FileName','Version','BuildNumber','GitCommit','Edition','Environment','FileSize','SHA256')){
+        $expected=[string]$SessionItem.$field; $actual=[string]$Metadata.$field
+        if($field -eq 'SHA256' -or $field -eq 'GitCommit'){$expected=$expected.ToLowerInvariant();$actual=$actual.ToLowerInvariant()}
+        if($expected -cne $actual){throw "Resume 阻止：客户端 $field 与 Session 不一致。"}
+    }
+    return $true
+}
+
+function Assert-DDRECExistingDraftCompatibility {
+    param([Parameter(Mandatory)]$Existing,[Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Target)
+    $environment=if($Metadata.Edition -eq 'standard'){'production'}else{$Metadata.Environment}
+    $expected=[ordered]@{
+        product='DDREC';version=$Metadata.Version;buildNumber=[string]$Metadata.BuildNumber;gitCommit=$Metadata.GitCommit
+        edition=$Metadata.Edition;environment=$environment;architecture='x64';channel='stable';fileName=$Metadata.FileName
+        downloadPath=$Target.RelativePath;fileSize=[string]$Metadata.FileSize;sha256=$Metadata.SHA256
+    }
+    foreach($field in $expected.Keys){
+        $actual=[string]$Existing.$field; $wanted=[string]$expected[$field]
+        if($field -in @('sha256','gitCommit')){$actual=$actual.ToLowerInvariant();$wanted=$wanted.ToLowerInvariant()}
+        if($actual -cne $wanted){throw "已存在 client release 元数据冲突：$field"}
+    }
+    if($Existing.status -eq 'withdrawn'){throw '相同 Build 已 withdrawn；禁止覆盖或创建重复记录。'}
     return $true
 }
 
@@ -696,10 +851,23 @@ function Get-DDRECPublicRelease {
 function Test-DDRECRemoteClientTarget {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Target,[Parameter(Mandatory)]$Metadata)
     $path = ConvertTo-DDRECShellSingleQuote $Target.RemotePath
-    $command = "if test -f $path; then sha256sum $path | awk '{print `$1}'; fi"
-    $existing = (Invoke-DDRECSsh -Context $Context -Command $command).Output.Trim()
+    $scriptText=@'
+set -Eeuo pipefail
+path=__PATH__
+if test -e "$path"; then
+  test -f "$path" && test ! -L "$path" || exit 40
+  printf 'size=%s\nsha256=%s\n' "$(stat -c %s -- "$path")" "$(sha256sum -- "$path" | awk '{print $1}')"
+fi
+'@
+    $scriptText=$scriptText.Replace('__PATH__',$path)
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($scriptText))
+    $command="printf '%s' '$encoded' | base64 -d | bash"
+    $raw = (Invoke-DDRECSsh -Context $Context -Command $command -NoRetry).Output.Trim()
+    $values=@{};foreach($line in $raw -split "`r?`n"){if($line -match '^([^=]+)=(.*)$'){$values[$matches[1]]=$matches[2]}}
+    $existing=[string]$values['sha256']
     Assert-DDRECHashCompatibility -ExistingHash $existing -ExpectedHash $Metadata.SHA256 | Out-Null
-    return [pscustomobject]@{ Exists=[bool]$existing; SHA256=$existing }
+    if($existing -and [int64]$values['size'] -ne [int64]$Metadata.FileSize){throw "目标不可变文件已存在且大小不同：$($values['size']) != $($Metadata.FileSize)"}
+    return [pscustomobject]@{ Exists=[bool]$existing; SHA256=$existing; Size=$(if($values.ContainsKey('size')){[int64]$values['size']}else{[int64]0}) }
 }
 
 function Get-DDRECLocalMigrationPlan {
@@ -756,39 +924,133 @@ function Invoke-DDRECManifestSigning {
     return [pscustomobject]@{ ManifestPath=$manifestPath; SignaturePath=$signaturePath; Signature=$signature; Manifest=(Get-Content $manifestPath -Raw | ConvertFrom-Json) }
 }
 
-function Invoke-DDRECClientUpload {
-    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Target)
-    Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
-    $incoming = "$($Context.Config.RemoteRoot)/incoming/client/$($Context.SessionId)/$($Metadata.FileName).part"
-    $incomingDir = Split-Path $incoming -Parent
-    $mkdir = "install -d -m 750 $(ConvertTo-DDRECShellSingleQuote $incomingDir)"
-    Invoke-DDRECSsh -Context $Context -Command $mkdir | Out-Null
-    $scp = Invoke-DDRECNative scp @('-o','BatchMode=yes',$Metadata.Path,"$($Context.Config.ServerHost):$incoming") -AllowFailure -Context $Context
-    if ($scp.ExitCode -ne 0) { throw 'SCP 上传客户端安装包失败；不会创建 Draft 或 Published。' }
-    $incomingQ=ConvertTo-DDRECShellSingleQuote $incoming; $finalQ=ConvertTo-DDRECShellSingleQuote $Target.RemotePath
-    $dirQ=ConvertTo-DDRECShellSingleQuote (Split-Path $Target.RemotePath -Parent); $hashQ=ConvertTo-DDRECShellSingleQuote $Metadata.SHA256
-    $lockQ=ConvertTo-DDRECShellSingleQuote "$($Context.Config.RemoteRoot)/.deploy.lock"
+function Initialize-DDRECClientIncomingDirectory {
+    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata)
+    $paths=Get-DDRECClientIncomingPaths -Context $Context -Metadata $Metadata
+    $rootQ=ConvertTo-DDRECShellSingleQuote ([string]$Context.Config.RemoteRoot)
+    $directoryQ=ConvertTo-DDRECShellSingleQuote $paths.Directory
     $command=@"
 set -Eeuo pipefail
-exec 9>$lockQ
-flock -n 9 || { echo 'deployment lock busy' >&2; exit 21; }
-test "`$(stat -c%s $incomingQ)" -eq $($Metadata.FileSize)
-echo "$($Metadata.SHA256)  $incoming" | sha256sum -c -
-install -d -m 755 $dirQ
-if test -e $finalQ; then
-  test "`$(sha256sum $finalQ | awk '{print `$1}')" = "`$(printf '%s' $hashQ | tr A-F a-f)" || exit 22
-  rm -f $incomingQ
-else
-  staged="$(Split-Path $Target.RemotePath -Parent)/.$($Metadata.FileName).$($Context.SessionId).part"
-  install -m 0644 $incomingQ "`$staged"
-  echo "$($Metadata.SHA256)  `$staged" | sha256sum -c -
-  ln "`$staged" $finalQ
-  rm -f "`$staged" $incomingQ
-fi
-sha256sum $finalQ
+root=$rootQ
+directory=$directoryQ
+case "`$directory" in "`$root/incoming/client/"*) ;; *) echo 'unsafe client incoming path' >&2; exit 40;; esac
+test ! -L "`$root/incoming" || { echo 'incoming root must not be symlink' >&2; exit 40; }
+install -d -o root -g root -m 0750 "`$root/incoming" "`$root/incoming/client" "`$directory"
+test "`$(realpath -m "`$directory")" = "`$directory" || { echo 'client incoming path escaped root' >&2; exit 40; }
+test ! -L "`$directory" || { echo 'client incoming directory must not be symlink' >&2; exit 40; }
+chown root:root "`$directory"
+chmod 0750 "`$directory"
+printf 'directory=%s\nmode=%s\nowner=%s\n' "`$directory" "`$(stat -c %a "`$directory")" "`$(stat -c %U:%G "`$directory")"
 "@
     $result=Invoke-DDRECSsh -Context $Context -Command $command -NoRetry
-    if ($result.Output -notmatch $Metadata.SHA256.ToLowerInvariant()) { throw '服务器最终客户端 SHA256 复核失败。' }
+    if ($result.Output -notmatch '(?m)^mode=750$' -or $result.Output -notmatch '(?m)^owner=root:root$') {
+        throw '客户端 incoming 目录权限或所有者验证失败。'
+    }
+    return $paths
+}
+
+function Get-DDRECRemoteIncomingStatus {
+    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata)
+    $paths=Get-DDRECClientIncomingPaths -Context $Context -Metadata $Metadata
+    $pathQ=ConvertTo-DDRECShellSingleQuote $paths.Path
+    $nameQ=ConvertTo-DDRECShellSingleQuote $paths.FileName
+    $command=@"
+set -Eeuo pipefail
+path=$pathQ
+expected_name=$nameQ
+printf 'expectedName=%s\n' "`$expected_name"
+if test ! -e "`$path"; then printf 'exists=false\nregular=false\n'; exit 0; fi
+printf 'exists=true\n'
+if test -f "`$path" && test ! -L "`$path"; then printf 'regular=true\n'; else printf 'regular=false\n'; exit 0; fi
+printf 'actualName=%s\n' "`$(basename -- "`$path")"
+printf 'size=%s\n' "`$(stat -c %s -- "`$path")"
+printf 'sha256=%s\n' "`$(sha256sum -- "`$path" | awk '{print `$1}')"
+"@
+    $raw=(Invoke-DDRECSsh -Context $Context -Command $command -NoRetry).Output
+    $values=@{}
+    foreach($line in $raw -split "`r?`n"){if($line -match '^([^=]+)=(.*)$'){$values[$matches[1]]=$matches[2]}}
+    $status=[pscustomobject]@{
+        Exists=$values['exists'] -eq 'true'; Regular=$values['regular'] -eq 'true'; FileName=[string]$values['actualName']
+        ExpectedFileName=$paths.FileName; Size=$(if($values.ContainsKey('size')){[int64]$values['size']}else{[int64]0})
+        SHA256=([string]$values['sha256']).ToUpperInvariant(); Path=$paths.Path
+    }
+    return Test-DDRECIncomingPackageStatus -Status $status -Metadata $Metadata
+}
+
+function Test-DDRECIncomingPackageStatus {
+    param([Parameter(Mandatory)]$Status,[Parameter(Mandatory)]$Metadata)
+    $reason=if(-not $Status.Exists){'文件不存在'}elseif(-not $Status.Regular){'目标不是普通文件或是符号链接'}elseif($Status.FileName -cne "$($Metadata.FileName).part"){'文件名不一致'}elseif([int64]$Status.Size -ne [int64]$Metadata.FileSize){'文件大小不一致'}elseif(([string]$Status.SHA256).ToUpperInvariant() -cne ([string]$Metadata.SHA256).ToUpperInvariant()){'SHA256 不一致'}else{$null}
+    return [pscustomobject]@{
+        Valid=[string]::IsNullOrEmpty($reason); Reason=$reason; Exists=[bool]$Status.Exists; Regular=[bool]$Status.Regular
+        FileName=[string]$Status.FileName; ExpectedFileName="$($Metadata.FileName).part"
+        Size=[int64]$Status.Size; ExpectedSize=[int64]$Metadata.FileSize
+        SHA256=([string]$Status.SHA256).ToUpperInvariant(); ExpectedSHA256=([string]$Metadata.SHA256).ToUpperInvariant(); Path=$Status.Path
+    }
+}
+
+function Show-DDRECManualUploadPrompt {
+    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Paths,[Parameter(Mandatory)][string]$Lane)
+    $title=if($Lane -eq 'standard'){'Standard'}else{'License-Production'}
+    Write-Host ''
+    Write-Host ('='*58) -ForegroundColor Cyan
+    Write-Host "        请手动上传 $title 安装包" -ForegroundColor Cyan
+    Write-Host ('='*58) -ForegroundColor Cyan
+    Write-Host "`n本地文件：`n$($Metadata.Path)"
+    Write-Host "`n服务器：`n$($Context.Config.ServerAddress)"
+    Write-Host "`n远端目录：`n$($Paths.Directory)/"
+    Write-Host "`n远端文件名：`n$($Paths.FileName)"
+    Write-Host "`n大小：`n$($Metadata.FileSize) bytes"
+    Write-Host "`nSHA256：`n$($Metadata.SHA256)"
+    Write-Host "`n请使用 WinSCP / SFTP 上传到上述 incoming 目录；不要上传到最终下载目录。"
+    Write-Host "`n上传完成后：`n[Enter] 验证并继续`n[R] 重新检查`n[Q] 保存进度并退出"
+}
+
+function Get-DDRECManualUploadAction {
+    param([AllowEmptyString()][string]$InputText)
+    $value=if($null -eq $InputText){''}else{$InputText.Trim()}
+    if($value -match '^(?i)q$'){return 'Quit'}
+    if([string]::IsNullOrWhiteSpace($value) -or $value -match '^(?i)r$'){return 'Check'}
+    return 'Invalid'
+}
+
+function Wait-DDRECManualClientUpload {
+    param(
+        [Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)][string]$Lane,
+        [switch]$NonInteractive,[scriptblock]$InputReader
+    )
+    $paths=Initialize-DDRECClientIncomingDirectory -Context $Context -Metadata $Metadata
+    Show-DDRECManualUploadPrompt -Context $Context -Metadata $Metadata -Paths $paths -Lane $Lane
+    if($NonInteractive){return [pscustomobject]@{Action='Waiting';Status=$null;Paths=$paths}}
+    while($true){
+        $answer=if($InputReader){[string](& $InputReader)}else{[string](Read-Host '选择')}
+        $action=Get-DDRECManualUploadAction -InputText $answer
+        if($action -eq 'Quit'){return [pscustomobject]@{Action='Quit';Status=$null;Paths=$paths}}
+        if($action -eq 'Invalid'){
+            Write-Host '请输入 R 重新检查、Q 保存退出，或直接按 Enter 验证。' -ForegroundColor Yellow
+            continue
+        }
+        $status=Get-DDRECRemoteIncomingStatus -Context $Context -Metadata $Metadata
+        if($status.Valid){
+            Write-Host "上传验证 PASS：$($status.ExpectedFileName) / $($status.ExpectedSize) bytes / $($status.ExpectedSHA256)" -ForegroundColor Green
+            return [pscustomobject]@{Action='Verified';Status=$status;Paths=$paths}
+        }
+        Write-Host "上传验证未通过：$($status.Reason)" -ForegroundColor Yellow
+        Write-Host "实际：Exists=$($status.Exists) Regular=$($status.Regular) FileName=$($status.FileName) Size=$($status.Size) SHA256=$($status.SHA256)"
+        Write-Host "期望：FileName=$($status.ExpectedFileName) Size=$($status.ExpectedSize) SHA256=$($status.ExpectedSHA256)"
+        Write-Host '[R] 重新检查 / [Q] 保存进度并退出'
+    }
+}
+
+function Install-DDRECVerifiedClientPackage {
+    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Target)
+    Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
+    $executor="$(([string]$Context.Config.RemoteRoot).TrimEnd('/'))/scripts/install-client-package.sh"
+    $args=@('--session',$Context.SessionId,'--file-name',$Metadata.FileName,'--final',$Target.RemotePath,'--size',[string]$Metadata.FileSize,'--sha256',$Metadata.SHA256)
+    $quoted=$args|ForEach-Object{ConvertTo-DDRECShellSingleQuote ([string]$_)}
+    $result=Invoke-DDRECSsh -Context $Context -Command "$(ConvertTo-DDRECShellSingleQuote $executor) $($quoted -join ' ')" -NoRetry
+    if($result.Output -notmatch '(?im)^result=(installed|reused)$' -or $result.Output -notmatch "(?im)^sha256=$([regex]::Escape($Metadata.SHA256))$"){
+        throw '服务器客户端原子安装结果或最终 SHA256 复核失败。'
+    }
     $Context.ProductionModified=$true
     $Context.ClientUploaded=$true
     return $result
@@ -834,8 +1096,7 @@ function New-DDRECClientDraft {
         $_.edition -eq $Metadata.Edition -and $_.environment -eq $environment -and $_.channel -eq 'stable'
     })|Select-Object -First 1
     if($existing){
-        if(([string]$existing.sha256).ToUpperInvariant() -cne $Metadata.SHA256){throw '已存在 client release 的 SHA256 与本地安装包不同。'}
-        if($existing.status -eq 'withdrawn'){throw '相同 Build 已 withdrawn；禁止覆盖或创建重复记录。'}
+        Assert-DDRECExistingDraftCompatibility -Existing $existing -Metadata $Metadata -Target $Target | Out-Null
         if($existing.status -eq 'draft'){$Context.Drafts.Add($existing)}else{$Context.Published.Add($existing)}
         return $existing
     }
