@@ -3,7 +3,6 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -19,27 +18,18 @@ from app.utils.runtime_paths import resource_path
 from scripts.check_production_license_config import validate
 
 
-def test_environment_selects_separate_production_public_keys(monkeypatch):
-    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "production")
-    assert trusted_public_keys_resource().endswith("public_keys.production.json")
-    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "staging")
-    assert trusted_public_keys_resource().endswith("public_keys.staging.json")
+def test_license_configuration_is_always_production(monkeypatch):
     monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "development")
-    assert trusted_public_keys_resource().endswith("public_keys.json")
+    monkeypatch.setenv("DDREC_LICENSE_API_BASE_URL", "http://127.0.0.1:8000/api/v1")
+    assert license_api_base_url() == PRODUCTION_LICENSE_API_BASE_URL
+    assert license_environment() == "production"
+    assert trusted_public_keys_resource().endswith("public_keys.production.json")
 
 
-def test_unknown_environment_does_not_reuse_another_trust_store(monkeypatch):
-    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "test")
-    with pytest.raises(ValueError, match="Unsupported license environment"):
-        trusted_public_keys_resource()
-
-
-def test_staging_and_production_trust_stores_are_isolated():
+def test_retired_nonproduction_trust_stores_are_absent():
     root = Path(__file__).parents[2] / "app" / "assets" / "license"
-    staging = (root / "public_keys.staging.json").read_text(encoding="utf-8")
-    production = (root / "public_keys.production.json").read_text(encoding="utf-8")
-    assert "staging-local-1" in staging
-    assert "staging-local-1" not in production
+    assert not (root / "public_keys.json").exists()
+    assert not (root / "public_keys.staging.json").exists()
 
 
 def test_client_license_resources_do_not_contain_private_keys():

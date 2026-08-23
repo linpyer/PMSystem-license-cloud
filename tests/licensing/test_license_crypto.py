@@ -145,23 +145,8 @@ def test_trusted_public_key_file_rejects_padded_or_standard_base64(tmp_path):
             TrustedPublicKeys.from_json_file(path, expected_environment="staging")
 
 
-def test_current_staging_key_loads_expected_public_key():
-    keys_path = (
-        Path(__file__).parents[2]
-        / "app"
-        / "assets"
-        / "license"
-        / "public_keys.staging.json"
-    )
-    keys = TrustedPublicKeys.from_json_file(keys_path, expected_environment="staging")
-    public_key = keys.get("staging-local-1")
-    assert keys.key_ids == ("staging-local-1",)
-    assert public_key is not None and len(public_key) == 32
-    Ed25519PublicKey.from_public_bytes(public_key)
-
-
-def test_wrong_public_key_rejects_staging_probe(private_key):
-    payload = b'{"probe":"DDREC-staging-client-trust-v1"}'
+def test_wrong_public_key_rejects_trust_probe(private_key):
+    payload = b'{"probe":"DDREC-client-trust-v1"}'
     signature = Ed25519PrivateKey.generate().sign(payload)
     with pytest.raises(InvalidSignature):
         private_key.public_key().verify(signature, payload)

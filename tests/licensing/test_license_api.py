@@ -42,11 +42,7 @@ def test_insecure_http_requires_explicit_development_opt_in():
         LicenseApiClient(BASE_URL, allow_insecure_http=False)
 
 
-def test_loopback_http_is_allowed_by_default_only_in_development(monkeypatch):
-    monkeypatch.delenv("DDREC_LICENSE_ALLOW_INSECURE_HTTP", raising=False)
-    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "development")
-    assert LicenseApiClient(BASE_URL).base_url == BASE_URL
-    monkeypatch.setenv("DDREC_LICENSE_ENVIRONMENT", "production")
+def test_loopback_http_requires_explicit_mock_opt_in():
     with pytest.raises(LicenseApiError):
         LicenseApiClient(BASE_URL)
 

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import os
+from enum import StrEnum
 
 from app.core.product_info import PRODUCT_TECH_NAME
-import sys
-from enum import StrEnum
 
 
 FINGERPRINT_VERSION = "win-v1"
@@ -69,26 +67,12 @@ READ_ONLY_CAPABILITIES = {
 
 
 def license_api_base_url() -> str:
-    if getattr(sys, "frozen", False):
-        return PRODUCTION_LICENSE_API_BASE_URL
-    return os.getenv("DDREC_LICENSE_API_BASE_URL", "http://127.0.0.1:8000/api/v1").rstrip("/")
+    return PRODUCTION_LICENSE_API_BASE_URL
 
 
 def license_environment() -> str:
-    if getattr(sys, "frozen", False):
-        return PRODUCTION_LICENSE_ENVIRONMENT
-    return os.getenv("DDREC_LICENSE_ENVIRONMENT", "development").strip().lower()
+    return PRODUCTION_LICENSE_ENVIRONMENT
 
 
 def trusted_public_keys_resource() -> str:
-    environment = license_environment()
-    filenames = {
-        "development": "public_keys.json",
-        "staging": "public_keys.staging.json",
-        "production": "public_keys.production.json",
-    }
-    try:
-        filename = filenames[environment]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported license environment: {environment}") from exc
-    return f"app/assets/license/{filename}"
+    return "app/assets/license/public_keys.production.json"

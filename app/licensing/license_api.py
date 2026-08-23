@@ -7,7 +7,6 @@ import sys
 import time
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse
 from uuid import uuid4
 
 import requests
@@ -57,17 +56,7 @@ class LicenseApiClient:
         if self.is_frozen_production_client:
             allow_insecure_http = False
         elif allow_insecure_http is None:
-            configured = os.getenv("DDREC_LICENSE_ALLOW_INSECURE_HTTP")
-            if configured is not None:
-                allow_insecure_http = configured.lower() in {"1", "true", "yes", "on"}
-            else:
-                environment = os.getenv("DDREC_LICENSE_ENVIRONMENT", "development").lower()
-                host = (urlparse(self.base_url).hostname or "").lower()
-                allow_insecure_http = environment in {"development", "test"} and host in {
-                    "127.0.0.1",
-                    "localhost",
-                    "::1",
-                }
+            allow_insecure_http = False
         if self.base_url.startswith("http://") and not allow_insecure_http:
             raise LicenseApiError(
                 "INVALID_REQUEST", "Insecure license API HTTP is disabled for this environment"
