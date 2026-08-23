@@ -108,13 +108,30 @@ log 'nginxConfig=ddrec-license.conf policy=bootstrap-template excludedFromProduc
 ${nginx_changed} && die "${EXIT_DEPLOY}" 'Nginx semantic configuration changed; separate explicit audited deployment is required'
 
 postgres_container="$(compose_at "${current}" "${ENV_FILE}" ps -q postgres)"
-current_postgres_image="$(docker inspect --format '{{.Config.Image}}' "${postgres_container}")"
+current_postgres_image_raw="$(docker inspect --format '{{.Config.Image}}' "${postgres_container}")"
+current_postgres_image_id="$(docker inspect --format '{{.Image}}' "${postgres_container}")"
+current_postgres_repo_digests="$(docker image inspect --format '{{json .RepoDigests}}' "${current_postgres_image_id}")"
 api_container="$(compose_at "${current}" "${ENV_FILE}" ps -q license-api)"
 current_api_image="$(docker inspect --format '{{.Config.Image}}' "${api_container}")"
 [[ -n "${current_api_image}" ]] || die "${EXIT_DEPLOY}" 'could not determine current API image'
-release_postgres_image="$(awk '/^[[:space:]]*postgres:/{s=1} s && /^[[:space:]]*image:/{gsub(/^[[:space:]]*image:[[:space:]]*/,""); print; exit}' "${final}/compose.yml")"
-[[ "${release_postgres_image}" == "${current_postgres_image}" ]] \
-  || die "${EXIT_DEPLOY}" "PostgreSQL image change prohibited: ${current_postgres_image} -> ${release_postgres_image}"
+release_postgres_image_raw="$(awk '/^[[:space:]]*postgres:/{s=1} s && /^[[:space:]]*image:/{gsub(/^[[:space:]]*image:[[:space:]]*/,""); print; exit}' "${final}/compose.yml")"
+printf -v current_postgres_image_q '%q' "${current_postgres_image_raw}"
+printf -v release_postgres_image_q '%q' "${release_postgres_image_raw}"
+log "PostgreSQLCurrentShellEscaped=${current_postgres_image_q} TargetShellEscaped=${release_postgres_image_q}"
+set +e
+postgres_guard_output="$(python3 "${SCRIPT_DIR}/verify-postgres-image.py" \
+  --current "${current_postgres_image_raw}" \
+  --target "${release_postgres_image_raw}" \
+  --current-image-id "${current_postgres_image_id}" \
+  --current-repo-digests "${current_postgres_repo_digests}" 2>&1)"
+postgres_guard_code=$?
+set -e
+[[ -n "${postgres_guard_output}" ]] && printf '%s\n' "${postgres_guard_output}" | tee -a "${SERVER_LOG}"
+if (( postgres_guard_code == EXIT_DEPLOY )); then
+  die "${EXIT_DEPLOY}" 'PostgreSQL image change prohibited; use the separate database maintenance workflow'
+elif (( postgres_guard_code != 0 )); then
+  die "${EXIT_DEPLOY}" 'Unable to verify PostgreSQL image identity'
+fi
 
 backup="${DDREC_ROOT}/backups/release-${SESSION_ID}"
 counts_before="${backup}/counts-before.txt"
@@ -217,6 +234,11 @@ admin_replaced=true
 compose_at "${final}" "${ENV_FILE}" up -d --no-deps --pull never license-api
 container_recreated=true
 wait_healthy "${final}" "${ENV_FILE}" license-api 120
+postgres_container_after="$(compose_at "${final}" "${ENV_FILE}" ps -q postgres)"
+postgres_image_id_after="$(docker inspect --format '{{.Image}}' "${postgres_container_after}")"
+[[ "${postgres_container_after}" == "${postgres_container}" && "${postgres_image_id_after}" == "${current_postgres_image_id}" ]] \
+  || die "${EXIT_DEPLOY}" 'PostgreSQL container or Image ID changed unexpectedly during application release'
+log "PostgreSQLIdentity=unchanged Container=${postgres_container_after} ImageId=${postgres_image_id_after}"
 
 log 'Nginx is outside the application release transaction; configuration write and reload skipped'
 
