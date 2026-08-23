@@ -120,10 +120,11 @@ function Select-Installer {
 }
 
 function Show-ProductionStatus {
-    param($RemoteState)
+    param($RemoteState,$CloudState)
     Write-Header '当前生产状态（只读）'
     [pscustomobject]@{
-        CurrentRelease=$RemoteState.Current;ApiVersion=$RemoteState.Version;ApiCommit=$RemoteState.BuildCommit
+        SSH='OK';CurrentRelease=$RemoteState.Current;ApiVersion=$RemoteState.Version;ApiCommit=$RemoteState.BuildCommit
+        CloudLocalHead=$CloudState.Head
         ApiStatus=$RemoteState.ApiStatus;Database=$RemoteState.Database;DockerApi=$RemoteState.ApiContainer
         PostgreSQL=$RemoteState.PostgresContainer;AdminHttp=$RemoteState.AdminHttp;DownloadRoot=$RemoteState.DownloadRoot
         DownloadDomainRootHttp=$RemoteState.DownloadHttp;DiskAvailableGB=[math]::Round($RemoteState.DiskAvailable/1GB,2)
@@ -184,7 +185,7 @@ try {
     if($Mode -eq 'Menu'){$Mode=Select-MenuMode -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState}
     if($Mode -eq 'Exit'){exit $exitCodes.Success}
     if($Mode -eq 'Status'){
-        Show-ProductionStatus -RemoteState $remoteState
+        Show-ProductionStatus -RemoteState $remoteState -CloudState $cloudState
         Add-DDRECStage -Context $context -Stage 'Production Status（只读）'
         exit $exitCodes.Success
     }
