@@ -1,0 +1,20 @@
+{
+  "Product": "DDREC",
+  "RequiredBranch": "v1.3",
+  "ServerHost": "pmsystem-prod",
+  "ServerAddress": "47.98.206.68",
+  "SshUser": "root",
+  "ApiBaseUrl": "https://license.aixcc.top/api/v1",
+  "AdminUrl": "https://license.aixcc.top/admin/",
+  "DownloadBaseUrl": "https://download.aixcc.top",
+  "RemoteRoot": "/opt/pmsystem-license",
+  "DownloadRoot": "/var/www/ddrec-downloads",
+  "AdminRoot": "/var/www/pmsystem-license/admin",
+  "RemoteExecutor": "/opt/pmsystem-license/scripts/deploy-release.sh",
+  "UpdatePrivateKey": "%USERPROFILE%\\.ddrec\\keys\\DDREC-update-ed25519-private.pem",
+  "UpdatePublicKey": "client\\app\\assets\\update\\update_ed25519_public.pem",
+  "MinimumFreeBytes": 5368709120,
+  "SshAttempts": 3,
+  "SshRetrySeconds": 5,
+  "HttpTimeoutSeconds": 20
+}
