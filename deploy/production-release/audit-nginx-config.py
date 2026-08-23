@@ -5,13 +5,12 @@ Comments, whitespace and line endings are ignored. Directive and block token
 order is preserved because Nginx directive order can be significant.
 """
 
-from __future__ import annotations
-
 import argparse
 import difflib
 import re
 import sys
 from pathlib import Path
+from typing import List, Optional
 
 
 EXIT_PREFLIGHT = 10
@@ -19,10 +18,10 @@ EXIT_CHANGED = 40
 UNRESOLVED_TEMPLATE = re.compile(r"\$\{[^}]+}|\{\{[^}]+}}|@[A-Z][A-Z0-9_]*@")
 
 
-def tokenize(text: str) -> list[str]:
-    tokens: list[str] = []
-    token: list[str] = []
-    quote: str | None = None
+def tokenize(text: str) -> List[str]:
+    tokens = []  # type: List[str]
+    token = []  # type: List[str]
+    quote = None  # type: Optional[str]
     escaped = False
     index = 0
 
@@ -66,9 +65,9 @@ def tokenize(text: str) -> list[str]:
     return tokens
 
 
-def token_lines(tokens: list[str]) -> list[str]:
-    lines: list[str] = []
-    directive: list[str] = []
+def token_lines(tokens: List[str]) -> List[str]:
+    lines = []  # type: List[str]
+    directive = []  # type: List[str]
     depth = 0
     for token in tokens:
         if token == "{":

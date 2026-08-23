@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """Verify that an existing immutable release equals a verified extraction."""
 
-from __future__ import annotations
-
 import argparse
 import hashlib
 import sys
 from pathlib import Path
+from typing import Dict
 
 
 MARKER = ".DDREC-ARCHIVE-SHA256"
 
 
-def file_map(root: Path) -> dict[str, Path]:
+def file_map(root: Path) -> Dict[str, Path]:
     return {
         path.relative_to(root).as_posix(): path
         for path in root.rglob("*")
