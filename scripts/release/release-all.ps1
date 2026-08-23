@@ -262,7 +262,6 @@ try {
     if($plan.Cloud){
         $stage='Cloud 备份/部署/Migration/Admin/Health'
         Invoke-DDRECCloudDeploy -Context $context -Package $package -CloudCommit $cloudState.Head -ApproveMigration $approveMigration|Out-Null
-        $context.MigrationExecuted=$approveMigration
         $postCloud=Get-DDRECRemoteState -Context $context
         Assert-DDRECHealthSnapshot -Snapshot ([pscustomobject]@{ApiStatus=$postCloud.ApiStatus;Database=$postCloud.Database;AdminHttp=$postCloud.AdminHttp;ApiContainerHealthy=$postCloud.ApiContainer -eq 'healthy';PostgresHealthy=$postCloud.PostgresContainer -eq 'healthy';BuildCommit=$postCloud.BuildCommit}) -ExpectedCommit $cloudState.Head|Out-Null
         Assert-DDRECCoreCounts -Before $remoteState.Counts -After $postCloud.Counts|Out-Null

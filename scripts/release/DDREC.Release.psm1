@@ -51,6 +51,18 @@ function New-DDRECReleaseContext {
         MigrationExecuted = $false
         RollbackAttempted = $false
         RollbackHealthy = $false
+        PreparedProductionArtifacts = $false
+        ProductionApplicationModified = $false
+        DatabaseModified = $false
+        CurrentSwitched = $false
+        Uploaded = $false
+        BackupCreated = $false
+        ReleaseInstalled = $false
+        ContainerRecreated = $false
+        AdminReplaced = $false
+        ClientUploaded = $false
+        DraftCreated = $false
+        PublishedCreated = $false
         Drafts = [Collections.Generic.List[object]]::new()
         Published = [Collections.Generic.List[object]]::new()
     }
@@ -497,8 +509,18 @@ function Get-DDRECMigrationSafety {
     param([string[]]$MigrationTexts)
     $destructive = [Collections.Generic.List[string]]::new()
     foreach ($text in $MigrationTexts) {
-        foreach ($pattern in @('op\.drop_table\s*\(','op\.drop_column\s*\(','DROP\s+TABLE','DROP\s+COLUMN','TRUNCATE\s+','DELETE\s+FROM')) {
-            if ($text -match $pattern) { $destructive.Add($pattern) }
+        $upgradeMatch = [regex]::Match($text, '(?ms)^def\s+upgrade\s*\([^)]*\)\s*:\s*(?<body>.*?)(?=^def\s+downgrade\s*\(|\z)')
+        if (-not $upgradeMatch.Success) {
+            $destructive.Add('MISSING_UPGRADE')
+            continue
+        }
+        $upgradeText = $upgradeMatch.Groups['body'].Value
+        foreach ($pattern in @(
+            'op\.drop_table\s*\(','op\.drop_column\s*\(','op\.drop_constraint\s*\(',
+            'op\.alter_column\s*\(','op\.rename_table\s*\(',
+            'DROP\s+TABLE','DROP\s+COLUMN','TRUNCATE\s+','DELETE\s+FROM','ALTER\s+TABLE'
+        )) {
+            if ($upgradeText -match $pattern) { $destructive.Add($pattern) }
         }
     }
     return [pscustomobject]@{ Destructive=($destructive.Count -gt 0); Matches=@($destructive) }
@@ -555,24 +577,50 @@ function Get-DDRECIdempotencyAction {
     return 'create'
 }
 
+function Get-DDRECSshResultKind {
+    param([Parameter(Mandatory)][int]$ExitCode)
+    if ($ExitCode -eq 0) { return 'Success' }
+    if ($ExitCode -eq 255) { return 'TransportFailure' }
+    return 'RemoteCommandFailure'
+}
+
+function New-DDRECRemoteCommandException {
+    param([Parameter(Mandatory)][int]$ExitCode,[AllowEmptyString()][string]$Output)
+    $remoteError = if ([string]::IsNullOrWhiteSpace($Output)) {'<no remote output>'} else {$Output.Trim()}
+    $exception = [InvalidOperationException]::new("远端发布执行器失败`nRemoteExitCode=$ExitCode`nRemoteError=$remoteError")
+    $exception.Data['RemoteExitCode'] = $ExitCode
+    $exception.Data['RemoteOutput'] = $Output
+    return $exception
+}
+
 function Invoke-DDRECSsh {
     param(
         [Parameter(Mandatory)]$Context,
         [Parameter(Mandatory)][string]$Command,
         [switch]$AllowFailure,
-        [switch]$NoRetry
+        [switch]$NoRetry,
+        [scriptblock]$NativeInvoker
     )
     $attempts = if ($NoRetry) {1} else {[int]$Context.Config.SshAttempts}
     for ($attempt=1; $attempt -le $attempts; $attempt++) {
-        $result = Invoke-DDRECNative ssh @('-o','BatchMode=yes','-o','ConnectTimeout=10',[string]$Context.Config.ServerHost,$Command) -AllowFailure -Context $Context
-        if ($result.ExitCode -eq 0) { return $result }
+        $result = if ($NativeInvoker) {
+            & $NativeInvoker $attempt
+        } else {
+            Invoke-DDRECNative ssh @('-o','BatchMode=yes','-o','ConnectTimeout=10',[string]$Context.Config.ServerHost,$Command) -AllowFailure -Context $Context
+        }
+        $kind = Get-DDRECSshResultKind -ExitCode ([int]$result.ExitCode)
+        if ($kind -eq 'Success') { return $result }
+        if ($kind -eq 'RemoteCommandFailure') {
+            if ($AllowFailure) { return $result }
+            throw (New-DDRECRemoteCommandException -ExitCode ([int]$result.ExitCode) -Output ([string]$result.Output))
+        }
         if ($attempt -lt $attempts) {
-            Write-DDRECLog -Context $Context -Level WARN -Message "SSH 第 $attempt 次失败，$($Context.Config.SshRetrySeconds) 秒后重试。"
+            Write-DDRECLog -Context $Context -Level WARN -Message "SSH transport 第 $attempt 次失败，$($Context.Config.SshRetrySeconds) 秒后重试。"
             Start-Sleep -Seconds ([int]$Context.Config.SshRetrySeconds)
         }
     }
     if ($AllowFailure) { return $result }
-    throw "SSH 连续 $attempts 次失败。"
+    throw "SSH transport failure：连续 $attempts 次连接失败。"
 }
 
 function ConvertTo-DDRECShellSingleQuote {
@@ -742,6 +790,7 @@ sha256sum $finalQ
     $result=Invoke-DDRECSsh -Context $Context -Command $command -NoRetry
     if ($result.Output -notmatch $Metadata.SHA256.ToLowerInvariant()) { throw '服务器最终客户端 SHA256 复核失败。' }
     $Context.ProductionModified=$true
+    $Context.ClientUploaded=$true
     return $result
 }
 
@@ -799,6 +848,7 @@ function New-DDRECClientDraft {
     }
     $result=Invoke-RestMethod -Uri "$($Context.Config.ApiBaseUrl)/admin/client-releases" -Method Post -WebSession $Auth.Session -Headers $Auth.Headers -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 5 -Compress)
     $Context.Drafts.Add($result.release)
+    $Context.DraftCreated=$true
     return $result.release
 }
 
@@ -806,6 +856,7 @@ function Publish-DDRECClientDraft {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Auth,[Parameter(Mandatory)]$Draft)
     $result=Invoke-RestMethod -Uri "$($Context.Config.ApiBaseUrl)/admin/client-releases/$($Draft.id)/publish" -Method Post -WebSession $Auth.Session -Headers $Auth.Headers -ContentType 'application/json'
     $Context.Published.Add($result.release)
+    $Context.PublishedCreated=$true
     return $result.release
 }
 
@@ -823,6 +874,22 @@ function Invoke-DDRECCloudBuild {
     return Get-DDRECCloudPackageMetadata -CloudRoot $Context.CloudRoot -ExpectedCommit $ExpectedCommit -ExpectedVersion $ExpectedVersion -ExpectedBranch $Context.Config.RequiredBranch
 }
 
+function Update-DDRECDeploymentState {
+    param([Parameter(Mandatory)]$Context,[AllowEmptyString()][string]$Output)
+    $stateLine = @($Output -split "`r?`n" | Where-Object { $_ -match 'DDREC_STATE\s+' } | Select-Object -Last 1)
+    if ($stateLine.Count -gt 0) {
+        foreach ($name in @('Uploaded','BackupCreated','ReleaseInstalled','ContainerRecreated','CurrentSwitched','DatabaseModified','MigrationExecuted','AdminReplaced','RollbackAttempted','RollbackHealthy')) {
+            if ($stateLine[0] -match "(?:^|\s)$name=(true|false)(?:\s|$)") {
+                $Context.$name = $matches[1] -eq 'true'
+            }
+        }
+    }
+    $Context.PreparedProductionArtifacts = $Context.Uploaded -or $Context.BackupCreated -or $Context.ReleaseInstalled
+    $Context.ProductionApplicationModified = $Context.ContainerRecreated -or $Context.CurrentSwitched -or $Context.AdminReplaced
+    $Context.ProductionModified = $Context.PreparedProductionArtifacts -or $Context.ProductionApplicationModified -or $Context.DatabaseModified -or $Context.ClientUploaded -or $Context.DraftCreated -or $Context.PublishedCreated
+    return $Context
+}
+
 function Invoke-DDRECCloudDeploy {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Package,[Parameter(Mandatory)][string]$CloudCommit,[bool]$ApproveMigration=$false)
     Assert-DDRECCloudPackageMetadata -Metadata $Package | Out-Null
@@ -830,19 +897,36 @@ function Invoke-DDRECCloudDeploy {
     Invoke-DDRECSsh -Context $Context -Command "install -d -m 750 $(ConvertTo-DDRECShellSingleQuote "$($Context.Config.RemoteRoot)/incoming")" | Out-Null
     $scp=Invoke-DDRECNative scp @('-o','BatchMode=yes',$Package.Path,"$($Context.Config.ServerHost):$incoming") -AllowFailure -Context $Context
     if($scp.ExitCode -ne 0){throw 'Cloud 发布包上传失败。'}
+    $Context.Uploaded=$true
+    $Context.PreparedProductionArtifacts=$true
+    $Context.ProductionModified=$true
     $args=@('--session', $Context.SessionId,'--archive',$incoming,'--sha256',$Package.SHA256,'--commit',$CloudCommit)
     if($ApproveMigration){$args+='--approve-migration'}
     $quoted=$args|ForEach-Object{ConvertTo-DDRECShellSingleQuote ([string]$_)}
     $command="$(ConvertTo-DDRECShellSingleQuote ([string]$Context.Config.RemoteExecutor)) $($quoted -join ' ')"
-    try { $result=Invoke-DDRECSsh -Context $Context -Command $command -NoRetry; $Context.ProductionModified=$true; return $result }
-    catch { $Context.ProductionModified=$true; throw }
+    try {
+        $result=Invoke-DDRECSsh -Context $Context -Command $command -NoRetry
+        Update-DDRECDeploymentState -Context $Context -Output $result.Output | Out-Null
+        return $result
+    }
+    catch {
+        $remoteOutput = [string]$_.Exception.Data['RemoteOutput']
+        Update-DDRECDeploymentState -Context $Context -Output $remoteOutput | Out-Null
+        throw
+    }
 }
 
 function Get-DDRECFailureReport {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)][string]$Stage,[Parameter(Mandatory)]$ErrorRecord)
     return [pscustomobject]@{
         FailedStage=$Stage; FailedCommand=$ErrorRecord.Exception.Message; CompletedStages=@($Context.CompletedStages)
-        ProductionModified=$Context.ProductionModified; MigrationExecuted=$Context.MigrationExecuted
+        ProductionModified=$Context.ProductionModified
+        PreparedProductionArtifacts=$Context.PreparedProductionArtifacts
+        ProductionApplicationModified=$Context.ProductionApplicationModified
+        Uploaded=$Context.Uploaded; BackupCreated=$Context.BackupCreated; ReleaseInstalled=$Context.ReleaseInstalled
+        ContainerRecreated=$Context.ContainerRecreated; CurrentSwitched=$Context.CurrentSwitched
+        DatabaseModified=$Context.DatabaseModified; MigrationExecuted=$Context.MigrationExecuted; AdminReplaced=$Context.AdminReplaced
+        ClientUploaded=$Context.ClientUploaded; DraftCreated=$Context.DraftCreated; PublishedCreated=$Context.PublishedCreated
         RollbackAttempted=$Context.RollbackAttempted; RollbackHealthy=$Context.RollbackHealthy
         Drafts=@($Context.Drafts); Published=@($Context.Published); LogPath=$Context.LogPath
     }

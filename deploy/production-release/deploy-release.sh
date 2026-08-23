@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common-release.sh"
 require_root
 assert_root
-for cmd in flock docker nginx curl sha256sum tar install rsync sed awk grep; do require_command "${cmd}"; done
+for cmd in flock docker nginx curl sha256sum tar install rsync sed awk grep python3; do require_command "${cmd}"; done
 
 SESSION_ID='' archive='' archive_sha='' expected_commit='' approve_migration=false allow_nginx_change=false
 while (($#)); do
@@ -27,10 +27,33 @@ exec 9>"${DEPLOY_LOCK}"
 flock -n 9 || die "${EXIT_DEPLOY}" 'another production release is running'
 log "session=${SESSION_ID}"
 load_environment
+export SERVER_LOG
 
 staging="${DDREC_ROOT}/release/.staging-${SESSION_ID}"
-cleanup_staging() { [[ -d "${staging}" ]] && rm -rf -- "${staging}" || true; }
-trap cleanup_staging EXIT
+new_env=''
+uploaded=true
+backup_created=false
+release_installed=false
+container_recreated=false
+current_switched=false
+database_modified=false
+admin_replaced=false
+rollback_attempted=false
+rollback_healthy=false
+report_state() {
+  log "DDREC_STATE Uploaded=${uploaded} BackupCreated=${backup_created} ReleaseInstalled=${release_installed} ContainerRecreated=${container_recreated} CurrentSwitched=${current_switched} DatabaseModified=${database_modified} MigrationExecuted=${migration_executed:-false} AdminReplaced=${admin_replaced} RollbackAttempted=${rollback_attempted} RollbackHealthy=${rollback_healthy}"
+}
+cleanup_ephemeral() {
+  [[ -n "${staging}" && -d "${staging}" ]] && rm -rf -- "${staging}" || true
+  if [[ -n "${new_env}" && -f "${new_env}" && "${current_switched}" == false ]]; then rm -f -- "${new_env}"; fi
+}
+on_exit() {
+  code=$?
+  cleanup_ephemeral
+  report_state
+  exit "${code}"
+}
+trap on_exit EXIT
 bash "${SCRIPT_DIR}/verify-release.sh" "${archive}" "${archive_sha}" "${expected_commit}" "${staging}"
 version="$(tr -d '\r\n' <"${staging}/RELEASE-VERSION.txt")"
 release_id="${version}-${expected_commit:0:7}"
@@ -44,8 +67,9 @@ elif [[ -e "${final}" ]]; then
   die "${EXIT_DEPLOY}" 'immutable release path exists and is not a directory'
 else
   mv "${staging}" "${final}"
+  release_installed=true
 fi
-trap - EXIT
+staging=''
 
 current="$(readlink -f "${CURRENT_LINK}")"
 if [[ "${current}" == "${final}" ]] && curl -fsS https://license.aixcc.top/api/v1/health | grep -Fq "\"buildCommit\":\"${expected_commit}\""; then
@@ -67,7 +91,6 @@ release_postgres_image="$(awk '/^[[:space:]]*postgres:/{s=1} s && /^[[:space:]]*
 [[ "${release_postgres_image}" == "${current_postgres_image}" ]] \
   || die "${EXIT_DEPLOY}" "PostgreSQL image change prohibited: ${current_postgres_image} -> ${release_postgres_image}"
 
-bash "${SCRIPT_DIR}/backup-production.sh" "${SESSION_ID}"
 backup="${DDREC_ROOT}/backups/release-${SESSION_ID}"
 counts_before="${backup}/counts-before.txt"
 switch_started=false
@@ -80,7 +103,8 @@ rollback_on_error() {
       log "backup retained at ${backup}; manual compatibility and recovery audit required"
     elif ${switch_started}; then
       log 'deployment failed without Migration; attempting automatic application rollback'
-      if bash "${SCRIPT_DIR}/rollback-release.sh" "${SESSION_ID}" "${backup}"; then log 'production restored and healthy'; else log 'automatic rollback failed; manual recovery required'; fi
+      rollback_attempted=true
+      if bash "${SCRIPT_DIR}/rollback-release.sh" "${SESSION_ID}" "${backup}"; then rollback_healthy=true; log 'production restored and healthy'; else log 'automatic rollback failed; manual recovery required'; fi
     fi
   fi
   exit "${code}"
@@ -116,12 +140,34 @@ compose_at "${final}" "${new_env}" config --quiet
 db_current="$(compose_at "${final}" "${new_env}" run --rm --no-deps license-api alembic current 2>/dev/null | sed -n 's/ .*//p' | tail -1)"
 db_head="$(compose_at "${final}" "${new_env}" run --rm --no-deps license-api alembic heads 2>/dev/null | sed -n 's/ .*//p' | tail -1)"
 [[ -n "${db_current}" && -n "${db_head}" ]] || die "${EXIT_MIGRATION}" 'could not read Alembic revisions'
+pending_migration=false
 if [[ "${db_current}" != "${db_head}" ]]; then
   log "pendingMigration=${db_current}->${db_head}"
+  audit_output=''
+  set +e
+  audit_output="$(python3 "${SCRIPT_DIR}/audit-pending-migrations.py" \
+    --versions "${final}/api-source/alembic/versions" --current "${db_current}" --head "${db_head}" 2>&1)"
+  audit_code=$?
+  set -e
+  [[ -n "${audit_output}" ]] && printf '%s\n' "${audit_output}" | tee -a "${SERVER_LOG}"
+  if (( audit_code == EXIT_MIGRATION )); then
+    die "${EXIT_MIGRATION}" 'pending migration contains destructive operations; manual audit required'
+  elif (( audit_code != 0 )); then
+    die "${EXIT_PREFLIGHT}" "pending migration audit failed with exit ${audit_code}"
+  fi
   ${approve_migration} || die "${EXIT_MIGRATION}" 'pending Migration requires explicit approval'
+  pending_migration=true
+else
+  log "pendingMigration=0 current=${db_current} head=${db_head}; destructive audit skipped"
+fi
+
+bash "${SCRIPT_DIR}/backup-production.sh" "${SESSION_ID}"
+backup_created=true
+if ${pending_migration}; then
   compose_at "${final}" "${new_env}" run --rm --no-deps license-api alembic upgrade head
   touch "${backup}/migration-executed"
   migration_executed=true
+  database_modified=true
 fi
 
 admin_parent="$(dirname "${DDREC_ADMIN_ROOT}")"
@@ -134,13 +180,17 @@ require_file "${admin_stage}/index.html"
 previous="${current}"
 switch_started=true
 mv -f "${new_env}" "${ENV_FILE}"
+new_env=''
 ln -sfn "${final}" "${CURRENT_LINK}.new-${SESSION_ID}"
 mv -Tf "${CURRENT_LINK}.new-${SESSION_ID}" "${CURRENT_LINK}"
+current_switched=true
 admin_failed="${admin_parent}/.admin-previous-${SESSION_ID}"
 mv "${DDREC_ADMIN_ROOT}" "${admin_failed}"
 mv "${admin_stage}" "${DDREC_ADMIN_ROOT}"
+admin_replaced=true
 
 compose_at "${final}" "${ENV_FILE}" up -d --no-deps --pull never license-api
+container_recreated=true
 wait_healthy "${final}" "${ENV_FILE}" license-api 120
 
 if [[ -f "${release_nginx}" ]] && ! cmp -s "${release_nginx}" "${DDREC_LICENSE_NGINX_CONF}"; then

@@ -29,8 +29,4 @@ commit="$(tr -d '\r\n' <"${staging}/RELEASE-GIT-COMMIT.txt")"
 version="$(tr -d '\r\n' <"${staging}/RELEASE-VERSION.txt")"
 [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "${EXIT_DEPLOY}" 'invalid release version'
 while IFS= read -r shell_file; do bash -n "${shell_file}"; done < <(find "${staging}/scripts" -type f -name '*.sh' -print)
-if grep -RniE 'op\.drop_(table|column)[[:space:]]*\(|DROP[[:space:]]+(TABLE|COLUMN)|TRUNCATE[[:space:]]+|DELETE[[:space:]]+FROM' \
-  "${staging}/api-source/alembic/versions" >"${staging}/DESTRUCTIVE-MIGRATIONS.txt" 2>/dev/null; then
-  die "${EXIT_MIGRATION}" 'destructive migration pattern found; manual audit required'
-fi
 printf 'version=%s\ncommit=%s\nstaging=%s\n' "${version}" "${commit}" "${staging}"
