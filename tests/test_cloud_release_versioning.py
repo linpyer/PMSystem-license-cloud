@@ -44,3 +44,15 @@ def test_admin_build_receives_the_canonical_version() -> None:
     ).read_text(encoding="utf-8")
     assert "$env:VITE_APP_VERSION = $script:releaseVersion" in build
     assert 'data-testid="app-version">V{{ appVersion }}' in layout
+
+
+def test_cloud_builder_exposes_production_only() -> None:
+    build = (ROOT / "scripts" / "build_cloud_release.ps1").read_text(encoding="utf-8-sig")
+    menu = (ROOT / "scripts" / "build_cloud_menu.ps1").read_text(encoding="utf-8-sig")
+    config = (ROOT / "scripts" / "cloud_release_config.psd1").read_text(encoding="utf-8-sig")
+    assert "[ValidateSet('production')]" in build
+    assert "License-Production" in menu
+    assert "本地环境" not in menu
+    assert "local = @{" not in config
+    assert not (ROOT / "license-server" / "docker-compose.yml").exists()
+    assert not (ROOT / "deploy" / "staging" / "compose.yml").exists()

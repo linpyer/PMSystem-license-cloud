@@ -9,11 +9,12 @@ from uuid import uuid4
 import httpx
 import pytest
 import pytest_asyncio
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import func, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.cli.generate_dev_keys import generate
 from app.core.config import Settings
 from app.core.security import base64url_decode
 from app.db.base import Base
@@ -40,7 +41,12 @@ def integration_database_url() -> str:
 @pytest.fixture(scope="session")
 def integration_private_key(tmp_path_factory) -> Path:
     directory = tmp_path_factory.mktemp("license-signing")
-    private_path, _ = generate(directory)
+    private_path = directory / "test_ed25519_private.pem"
+    private_path.write_bytes(Ed25519PrivateKey.generate().private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ))
     return private_path
 
 

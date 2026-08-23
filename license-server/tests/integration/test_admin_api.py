@@ -9,11 +9,12 @@ import httpx
 import pyotp
 import pytest
 import pytest_asyncio
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.cli.generate_dev_keys import generate
 from app.core.admin_security import encrypt_totp_secret, hash_admin_password, verify_admin_password
 from app.core.config import Settings
 from app.db.base import Base
@@ -55,7 +56,12 @@ def admin_database_url() -> str:
 
 @pytest.fixture(scope="session")
 def admin_private_key(tmp_path_factory) -> Path:
-    private_path, _ = generate(tmp_path_factory.mktemp("admin-signing"))
+    private_path = tmp_path_factory.mktemp("admin-signing") / "test_ed25519_private.pem"
+    private_path.write_bytes(Ed25519PrivateKey.generate().private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ))
     return private_path
 
 

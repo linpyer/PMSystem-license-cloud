@@ -53,12 +53,12 @@ async def test_version_then_build_ordering_and_no_downgrade(settings):
 
 @pytest.mark.asyncio
 async def test_edition_environment_and_channel_are_strict(settings):
-    rows=[release(edition="standard",file_name="DDREC-1.3.1-standard-Setup.exe",download_path="/releases/stable/standard/1.3.1/DDREC-1.3.1-standard-Setup.exe"),release(environment="local",channel="dev",file_name="DDREC-1.3.1-license-local-Setup.exe",download_path="/releases/dev/license/1.3.1/DDREC-1.3.1-license-local-Setup.exe")]
+    rows=[release(edition="standard",file_name="DDREC-1.3.1-standard-Setup.exe",download_path="/releases/stable/standard/1.3.1/DDREC-1.3.1-standard-Setup.exe"),release()]
     service=ClientReleaseService(settings,repository=Repo(rows))
     standard=await service.latest(None,product="DDREC",edition="standard",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=1)
-    local=await service.latest(None,product="DDREC",edition="license",environment="local",architecture="x64",channel="dev",version="1.3.0",build_number=1)
     production=await service.latest(None,product="DDREC",edition="license",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=1)
-    assert standard["edition"]=="standard" and local["environment"]=="local" and production=={"updateAvailable":False}
+    assert standard["edition"]=="standard"
+    assert production["edition"]=="license" and production["environment"]=="production"
 
 
 @pytest.mark.parametrize("changes", [
@@ -70,6 +70,12 @@ def test_invalid_release_lanes_are_rejected(changes):
     data=dict(product="DDREC",version="1.3.1",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="production",architecture="x64",channel="stable",title="DD Rec V1.3.1",releaseNotes="notes",fileName="DDREC-1.3.1-license-Setup.exe",downloadPath="/releases/stable/license/1.3.1/DDREC-1.3.1-license-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
     data.update(changes)
     with pytest.raises(ValueError): ClientReleaseDraftRequest.model_validate(data)
+
+
+def test_admin_cannot_create_retired_local_release():
+    data=dict(product="DDREC",version="1.3.1",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="local",architecture="x64",channel="dev",title="DD Rec V1.3.1",fileName="DDREC-1.3.1-license-local-Setup.exe",downloadPath="/releases/dev/license/1.3.1/DDREC-1.3.1-license-local-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
+    with pytest.raises(ValueError):
+        ClientReleaseDraftRequest.model_validate(data)
 
 
 def test_release_notes_remain_api_compatible_but_are_optional_for_new_drafts():

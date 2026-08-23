@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('local', 'production')]
+    [ValidateSet('production')]
     [string]$Environment,
 
     [Parameter(Mandatory = $true)]
@@ -298,23 +298,14 @@ function Invoke-ComposeCheck {
     Write-Host '验证 Docker Compose 配置...'
     $composeRoot = Join-Path $ScratchRoot 'compose-check'
     New-Item -ItemType Directory -Path $composeRoot -Force | Out-Null
-    if ($Environment -eq 'local') {
-        Copy-Item -LiteralPath (Join-Path $script:serverRoot 'docker-compose.yml') -Destination (Join-Path $composeRoot 'compose.yml')
-        Copy-Item -LiteralPath (Join-Path $script:serverRoot '.env.example') -Destination (Join-Path $composeRoot '.env')
-        New-Item -ItemType Directory -Path (Join-Path $composeRoot 'scripts') -Force | Out-Null
-        Copy-Item -LiteralPath (Join-Path $script:serverRoot 'scripts\init-test-database.sql') -Destination (Join-Path $composeRoot 'scripts\init-test-database.sql')
-        Push-Location $composeRoot
-        try { Invoke-Checked $script:docker @('compose', '-f', 'compose.yml', 'config', '--quiet') '本地 Compose 校验失败' } finally { Pop-Location }
-    } else {
-        $deployRoot = Join-Path $projectRoot 'deploy\production-nginx'
-        $envTemplate = Join-Path $deployRoot 'env.production.example'
-        $oldEnvFile = $env:DDREC_ENV_FILE
-        try {
-            $env:DDREC_ENV_FILE = $envTemplate
-            Invoke-Checked $script:docker @('compose', '--env-file', $envTemplate, '-f', (Join-Path $deployRoot 'compose.yml'), 'config', '--quiet') '生产 Compose 校验失败'
-        } finally {
-            $env:DDREC_ENV_FILE = $oldEnvFile
-        }
+    $deployRoot = Join-Path $projectRoot 'deploy\production-nginx'
+    $envTemplate = Join-Path $deployRoot 'env.production.example'
+    $oldEnvFile = $env:DDREC_ENV_FILE
+    try {
+        $env:DDREC_ENV_FILE = $envTemplate
+        Invoke-Checked $script:docker @('compose', '--env-file', $envTemplate, '-f', (Join-Path $deployRoot 'compose.yml'), 'config', '--quiet') '生产 Compose 校验失败'
+    } finally {
+        $env:DDREC_ENV_FILE = $oldEnvFile
     }
 }
 
@@ -326,12 +317,6 @@ function Copy-ApiRelease {
     }
     Copy-FilteredTree (Join-Path $script:serverRoot 'app') (Join-Path $Destination 'app')
     Copy-FilteredTree (Join-Path $script:serverRoot 'alembic') (Join-Path $Destination 'alembic')
-    if ($Environment -eq 'local') {
-        Copy-Item -LiteralPath (Join-Path $script:serverRoot '.env.example') -Destination (Join-Path $Destination 'env.local.example')
-        Copy-Item -LiteralPath (Join-Path $script:serverRoot 'docker-compose.yml') -Destination (Join-Path $Destination 'compose.yml')
-        New-Item -ItemType Directory -Path (Join-Path $Destination 'scripts') -Force | Out-Null
-        Copy-Item -LiteralPath (Join-Path $script:serverRoot 'scripts\init-test-database.sql') -Destination (Join-Path $Destination 'scripts\init-test-database.sql')
-    }
 }
 
 function Copy-DeploymentFiles {
@@ -550,20 +535,7 @@ try {
         Copy-FilteredTree $adminDist (Join-Path $payloadRoot 'admin') -ExcludedDirectories @() -ExcludedFiles @() -ExcludedExtensions @()
     }
 
-    if ($Environment -eq 'production') {
-        Copy-ProductionComponentFiles $payloadRoot
-    } else {
-        if ($Service -in @('api', 'all')) {
-            Copy-Item -LiteralPath (Join-Path $serverRoot 'docker-compose.yml') -Destination (Join-Path $payloadRoot 'compose.local.yml')
-            Copy-Item -LiteralPath (Join-Path $serverRoot '.env.example') -Destination (Join-Path $payloadRoot 'env.local.example')
-        }
-        Write-Utf8File (Join-Path $payloadRoot 'LOCAL-README.txt') @(
-            'DD Rec 云端授权系统本地构建包',
-            "API：$($environmentConfig.ApiBaseUrl)",
-            "后台环境标签：$($environmentConfig.AdminLabel)",
-            '此包仅用于本地开发，不得部署到生产环境。'
-        )
-    }
+    Copy-ProductionComponentFiles $payloadRoot
 
     $imageName = 'NOT_EXPORTED'
     $imageDigest = 'NOT_EXPORTED'

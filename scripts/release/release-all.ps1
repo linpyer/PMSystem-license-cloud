@@ -148,9 +148,6 @@ function Test-UpdateIsolation {
     if($public.updateAvailable -and [int]$public.buildNumber -eq [int]$Draft.buildNumber -and $Draft.status -eq 'draft'){
         throw 'Draft 意外出现在正式更新 API。'
     }
-    $localUrl="$($config.ApiBaseUrl)/client-updates/latest?product=DDREC&edition=license&environment=local&arch=x64&channel=dev&version=0.0.0&buildNumber=1"
-    $local=Invoke-RestMethod -Uri $localUrl -TimeoutSec ([int]$config.HttpTimeoutSeconds)
-    if($local.updateAvailable -and $local.environment -eq 'production'){throw 'license-local 意外获得 production stable 更新。'}
 }
 
 function Show-Plan {

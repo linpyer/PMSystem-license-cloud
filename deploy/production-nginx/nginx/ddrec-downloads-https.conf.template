@@ -17,7 +17,7 @@ server {
         return 404;
     }
 
-    location ~ ^/releases/(stable|dev)/(standard|license)/[0-9]+\.[0-9]+\.[0-9]+(?:/[1-9][0-9]*)?/DDREC-[0-9]+\.[0-9]+\.[0-9]+-(standard|license|license-local)-Setup\.exe$ {
+    location ~ ^/releases/stable/(standard|license)/[0-9]+\.[0-9]+\.[0-9]+(?:/[1-9][0-9]*)?/DDREC-[0-9]+\.[0-9]+\.[0-9]+-(standard|license)-Setup\.exe$ {
         try_files $uri =404;
         limit_rate_after 1m;
         limit_rate 4m;

@@ -57,7 +57,6 @@ jobs:
           cache-dependency-path: license-server/pyproject.toml
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]" ruff bandit pip-audit -c constraints.txt
-      - run: python -m app.cli.generate_dev_keys --output-dir .secrets
       - run: ruff check app tests alembic
       - run: bandit -q -r app -x tests
       - run: pip-audit -r constraints.txt
@@ -90,17 +89,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Shell static analysis
         run: shellcheck --severity=warning deploy/production-nginx/scripts/*.sh
-      - name: Prepare non-secret staging fixtures
-        run: |
-          cp deploy/staging/env/app.env.example deploy/staging/env/app.env
-          cp deploy/staging/env/postgres.env.example deploy/staging/env/postgres.env
       - name: Validate Compose
         env:
           DDREC_API_IMAGE_TAG: ci
           DDREC_ENV_FILE: ${{ github.workspace }}/deploy/production-nginx/env.production.example
         run: |
           docker compose --env-file deploy/production-nginx/env.production.example -f deploy/production-nginx/compose.yml config --quiet
-          docker compose -f deploy/staging/compose.yml config --quiet
       - name: Build production images
         run: |
           docker build --tag ddrec-license-api:ci license-server

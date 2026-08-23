@@ -18,6 +18,7 @@ class ClientRelease(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "architecture", "channel", name="uq_client_release_identity",
         ),
         CheckConstraint("edition IN ('standard','license')", name="client_release_edition"),
+        # Keep legacy database values readable; request schemas reject new local/dev rows.
         CheckConstraint("environment IN ('local','production')", name="client_release_environment"),
         CheckConstraint("architecture IN ('x64')", name="client_release_architecture"),
         CheckConstraint("channel IN ('stable','dev')", name="client_release_channel"),

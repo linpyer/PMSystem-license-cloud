@@ -21,38 +21,32 @@ function Show-Menu {
 
     Write-Host ''
     Write-Host '========================================'
-    Write-Host ' DD Rec 云端授权系统一键打包'
+    Write-Host ' DD Rec 云端授权系统生产打包'
     Write-Host '========================================'
-    Write-Host '1. 本地环境 - 授权后端 API'
-    Write-Host '2. 本地环境 - 管理后台前端'
-    Write-Host '3. 本地环境 - 全部服务'
-    Write-Host '4. 生产环境 - 授权后端 API'
-    Write-Host '5. 生产环境 - 管理后台前端'
-    Write-Host '6. 生产环境 - 全部服务'
-    Write-Host '7. 退出'
+    Write-Host '[1] License-Production API'
+    Write-Host '[2] License-Production Admin'
+    Write-Host '[3] License-Production 全部服务'
+    Write-Host '[0] 退出'
     Write-Host '========================================'
     Write-Host "项目路径：$projectRoot"
     Write-Host "Git 分支：$branch"
 }
 
 $choices = @{
-    '1' = @{ Environment = 'local'; Service = 'api' }
-    '2' = @{ Environment = 'local'; Service = 'admin' }
-    '3' = @{ Environment = 'local'; Service = 'all' }
-    '4' = @{ Environment = 'production'; Service = 'api' }
-    '5' = @{ Environment = 'production'; Service = 'admin' }
-    '6' = @{ Environment = 'production'; Service = 'all' }
+    '1' = @{ Environment = 'production'; Service = 'api' }
+    '2' = @{ Environment = 'production'; Service = 'admin' }
+    '3' = @{ Environment = 'production'; Service = 'all' }
 }
 
 while ($true) {
     Show-Menu
-    $selection = (Read-Host '请选择 1-7').Trim()
-    if ($selection -eq '7') {
+    $selection = (Read-Host '请选择 0-3').Trim()
+    if ($selection -eq '0') {
         Write-Host '已退出。'
         exit 0
     }
     if (-not $choices.ContainsKey($selection)) {
-        Write-Host '输入无效，请输入 1 到 7。' -ForegroundColor Yellow
+        Write-Host '输入无效，请输入 0 到 3。' -ForegroundColor Yellow
         continue
     }
 

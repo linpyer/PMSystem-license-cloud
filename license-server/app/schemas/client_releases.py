@@ -12,7 +12,7 @@ from app.schemas.base import CamelModel
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
-FILE_RE = re.compile(r"^DDREC-\d+\.\d+\.\d+-(?:standard|license|license-local)-Setup\.exe$")
+FILE_RE = re.compile(r"^DDREC-\d+\.\d+\.\d+-(?:standard|license)-Setup\.exe$")
 
 
 class ClientReleaseDraftRequest(CamelModel):
@@ -21,9 +21,9 @@ class ClientReleaseDraftRequest(CamelModel):
     build_number: int = Field(gt=0)
     git_commit: str
     edition: Literal["standard", "license"]
-    environment: Literal["local", "production"]
+    environment: Literal["production"]
     architecture: Literal["x64"] = "x64"
-    channel: Literal["stable", "dev"]
+    channel: Literal["stable"]
     title: str = Field(min_length=1, max_length=200)
     # Retained for wire/database compatibility; new Admin builds intentionally omit it.
     release_notes: str = Field(default="", max_length=20_000)
@@ -81,15 +81,8 @@ class ClientReleaseDraftRequest(CamelModel):
     def enforce_release_lane(self) -> "ClientReleaseDraftRequest":
         if self.mandatory:
             raise ValueError("the first update release must not be mandatory")
-        if self.edition == "standard" and (self.environment != "production" or self.channel != "stable"):
-            raise ValueError("standard releases must use production/stable")
-        if self.edition == "license":
-            valid = (
-                (self.environment == "production" and self.channel == "stable")
-                or (self.environment == "local" and self.channel == "dev")
-            )
-            if not valid:
-                raise ValueError("license releases must use production/stable or local/dev")
+        if self.environment != "production" or self.channel != "stable":
+            raise ValueError("formal releases must use production/stable")
         if not self.download_path.endswith("/" + self.file_name):
             raise ValueError("downloadPath must end with fileName")
         expected_lane = "standard" if self.edition == "standard" else "license"
@@ -97,10 +90,8 @@ class ClientReleaseDraftRequest(CamelModel):
             raise ValueError("downloadPath does not match release channel, edition, and version")
         if self.edition == "standard" and "-standard-Setup.exe" not in self.file_name:
             raise ValueError("standard release requires a standard installer")
-        if self.edition == "license" and self.environment == "production" and "-license-Setup.exe" not in self.file_name:
+        if self.edition == "license" and "-license-Setup.exe" not in self.file_name:
             raise ValueError("production license release requires a license installer")
-        if self.edition == "license" and self.environment == "local" and "-license-local-Setup.exe" not in self.file_name:
-            raise ValueError("local license release requires a license-local installer")
         return self
 
 

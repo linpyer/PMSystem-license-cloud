@@ -15,9 +15,9 @@ router = APIRouter(prefix="/client-updates", tags=["client-updates"])
 async def latest_client_update(
     product: Literal["DDREC"],
     edition: Literal["standard", "license"],
-    environment: Literal["local", "production"],
+    environment: Literal["production"],
     arch: Literal["x64"],
-    channel: Literal["stable", "dev"],
+    channel: Literal["stable"],
     version: str = Query(pattern=r"^\d+\.\d+\.\d+$"),
     build_number: int = Query(alias="buildNumber", ge=1),
     session: AsyncSession = Depends(get_session),

@@ -134,7 +134,7 @@ Bootstrap 不部署业务、不切换 `current`、不重启 Docker、不执行 M
 [0] 退出
 ```
 
-`license-local` 不属于生产发布项。
+历史 License-Local 已退役，不属于生产发布项或可用更新通道。
 
 每个真实发布模式自动执行 Preflight。client 与 cloud 仓库在涉及自身发布时必须同时满足：分支为 `v1.3`、工作区 clean、`HEAD == origin/v1.3`。不满足即停止；工具不会 pull、reset、rebase、提交、解决冲突或 force push。
 
@@ -210,7 +210,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass `
 8. HTTPS HEAD 与 Range 请求验证 200/206、Content-Length、Accept-Ranges、ETag/Last-Modified（按现网响应）。
 9. 本机生成 Manifest、使用 Ed25519 私钥签名，再使用客户端内置公钥验证签名。
 10. OWNER 交互登录并创建 Draft。
-11. 验证 Draft 未出现在公开 API，standard/license-production/license-local 通道没有串线。
+11. 验证 Draft 未出现在公开 API，standard 与 license-production 通道严格隔离。
 12. 最后显示发布确认。默认保持 Draft；只有选择目标并准确输入 `PUBLISH` 才调用 publish API。
 
 上传中断不会创建 Draft 或 Published。incoming 中安全的 `.part` 可以留待清理；正式目录不会出现半文件。

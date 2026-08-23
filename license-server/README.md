@@ -24,12 +24,11 @@ DDREC 激活码系统的独立 FastAPI/PostgreSQL 服务。该目录同时提供
 - HMAC-SHA256 激活码与设备凭据摘要。
 - Ed25519 规范化 JSON 许可证签名。
 - Alembic 可逆迁移。
-- 激活码和开发签名密钥 CLI。
+- 激活码管理 CLI。
 - 管理员账号、TOTP、服务端会话、CSRF、角色权限和管理审计。
 - 授权创建、状态管理、设备解绑、版本策略和聚合仪表盘 API。
-- Docker Compose 本地 PostgreSQL/API 环境。
 
-当前不包含在线支付、生产部署、生产密钥管理和客户自助中心。
+当前不包含在线支付、客户自助中心或本地整套授权服务器。
 
 ## 目录
 
@@ -46,7 +45,7 @@ tests            单元与专用 PostgreSQL 集成测试
 
 ## 环境变量
 
-复制 `.env.example` 为 `.env` 并替换所有开发示例值。关键变量：
+生产变量模板与部署方式统一位于 `deploy/production-nginx`。关键变量：
 
 - `LICENSE_DATABASE_URL`：必须为 `postgresql+asyncpg://...`。
 - `LICENSE_ENVIRONMENT`：`development`、`test` 或 `production`。
@@ -62,32 +61,7 @@ tests            单元与专用 PostgreSQL 集成测试
 - `LICENSE_ADMIN_ALLOWED_ORIGINS`：精确的管理端 CORS 来源列表。
 - `LICENSE_ADMIN_COOKIE_SECURE`：生产 HTTPS 环境必须设为 `true`。
 
-`.env`、`.secrets/` 和私钥均被 Git 忽略。不要把生产密码、pepper 或私钥写入镜像。
-
-## 本地开发
-
-```powershell
-cd license-server
-py -3.12 -m venv .venv
-.venv\Scripts\python -m pip install -e ".[dev]"
-.venv\Scripts\python -m app.cli.generate_dev_keys
-Copy-Item .env.example .env
-```
-
-如果 API 在宿主机运行，将 `.env` 的 PostgreSQL 主机从 `postgres` 改为
-`127.0.0.1:5433`，并把私钥路径改为 `.secrets/dev_ed25519_private.pem`。
-
-## Docker Compose
-
-先生成开发密钥和 `.env`，然后：
-
-```bash
-docker compose up --build
-```
-
-Compose 创建独立数据库 `ddrec_license_dev`，并由
-`scripts/init-test-database.sql` 创建测试专用库 `ddrec_license_test`。它不会挂载
-DDREC 用户目录。
+真实环境文件、secrets 和私钥均不得进入 Git 或镜像。原本地授权 Compose、开发密钥生成器和 production-like 本地模拟部署已退役，不再提供启动入口。
 
 ## Alembic
 
@@ -144,36 +118,22 @@ DDREC 用户目录。
 管理端使用 HttpOnly、SameSite=Strict Cookie。所有写操作还必须携带 CSRF Cookie 对应的
 `X-CSRF-Token`，角色权限始终由后端校验。开发环境仅允许 `.env` 中明确列出的来源。
 
-启用 OpenAPI 时文档位于 `http://localhost:8000/docs`。
+非生产源码调试可显式启用 OpenAPI；生产环境必须关闭。
 
 ## 测试
 
-测试环境必须设置 `LICENSE_ENVIRONMENT=test`，且数据库名称必须以 `_test` 结尾：
+单元测试不需要 Docker。PostgreSQL 集成测试仅在显式提供外部专用测试数据库时运行；数据库名称必须以 `_test` 结尾：
 
 ```powershell
 $env:LICENSE_ENVIRONMENT='test'
-$env:LICENSE_DATABASE_URL='postgresql+asyncpg://ddrec_license:password@127.0.0.1:5434/ddrec_license_test'
+$env:LICENSE_TEST_DATABASE_URL='postgresql+asyncpg://user:password@test-db.example/ddrec_license_test'
 .venv\Scripts\pytest
 ```
 
-配置保护会拒绝测试进程连接名称不以 `_test` 结尾的数据库。
-
-## 管理端联调
-
-```powershell
-docker compose up -d --build
-cd ..\license-admin
-npm install
-npm run dev
-```
-
-浏览器访问 `http://127.0.0.1:5173`。如果 Windows 上另有 IPv4 服务占用
-`127.0.0.1:8000`，开发代理可以改用 `http://localhost:8000`，但生产环境应使用固定同域
-HTTPS 地址。
+配置保护会拒绝测试进程连接名称不以 `_test` 结尾的数据库。未提供 `LICENSE_TEST_DATABASE_URL` 时，集成测试按设计 skip，普通单元测试、静态分析和 Admin production build 继续运行。
 
 ## 安全说明
 
-- 开发密钥绝不能用于生产。
 - 私钥只从文件系统读取，不进入数据库、Git、日志或 API。
 - 激活码和设备凭据只存 HMAC 摘要。
 - 日志只记录 traceId、requestId、脱敏码和 deviceId 前缀。

@@ -106,5 +106,5 @@ Describe 'DDREC successful safety policies' {
     It 'accepts Standard production artifact policy' { Assert-DDRECInstallerPolicy (New-Metadata) standard ('a'*40) | Should Be $true }
     It 'accepts equal immutable SHA' { Assert-DDRECHashCompatibility ('F'*64) ('F'*64) | Should Be $true }
     It 'keeps standard and license-production isolated' { Assert-DDRECReleaseIsolation standard standard published | Should Be $true }
-    It 'rejects license-local receiving production stable' { Assert-Throws { Assert-DDRECReleaseIsolation license-local license-production published } }
+    It 'rejects standard receiving license-production stable' { Assert-Throws { Assert-DDRECReleaseIsolation standard license-production published } }
 }

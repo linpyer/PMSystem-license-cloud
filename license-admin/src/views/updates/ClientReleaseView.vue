@@ -88,9 +88,9 @@ onMounted(load)
     <el-form label-position="top">
       <div class="grid">
         <el-form-item label="版本"><el-input v-model="form.version" placeholder="1.3.1"/></el-form-item><el-form-item label="Build"><el-input-number v-model="form.buildNumber" :min="1"/></el-form-item>
-        <el-form-item label="Edition"><el-select v-model="form.edition"><el-option label="standard" value="standard"/><el-option label="license" value="license"/></el-select></el-form-item>
-        <el-form-item label="环境"><el-select v-model="form.environment"><el-option label="production" value="production"/><el-option label="local" value="local"/></el-select></el-form-item>
-        <el-form-item label="通道"><el-select v-model="form.channel"><el-option label="stable" value="stable"/><el-option label="dev" value="dev"/></el-select></el-form-item><el-form-item label="Git Commit"><el-input v-model="form.gitCommit"/></el-form-item>
+        <el-form-item label="正式版本"><el-select v-model="form.edition"><el-option label="Standard" value="standard"/><el-option label="License-Production" value="license"/></el-select></el-form-item>
+        <el-form-item label="环境"><el-input model-value="production" disabled/></el-form-item>
+        <el-form-item label="通道"><el-input model-value="stable" disabled/></el-form-item><el-form-item label="Git Commit"><el-input v-model="form.gitCommit"/></el-form-item>
         <el-form-item label="文件名"><el-input v-model="form.fileName"/></el-form-item><el-form-item label="文件大小（字节）"><el-input-number v-model="form.fileSize" :min="1"/></el-form-item>
         <el-form-item class="wide" label="下载路径"><el-input v-model="form.downloadPath" placeholder="/releases/stable/standard/1.3.1/DDREC-...exe"/></el-form-item>
         <el-form-item class="wide" label="SHA-256"><el-input v-model="form.sha256"/></el-form-item>

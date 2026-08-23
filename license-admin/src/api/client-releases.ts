@@ -23,7 +23,10 @@ export type ClientRelease = {
   createdAt: string
 }
 
-export type ClientReleaseDraft = Omit<ClientRelease, 'id' | 'status' | 'createdAt' | 'releaseNotes'> & {
+// local/dev remain response-only so historical rows can still be displayed.
+export type ClientReleaseDraft = Omit<ClientRelease, 'id' | 'status' | 'createdAt' | 'releaseNotes' | 'environment' | 'channel'> & {
+  environment: 'production'
+  channel: 'stable'
   releaseNotes?: string
 }
 

@@ -32,7 +32,6 @@ dev = [
 
 [project.scripts]
 ddrec-license-create = "app.cli.create_license:main"
-ddrec-license-generate-dev-keys = "app.cli.generate_dev_keys:main"
 ddrec-license-cleanup-expired = "app.cli.cleanup_expired:main"
 ddrec-license-import-update-draft = "app.cli.import_client_release_draft:main"
 
