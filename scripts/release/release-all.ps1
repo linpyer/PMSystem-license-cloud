@@ -47,7 +47,13 @@ function Get-ModePlan {
 function Select-MenuMode {
     param($ClientState,$CloudState,$RemoteState)
     Write-Header 'DD Rec 生产发布工具'
-    $version = (& (Join-Path $context.ClientRoot '.venv\Scripts\python.exe') -c 'from app.core.version import APP_VERSION; print(APP_VERSION)' 2>$null | Select-Object -Last 1)
+    Push-Location $context.ClientRoot
+    try {
+        $version = (& (Join-Path $context.ClientRoot '.venv\Scripts\python.exe') -c 'from app.core.version import APP_VERSION; print(APP_VERSION)' 2>$null | Select-Object -Last 1)
+    } finally {
+        Pop-Location
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$version)) { throw '无法读取客户端版本。' }
     Write-Host "Client:`nVersion : $version`nGit     : $($ClientState.Head)"
     Write-Host "`nCloud:`nGit     : $($CloudState.Head)"
     Write-Host "`nProduction:`nAPI     : $($RemoteState.ApiStatus)`nRelease : $($RemoteState.Current)"
@@ -179,8 +185,11 @@ try {
     $stage='读取生产状态'
     $remoteState=Get-DDRECRemoteState -Context $context
 
-    if($Mode -eq 'Menu'){$Mode=Select-MenuMode -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState}
-    if($Mode -eq 'Exit'){exit $exitCodes.Success}
+    if($Mode -eq 'Menu'){
+        $selectedMode=Select-MenuMode -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState
+        if($selectedMode -eq 'Exit'){exit $exitCodes.Success}
+        $Mode=$selectedMode
+    }
     if($Mode -eq 'Status'){
         Show-ProductionStatus -RemoteState $remoteState -CloudState $cloudState
         Add-DDRECStage -Context $context -Stage 'Production Status（只读）'

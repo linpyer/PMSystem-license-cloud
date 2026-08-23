@@ -160,4 +160,15 @@ Describe 'DDREC release works without local Docker' {
         $candidate = Get-DDRECInstallerCandidate -ClientRoot (Join-Path $script:workspaceRoot 'client') -Lane standard
         ($null -ne $candidate) | Should Be $true
     }
+    It '39 menu exit is handled before assigning the validated mode variable' {
+        $text = Get-Content -LiteralPath $script:releaseScript -Raw
+        $exitIndex = $text.IndexOf("if(`$selectedMode -eq 'Exit')")
+        $assignIndex = $text.IndexOf('$Mode=$selectedMode')
+        ($exitIndex -ge 0 -and $assignIndex -gt $exitIndex) | Should Be $true
+    }
+    It '40 menu reads the client version from the client repository' {
+        $text = Get-Content -LiteralPath $script:releaseScript -Raw
+        $text | Should Match 'Push-Location \$context\.ClientRoot'
+        $text | Should Match '无法读取客户端版本'
+    }
 }
