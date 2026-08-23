@@ -30,20 +30,6 @@ function Write-Header {
     Write-Host ('=' * 58) -ForegroundColor Cyan
 }
 
-function Get-ModePlan {
-    param([string]$SelectedMode)
-    $result = switch ($SelectedMode) {
-        'Standard'          { [pscustomobject]@{Cloud=$false;Lanes=@('standard')} }
-        'LicenseProduction' { [pscustomobject]@{Cloud=$false;Lanes=@('license-production')} }
-        'BothClients'       { [pscustomobject]@{Cloud=$false;Lanes=@('standard','license-production')} }
-        'Cloud'             { [pscustomobject]@{Cloud=$true; Lanes=@()} }
-        'CloudStandard'     { [pscustomobject]@{Cloud=$true; Lanes=@('standard')} }
-        'CloudBoth'         { [pscustomobject]@{Cloud=$true; Lanes=@('standard','license-production')} }
-        default             { throw "未知发布模式：$SelectedMode" }
-    }
-    return $result
-}
-
 function Select-MenuMode {
     param($ClientState,$CloudState,$RemoteState)
     Write-Header 'DD Rec 生产发布工具'
@@ -112,7 +98,7 @@ function Select-Installer {
     }
     $metadata=Get-DDRECInstallerMetadata -InstallerPath $candidate.FullName -Lane $Lane -ExpectedCommit $ClientCommit
     Write-Host "`n$Lane 安装包" -ForegroundColor Green
-    $metadata | Select-Object FileName,ProductVersion,BuildNumber,GitCommit,Edition,Environment,UpdaterVersion,Size,SHA256 | Format-List
+    Show-DDRECPackageMetadata -Metadata $metadata
     if (-not $DryRun -and -not $NonInteractive) {
         $answer=(Read-Host '[Y] 使用 / [N] 手动选择其它安装包').Trim()
         if ($answer -notmatch '^(?i)y$') {
@@ -197,7 +183,7 @@ try {
     }
     $dryRun=$Mode -eq 'DryRun'
     if($dryRun){$Mode=Select-DryRunScope}
-    $plan=Get-ModePlan $Mode
+    $plan=Get-DDRECModePlan -Mode $Mode
 
     $stage='Preflight / Git 安全检查'
     if($plan.Lanes.Count -gt 0){Assert-DDRECGitReleaseState -State $clientState -RequiredBranch $config.RequiredBranch|Out-Null}
@@ -267,7 +253,7 @@ try {
     foreach($item in $targets){
         $stage="客户端上传：$($item.Lane)"
         Invoke-DDRECClientUpload -Context $context -Metadata $item.Metadata -Target $item.Target|Out-Null
-        Test-DDRECDownloadUrl -Url $item.Target.Url -ExpectedLength $item.Metadata.Size -TimeoutSeconds ([int]$config.HttpTimeoutSeconds)|Out-Null
+        Test-DDRECDownloadUrl -Url $item.Target.Url -ExpectedLength $item.Metadata.FileSize -TimeoutSeconds ([int]$config.HttpTimeoutSeconds)|Out-Null
         $item.Signed=Invoke-DDRECManifestSigning -Context $context -Metadata $item.Metadata
         Add-DDRECStage -Context $context -Stage "$($item.Lane) 上传/SHA/下载/Range/签名"
     }
@@ -282,7 +268,7 @@ try {
         Add-DDRECStage -Context $context -Stage 'Draft 创建与更新通道隔离验证'
         Write-Header '发布确认'
         foreach($item in $targets){
-            Write-Host "$($item.Lane): V$($item.Metadata.ProductVersion) Build $($item.Metadata.BuildNumber) / $($item.Metadata.SHA256) / $($item.Draft.status.ToUpperInvariant())"
+            Write-Host "$($item.Lane): V$($item.Metadata.Version) Build $($item.Metadata.BuildNumber) / $($item.Metadata.SHA256) / $($item.Draft.status.ToUpperInvariant())"
         }
         $publishable=@(for($i=0;$i -lt $targets.Count;$i++){if($targets[$i].Draft.status -eq 'draft'){$i}})
         if($publishable.Count -eq 0){Write-DDRECLog -Context $context -Message '相同 Build 已 Published；幂等完成，没有创建重复记录。';exit $exitCodes.Success}
@@ -303,6 +289,6 @@ catch {
     $report=Get-DDRECFailureReport -Context $context -Stage $stage -ErrorRecord $_
     Write-Header '发布停止'
     Write-DDRECLog -Context $context -Level ERROR -Message ($report|ConvertTo-Json -Depth 6)
-    $code=if($stage -match '安装包|客户端'){$exitCodes.ClientValidation}elseif($stage -match 'Migration'){$exitCodes.Migration}elseif($stage -match 'Health'){$exitCodes.Health}elseif($stage -match 'Draft|Published|OWNER'){$exitCodes.PublishApi}elseif($stage -match '上传'){$exitCodes.Upload}else{$exitCodes.Preflight}
+    $code=Get-DDRECFailureExitCode -Stage $stage
     exit $code
 }

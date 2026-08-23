@@ -128,6 +128,21 @@ function Assert-DDRECGitReleaseState {
     return $true
 }
 
+function Get-DDRECModePlan {
+    param(
+        [ValidateSet('Standard','LicenseProduction','BothClients','Cloud','CloudStandard','CloudBoth')]
+        [Parameter(Mandatory)][string]$Mode
+    )
+    switch ($Mode) {
+        'Standard'          { return [pscustomobject]@{Cloud=$false;Lanes=@('standard')} }
+        'LicenseProduction' { return [pscustomobject]@{Cloud=$false;Lanes=@('license-production')} }
+        'BothClients'       { return [pscustomobject]@{Cloud=$false;Lanes=@('standard','license-production')} }
+        'Cloud'             { return [pscustomobject]@{Cloud=$true; Lanes=@()} }
+        'CloudStandard'     { return [pscustomobject]@{Cloud=$true; Lanes=@('standard')} }
+        'CloudBoth'         { return [pscustomobject]@{Cloud=$true; Lanes=@('standard','license-production')} }
+    }
+}
+
 function Read-DDRECKeyValueFile {
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "元数据文件不存在：$Path" }
@@ -150,21 +165,44 @@ function Get-DDRECInstallerCandidate {
         Sort-Object LastWriteTimeUtc,FullName -Descending | Select-Object -First 1
 }
 
+function Assert-DDRECPackageMetadata {
+    param([Parameter(Mandatory)]$Metadata)
+    if ($Metadata.PSObject.TypeNames -notcontains 'DDREC.PackageMetadata') {
+        throw "安装包元数据无效：预期 DDREC.PackageMetadata，实际 $($Metadata.GetType().FullName)"
+    }
+    foreach ($field in @('Path','FileName','FileSize','SHA256','Version','BuildNumber','GitCommit','Edition','Environment','UpdaterVersion')) {
+        $property = $Metadata.PSObject.Properties[$field]
+        if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            throw "安装包元数据无效：PackageMetadata 缺少 $field"
+        }
+    }
+    return $true
+}
+
 function Assert-DDRECInstallerPolicy {
     param(
         [Parameter(Mandatory)]$Metadata,
         [ValidateSet('standard','license-production')][string]$Lane,
         [Parameter(Mandatory)][string]$ExpectedCommit
     )
+    Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
     $expectedEdition = if ($Lane -eq 'standard') {'standard'} else {'license'}
     $expectedEnvironment = if ($Lane -eq 'standard') {'none'} else {'production'}
     if ($Metadata.Edition -cne $expectedEdition) { throw "安装包 Edition 错误：$($Metadata.Edition)" }
     if ($Metadata.Environment -cne $expectedEnvironment) { throw "安装包 Environment 错误：$($Metadata.Environment)" }
     if ($Metadata.GitCommit -cne $ExpectedCommit) { throw "安装包 GitCommit 与当前 client HEAD 不一致：$($Metadata.GitCommit) != $ExpectedCommit" }
-    if ($Metadata.ProductVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'ProductVersion 必须为三段式版本号。' }
+    if ($Metadata.Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version 必须为三段式版本号。' }
     if ([int64]$Metadata.BuildNumber -lt 1) { throw 'BuildNumber 必须大于 0。' }
     if ($Metadata.UpdaterVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'UpdaterVersion 无效或缺失。' }
     return $true
+}
+
+function Show-DDRECPackageMetadata {
+    param([Parameter(Mandatory)]$Metadata)
+    Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
+    $Metadata |
+        Select-Object FileName,Version,BuildNumber,GitCommit,Edition,Environment,UpdaterVersion,FileSize,SHA256 |
+        Format-List | Out-Host
 }
 
 function Get-DDRECInstallerMetadata {
@@ -177,26 +215,41 @@ function Get-DDRECInstallerMetadata {
     $manifestPath = Join-Path $file.DirectoryName 'RELEASE-MANIFEST.txt'
     $checksumsPath = Join-Path $file.DirectoryName 'SHA256SUMS.txt'
     $m = Read-DDRECKeyValueFile $manifestPath
-    foreach ($field in @('Version','BuildNumber','GitCommit','Edition','LicenseEnvironment','UpdaterVersion','Installer','SizeBytes','SHA256')) {
-        if (-not $m.ContainsKey($field) -or [string]::IsNullOrWhiteSpace([string]$m[$field])) { throw "构建元数据缺少：$field" }
+    $manifestFields = [ordered]@{
+        Version='Version'; BuildNumber='BuildNumber'; GitCommit='GitCommit'; Edition='Edition'
+        Environment='LicenseEnvironment'; UpdaterVersion='UpdaterVersion'; Installer='Installer'
+        FileSize='SizeBytes'; SHA256='SHA256'
     }
-    if ($file.Name -cne [string]$m.Installer) { throw '安装包文件名与构建元数据不一致。' }
+    foreach ($field in $manifestFields.Keys) {
+        $manifestName = $manifestFields[$field]
+        if (-not $m.ContainsKey($manifestName) -or [string]::IsNullOrWhiteSpace([string]$m[$manifestName])) {
+            throw "安装包元数据无效：RELEASE-MANIFEST 缺少 $field"
+        }
+    }
+    if ($file.Name -cne [string]$m['Installer']) { throw '安装包文件名与构建元数据不一致。' }
     if (-not (Test-Path -LiteralPath $checksumsPath -PathType Leaf)) { throw '缺少 SHA256SUMS.txt。' }
     $checksumLine = (Get-Content -LiteralPath $checksumsPath -Encoding UTF8 | Where-Object { $_ -match [regex]::Escape($file.Name) } | Select-Object -First 1)
     if (-not $checksumLine -or $checksumLine -notmatch '^([0-9A-Fa-f]{64})\s+(.+)$') { throw 'SHA256SUMS.txt 没有合法的安装包记录。' }
+    if ($matches[2].Trim() -cne $file.Name) { throw 'SHA256SUMS.txt 安装包文件名与实际文件不一致。' }
     $actualHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToUpperInvariant()
-    if ($actualHash -cne ([string]$m.SHA256).ToUpperInvariant() -or $actualHash -cne $matches[1].ToUpperInvariant()) { throw '安装包 SHA256 与构建元数据不一致。' }
-    if ($file.Length -ne [int64]$m.SizeBytes) { throw '安装包大小与构建元数据不一致。' }
+    if ($actualHash -cne ([string]$m['SHA256']).ToUpperInvariant() -or $actualHash -cne $matches[1].ToUpperInvariant()) { throw '安装包 SHA256 与构建元数据不一致。' }
+    [int64]$manifestSize = 0
+    if (-not [int64]::TryParse([string]$m['SizeBytes'], [ref]$manifestSize)) { throw '安装包元数据无效：FileSize 不是有效整数。' }
+    if ($file.Length -ne $manifestSize) { throw '安装包大小与构建元数据不一致。' }
+    [int]$buildNumber = 0
+    if (-not [int]::TryParse([string]$m['BuildNumber'], [ref]$buildNumber)) { throw '安装包元数据无效：BuildNumber 不是有效整数。' }
     $versionInfo = [Diagnostics.FileVersionInfo]::GetVersionInfo($file.FullName)
     $peProductVersion = ([string]$versionInfo.ProductVersion).Split('+')[0].Trim()
-    if ($peProductVersion -and -not $peProductVersion.StartsWith([string]$m.Version, [StringComparison]::Ordinal)) {
+    if ([string]::IsNullOrWhiteSpace($peProductVersion)) { throw '安装包 Windows ProductVersion 缺失。' }
+    if (-not $peProductVersion.StartsWith([string]$m['Version'], [StringComparison]::Ordinal)) {
         throw "安装包 Windows ProductVersion 与构建元数据不一致：$peProductVersion"
     }
     $metadata = [pscustomobject]@{
-        Path=$file.FullName; FileName=$file.Name; ProductVersion=[string]$m.Version
-        BuildNumber=[int]$m.BuildNumber; GitCommit=([string]$m.GitCommit).ToLowerInvariant()
-        Edition=([string]$m.Edition).ToLowerInvariant(); Environment=([string]$m.LicenseEnvironment).ToLowerInvariant()
-        UpdaterVersion=[string]$m.UpdaterVersion; Size=[int64]$file.Length; SHA256=$actualHash
+        PSTypeName='DDREC.PackageMetadata'
+        Path=$file.FullName; FileName=$file.Name; FileSize=[int64]$file.Length; SHA256=$actualHash
+        Version=[string]$m['Version']; BuildNumber=$buildNumber; GitCommit=([string]$m['GitCommit']).ToLowerInvariant()
+        Edition=([string]$m['Edition']).ToLowerInvariant(); Environment=([string]$m['LicenseEnvironment']).ToLowerInvariant()
+        UpdaterVersion=[string]$m['UpdaterVersion']
         ManifestPath=$manifestPath; ChecksumsPath=$checksumsPath; PEProductVersion=$peProductVersion
     }
     Assert-DDRECInstallerPolicy -Metadata $metadata -Lane $Lane -ExpectedCommit $ExpectedCommit | Out-Null
@@ -205,8 +258,9 @@ function Get-DDRECInstallerMetadata {
 
 function Get-DDRECClientTarget {
     param([Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Config)
+    Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
     $lane = if ($Metadata.Edition -eq 'standard') {'standard'} else {'license'}
-    $relative = "/releases/stable/$lane/$($Metadata.ProductVersion)/$($Metadata.BuildNumber)/$($Metadata.FileName)"
+    $relative = "/releases/stable/$lane/$($Metadata.Version)/$($Metadata.BuildNumber)/$($Metadata.FileName)"
     return [pscustomobject]@{
         RelativePath=$relative
         RemotePath=([string]$Config.DownloadRoot).TrimEnd('/') + $relative
@@ -423,16 +477,18 @@ function Get-DDRECLocalMigrationPlan {
 
 function New-DDRECManifest {
     param([Parameter(Mandatory)]$Metadata)
+    Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
     return [ordered]@{
-        product='DDREC'; version=$Metadata.ProductVersion; buildNumber=$Metadata.BuildNumber
+        product='DDREC'; version=$Metadata.Version; buildNumber=$Metadata.BuildNumber
         edition=$Metadata.Edition; environment=($(if($Metadata.Edition -eq 'standard'){'production'}else{$Metadata.Environment}))
-        architecture='x64'; channel='stable'; fileName=$Metadata.FileName; fileSize=$Metadata.Size
+        architecture='x64'; channel='stable'; fileName=$Metadata.FileName; fileSize=$Metadata.FileSize
         sha256=$Metadata.SHA256; publishedAt=[DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     }
 }
 
 function Invoke-DDRECManifestSigning {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata)
+    Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
     if (-not (Test-Path -LiteralPath $Context.Config.UpdatePrivateKey -PathType Leaf)) { throw '本地 Ed25519 更新私钥不存在。' }
     if (-not (Test-Path -LiteralPath $Context.Config.UpdatePublicKey -PathType Leaf)) { throw 'Ed25519 更新公钥不存在。' }
     $sessionDir = Join-Path (Split-Path $Context.LogPath -Parent) $Context.SessionId
@@ -451,6 +507,7 @@ function Invoke-DDRECManifestSigning {
 
 function Invoke-DDRECClientUpload {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Target)
+    Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
     $incoming = "$($Context.Config.RemoteRoot)/incoming/client/$($Context.SessionId)/$($Metadata.FileName).part"
     $incomingDir = Split-Path $incoming -Parent
     $mkdir = "install -d -m 750 $(ConvertTo-DDRECShellSingleQuote $incomingDir)"
@@ -464,7 +521,7 @@ function Invoke-DDRECClientUpload {
 set -Eeuo pipefail
 exec 9>$lockQ
 flock -n 9 || { echo 'deployment lock busy' >&2; exit 21; }
-test "`$(stat -c%s $incomingQ)" -eq $($Metadata.Size)
+test "`$(stat -c%s $incomingQ)" -eq $($Metadata.FileSize)
 echo "$($Metadata.SHA256)  $incoming" | sha256sum -c -
 install -d -m 755 $dirQ
 if test -e $finalQ; then
@@ -517,10 +574,11 @@ function Connect-DDRECAdminApi {
 
 function New-DDRECClientDraft {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Auth,[Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Target,[Parameter(Mandatory)]$Signed)
+    Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
     $list=Invoke-RestMethod -Uri "$($Context.Config.ApiBaseUrl)/admin/client-releases?page=1&pageSize=200" -Method Get -WebSession $Auth.Session -Headers $Auth.Headers
     $environment=if($Metadata.Edition -eq 'standard'){'production'}else{$Metadata.Environment}
     $existing=@($list.items|Where-Object{
-        $_.product -eq 'DDREC' -and $_.version -eq $Metadata.ProductVersion -and [int]$_.buildNumber -eq $Metadata.BuildNumber -and
+        $_.product -eq 'DDREC' -and $_.version -eq $Metadata.Version -and [int]$_.buildNumber -eq $Metadata.BuildNumber -and
         $_.edition -eq $Metadata.Edition -and $_.environment -eq $environment -and $_.channel -eq 'stable'
     })|Select-Object -First 1
     if($existing){
@@ -530,10 +588,10 @@ function New-DDRECClientDraft {
         return $existing
     }
     $body=[ordered]@{
-        product='DDREC';version=$Metadata.ProductVersion;buildNumber=$Metadata.BuildNumber;gitCommit=$Metadata.GitCommit
+        product='DDREC';version=$Metadata.Version;buildNumber=$Metadata.BuildNumber;gitCommit=$Metadata.GitCommit
         edition=$Metadata.Edition;environment=$environment
-        architecture='x64';channel='stable';title="DD Rec V$($Metadata.ProductVersion)";releaseNotes=''
-        fileName=$Metadata.FileName;downloadPath=$Target.RelativePath;fileSize=$Metadata.Size;sha256=$Metadata.SHA256
+        architecture='x64';channel='stable';title="DD Rec V$($Metadata.Version)";releaseNotes=''
+        fileName=$Metadata.FileName;downloadPath=$Target.RelativePath;fileSize=$Metadata.FileSize;sha256=$Metadata.SHA256
         signature=$Signed.Signature;mandatory=$false;publishedAt=$Signed.Manifest.publishedAt
     }
     $result=Invoke-RestMethod -Uri "$($Context.Config.ApiBaseUrl)/admin/client-releases" -Method Post -WebSession $Auth.Session -Headers $Auth.Headers -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 5 -Compress)
@@ -581,6 +639,16 @@ function Get-DDRECFailureReport {
         RollbackAttempted=$Context.RollbackAttempted; RollbackHealthy=$Context.RollbackHealthy
         Drafts=@($Context.Drafts); Published=@($Context.Published); LogPath=$Context.LogPath
     }
+}
+
+function Get-DDRECFailureExitCode {
+    param([Parameter(Mandatory)][string]$Stage)
+    if ($Stage -match '安装包|客户端') { return $script:ExitCodes.ClientValidation }
+    if ($Stage -match 'Migration') { return $script:ExitCodes.Migration }
+    if ($Stage -match 'Health') { return $script:ExitCodes.Health }
+    if ($Stage -match 'Draft|Published|OWNER') { return $script:ExitCodes.PublishApi }
+    if ($Stage -match '上传') { return $script:ExitCodes.Upload }
+    return $script:ExitCodes.Preflight
 }
 
 Export-ModuleMember -Function *-DDREC*

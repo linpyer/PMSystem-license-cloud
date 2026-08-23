@@ -8,7 +8,42 @@ function New-GitState {
 
 function New-Metadata {
     param([string]$Edition='standard',[string]$Environment='none',[string]$Commit=('a'*40),[int]$Build=82)
-    [pscustomobject]@{Edition=$Edition;Environment=$Environment;GitCommit=$Commit;ProductVersion='1.3.0';BuildNumber=$Build;UpdaterVersion='1.2.0'}
+    [pscustomobject]@{
+        PSTypeName='DDREC.PackageMetadata'
+        Path='C:\fixture\DDREC-Setup.exe';FileName='DDREC-Setup.exe';FileSize=1024;SHA256=('A'*64)
+        Version='1.3.0';BuildNumber=$Build;GitCommit=$Commit;Edition=$Edition
+        Environment=$Environment;UpdaterVersion='1.2.0'
+    }
+}
+
+function New-InstallerFixture {
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [ValidateSet('standard','license')][string]$Edition='standard',
+        [ValidateSet('none','production')][string]$Environment='none',
+        [string]$Commit=('a'*40),
+        [string]$MissingField=''
+    )
+    New-Item -ItemType Directory -Path $Root -Force | Out-Null
+    $source = (Get-Command where.exe -ErrorAction Stop).Source
+    $fileName = if ($Edition -eq 'standard') {'DDREC-standard-fixture.exe'} else {'DDREC-license-fixture.exe'}
+    $installer = Join-Path $Root $fileName
+    Copy-Item -LiteralPath $source -Destination $installer
+    $peProductVersion = [string]([Diagnostics.FileVersionInfo]::GetVersionInfo($installer).ProductVersion)
+    if ($peProductVersion -notmatch '^(\d+\.\d+\.\d+)') { throw "测试 PE ProductVersion 无效：$peProductVersion" }
+    $version = $matches[1]
+    $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToUpperInvariant()
+    $size = (Get-Item -LiteralPath $installer).Length
+    $values = [ordered]@{
+        Version=$version;BuildNumber='85';GitCommit=$Commit;Edition=$Edition;LicenseEnvironment=$Environment
+        UpdaterVersion='1.2.0';Installer=$fileName;SizeBytes=[string]$size;SHA256=$hash
+    }
+    $manifestField = if ($MissingField -eq 'Environment') {'LicenseEnvironment'} else {$MissingField}
+    if ($manifestField) { $values.Remove($manifestField) }
+    $manifestLines = @($values.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+    [IO.File]::WriteAllLines((Join-Path $Root 'RELEASE-MANIFEST.txt'), $manifestLines, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $Root 'SHA256SUMS.txt'), "$hash  $fileName`n", [Text.Encoding]::ASCII)
+    return $installer
 }
 
 function Assert-Throws {
@@ -107,6 +142,106 @@ Describe 'DDREC successful safety policies' {
     It 'accepts equal immutable SHA' { Assert-DDRECHashCompatibility ('F'*64) ('F'*64) | Should Be $true }
     It 'keeps standard and license-production isolated' { Assert-DDRECReleaseIsolation standard standard published | Should Be $true }
     It 'rejects standard receiving license-production stable' { Assert-Throws { Assert-DDRECReleaseIsolation standard license-production published } }
+}
+
+Describe 'DDREC PackageMetadata parsing and release modes' {
+    It '41 parses Standard metadata into the unified model' {
+        $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'standard')
+        $metadata = Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40)
+        ($metadata.PSObject.TypeNames -contains 'DDREC.PackageMetadata') | Should Be $true
+        (@($metadata.PSObject.Properties.Name) -contains 'Path') | Should Be $true
+        (@($metadata.PSObject.Properties.Name) -contains 'FileSize') | Should Be $true
+        (@($metadata.PSObject.Properties.Name) -contains 'Version') | Should Be $true
+        $metadata.Edition | Should Be 'standard'
+        $metadata.Environment | Should Be 'none'
+        @((Show-DDRECPackageMetadata -Metadata $metadata)).Count | Should Be 0
+    }
+
+    It '42 parses License-Production metadata into the same unified model' {
+        $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'license') -Edition license -Environment production
+        $metadata = Get-DDRECInstallerMetadata -InstallerPath $installer -Lane license-production -ExpectedCommit ('a'*40)
+        ($metadata.PSObject.TypeNames -contains 'DDREC.PackageMetadata') | Should Be $true
+        $metadata.Edition | Should Be 'license'
+        $metadata.Environment | Should Be 'production'
+    }
+
+    It '43 reports a business error when Edition is missing' {
+        $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'missing-edition') -MissingField Edition
+        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) | Out-Null; '<no error>' } catch { $_.Exception.Message }
+        $message | Should Be '安装包元数据无效：RELEASE-MANIFEST 缺少 Edition'
+        $message | Should Not Match "property 'Edition'"
+    }
+
+    It '44 reports a business error when Environment is missing' {
+        $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'missing-environment') -MissingField Environment
+        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) | Out-Null; '<no error>' } catch { $_.Exception.Message }
+        $message | Should Be '安装包元数据无效：RELEASE-MANIFEST 缺少 Environment'
+        $message | Should Not Match "property 'Environment'"
+    }
+
+    It '45 reports a business error when GitCommit is missing' {
+        $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'missing-commit') -MissingField GitCommit
+        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) | Out-Null; '<no error>' } catch { $_.Exception.Message }
+        $message | Should Be '安装包元数据无效：RELEASE-MANIFEST 缺少 GitCommit'
+        $message | Should Not Match "property 'GitCommit'"
+    }
+
+    It '46 strictly rejects Standard and License lane mismatches' {
+        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Edition license -Environment production) standard ('a'*40) }
+        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Edition standard -Environment none) license-production ('a'*40) }
+    }
+
+    It '47 maps Standard mode to Standard client validation only' {
+        $plan = Get-DDRECModePlan -Mode Standard
+        $plan.Cloud | Should Be $false
+        ($plan.Lanes -join ',') | Should Be 'standard'
+    }
+
+    It '48 maps License-Production mode to License client validation only' {
+        $plan = Get-DDRECModePlan -Mode LicenseProduction
+        $plan.Cloud | Should Be $false
+        ($plan.Lanes -join ',') | Should Be 'license-production'
+    }
+
+    It '49 maps two-client mode to both unified metadata validations' {
+        $plan = Get-DDRECModePlan -Mode BothClients
+        $plan.Cloud | Should Be $false
+        ($plan.Lanes -join ',') | Should Be 'standard,license-production'
+    }
+
+    It '50 maps Cloud mode without a client package' {
+        $plan = Get-DDRECModePlan -Mode Cloud
+        $plan.Cloud | Should Be $true
+        @($plan.Lanes).Count | Should Be 0
+    }
+
+    It '51 maps Cloud plus Standard mode correctly' {
+        $plan = Get-DDRECModePlan -Mode CloudStandard
+        $plan.Cloud | Should Be $true
+        ($plan.Lanes -join ',') | Should Be 'standard'
+    }
+
+    It '52 maps full mode to Cloud and both unified metadata validations' {
+        $plan = Get-DDRECModePlan -Mode CloudBoth
+        $plan.Cloud | Should Be $true
+        ($plan.Lanes -join ',') | Should Be 'standard,license-production'
+    }
+
+    It '53 keeps stale GitCommit protection at exit code 70' {
+        $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'stale') -Commit ('b'*40)
+        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) | Out-Null; '<no error>' } catch { $_.Exception.Message }
+        $message | Should Match 'GitCommit 与当前 client HEAD 不一致'
+        Get-DDRECFailureExitCode -Stage '客户端安装包识别与真实性校验' | Should Be 70
+    }
+
+    It '54 leaves production, Drafts, and Published untouched on missing metadata' {
+        $context = New-DDRECReleaseContext -WorkspaceRoot $TestDrive -Config ([pscustomobject]@{}) -SessionId 'metadata-failure'
+        $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'safe-failure') -MissingField Edition
+        try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) | Out-Null } catch {}
+        $context.ProductionModified | Should Be $false
+        $context.Drafts.Count | Should Be 0
+        $context.Published.Count | Should Be 0
+    }
 }
 
 Describe 'DDREC release works without local Docker' {
