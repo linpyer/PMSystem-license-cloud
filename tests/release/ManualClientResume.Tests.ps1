@@ -20,39 +20,96 @@ function New-TestContext {
     return New-DDRECReleaseContext -WorkspaceRoot $workspace -Config $config -SessionId '20260823-165958'
 }
 
+function New-IncomingStatus([string]$name,[bool]$exists=$true,[bool]$regular=$true,[int64]$size=100,[string]$sha=('A'*64)){
+    return [pscustomobject]@{Exists=$exists;Regular=$regular;FileName=$(if($exists){$name}else{''});ExpectedFileName=$name;Size=$(if($exists){$size}else{0});SHA256=$(if($exists){$sha}else{''});Path="/incoming/$name"}
+}
+
 Describe 'Manual client upload contract' {
     It 'constructs a strict POSIX incoming directory and never Windows backslashes' {
         $paths=Get-DDRECClientIncomingPaths -Context (New-TestContext) -Metadata (New-TestMetadata)
         $paths.Directory|Should Be '/opt/pmsystem-license/incoming/client/20260823-165958'
         $paths.Path.Contains('\')|Should Be $false
+        $paths.FileName|Should Be 'DDREC-1.3.0-standard-Setup.exe'
+        $paths.LegacyFileName|Should Be 'DDREC-1.3.0-standard-Setup.exe.part'
+        $paths.AutoPath|Should Be $paths.LegacyPath
     }
     It 'rejects an unsafe session id' {
         $context=New-TestContext;$context.SessionId='../escape'
         (Test-ActionThrows {Get-DDRECClientIncomingPaths -Context $context -Metadata (New-TestMetadata)})|Should Be $true
     }
     It 'treats a missing Standard upload as invalid' {
-        $status=[pscustomobject]@{Exists=$false;Regular=$false;FileName='';Size=0;SHA256='';Path='x'}
+        $status=New-IncomingStatus 'DDREC-1.3.0-standard-Setup.exe' $false $false
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata)).Reason|Should Be '文件不存在'
     }
-    It 'blocks a partially uploaded Standard by exact size' {
-        $status=[pscustomobject]@{Exists=$true;Regular=$true;FileName='DDREC-1.3.0-standard-Setup.exe.part';Size=50;SHA256=('A'*64);Path='x'}
+    It 'accepts a canonical exe manual upload' {
+        $status=New-IncomingStatus 'DDREC-1.3.0-standard-Setup.exe'
+        (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata)).Valid|Should Be $true
+    }
+    It 'blocks a partially uploaded Standard exe by exact size' {
+        $status=New-IncomingStatus 'DDREC-1.3.0-standard-Setup.exe' $true $true 50
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata)).Reason|Should Be '文件大小不一致'
     }
-    It 'blocks a Standard upload with the wrong SHA' {
-        $status=[pscustomobject]@{Exists=$true;Regular=$true;FileName='DDREC-1.3.0-standard-Setup.exe.part';Size=100;SHA256=('C'*64);Path='x'}
+    It 'blocks a Standard exe upload with the wrong SHA' {
+        $status=New-IncomingStatus 'DDREC-1.3.0-standard-Setup.exe' $true $true 100 ('C'*64)
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata)).Reason|Should Be 'SHA256 不一致'
     }
-    It 'accepts Standard only when file name size and SHA all match' {
-        $status=[pscustomobject]@{Exists=$true;Regular=$true;FileName='DDREC-1.3.0-standard-Setup.exe.part';Size=100;SHA256=('a'*64);Path='x'}
+    It 'accepts the historical Standard part name' {
+        $status=New-IncomingStatus 'DDREC-1.3.0-standard-Setup.exe.part' $true $true 100 ('a'*64)
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata)).Valid|Should Be $true
     }
     It 'accepts License-Production with its exact lane file name' {
-        $status=[pscustomobject]@{Exists=$true;Regular=$true;FileName='DDREC-1.3.0-license-Setup.exe.part';Size=100;SHA256=('A'*64);Path='x'}
+        $status=New-IncomingStatus 'DDREC-1.3.0-license-Setup.exe'
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata 'license')).Valid|Should Be $true
+    }
+    It 'prefers canonical exe when exe and part are identical' {
+        $metadata=New-TestMetadata
+        $resolved=Resolve-DDRECIncomingCandidateStatus -CanonicalStatus (New-IncomingStatus $metadata.FileName) -LegacyStatus (New-IncomingStatus "$($metadata.FileName).part") -Metadata $metadata
+        $resolved.Valid|Should Be $true
+        $resolved.SelectedFileName|Should Be $metadata.FileName
+    }
+    It 'blocks conflicting exe and part candidates' {
+        $metadata=New-TestMetadata
+        $resolved=Resolve-DDRECIncomingCandidateStatus -CanonicalStatus (New-IncomingStatus $metadata.FileName) -LegacyStatus (New-IncomingStatus "$($metadata.FileName).part" $true $true 100 ('C'*64)) -Metadata $metadata
+        $resolved.Valid|Should Be $false
+        $resolved.Reason|Should Match '冲突'
     }
     It 'Q maps to a safe quit action' {(Get-DDRECManualUploadAction -InputText 'Q')|Should Be 'Quit'}
     It 'Enter maps to verification rather than success' {(Get-DDRECManualUploadAction -InputText '')|Should Be 'Check'}
     It 'invalid input is rejected' {(Get-DDRECManualUploadAction -InputText 'Y')|Should Be 'Invalid'}
+    It 'requires an explicit upload mode and gives Enter no default' {
+        (Get-DDRECClientUploadModeAction -InputText '1')|Should Be 'auto'
+        (Get-DDRECClientUploadModeAction -InputText '2')|Should Be 'manual'
+        (Get-DDRECClientUploadModeAction -InputText '0')|Should Be 'cancel'
+        (Get-DDRECClientUploadModeAction -InputText '')|Should Be 'invalid'
+    }
+}
+
+Describe 'Automatic client upload contract' {
+    BeforeEach {
+        $script:destinations=[Collections.Generic.List[string]]::new()
+        $script:initializer={param($context,$metadata)[pscustomobject]@{Directory='/opt/pmsystem-license/incoming/client/20260823-165958';AutoPath="/opt/pmsystem-license/incoming/client/20260823-165958/$($metadata.FileName).part"}}
+        $script:transfer={param($local,$destination)$script:destinations.Add($destination);[pscustomobject]@{ExitCode=0;Output=''}}
+        $script:status={param($context,$metadata)[pscustomobject]@{Valid=$true;SelectedFileName="$($metadata.FileName).part";ExpectedSize=$metadata.FileSize;ExpectedSHA256=$metadata.SHA256}}
+    }
+    It 'automatically uploads and verifies Standard through an internal part path' {
+        $context=New-TestContext;$context.Config|Add-Member -NotePropertyName ServerHost -NotePropertyValue 'root@example'
+        $result=Invoke-DDRECAutomaticClientUpload -Context $context -Metadata (New-TestMetadata) -DirectoryInitializer $script:initializer -TransferInvoker $script:transfer -StatusReader $script:status
+        $result.Action|Should Be 'Verified'
+        $script:destinations.Count|Should Be 1
+        $script:destinations[0]|Should Match '/DDREC-1\.3\.0-standard-Setup\.exe\.part$'
+    }
+    It 'automatically uploads and verifies License-Production' {
+        $context=New-TestContext;$context.Config|Add-Member -NotePropertyName ServerHost -NotePropertyValue 'root@example'
+        (Invoke-DDRECAutomaticClientUpload -Context $context -Metadata (New-TestMetadata 'license') -DirectoryInitializer $script:initializer -TransferInvoker $script:transfer -StatusReader $script:status).Action|Should Be 'Verified'
+        $script:destinations.Count|Should Be 1
+        $script:destinations[0]|Should Match '/DDREC-1\.3\.0-license-Setup\.exe\.part$'
+    }
+    It 'maps auto upload failure choices without a dangerous default' {
+        (Get-DDRECAutoUploadFailureAction '1')|Should Be 'Retry'
+        (Get-DDRECAutoUploadFailureAction '2')|Should Be 'Manual'
+        (Get-DDRECAutoUploadFailureAction '3')|Should Be 'Save'
+        (Get-DDRECAutoUploadFailureAction '')|Should Be 'Invalid'
+    }
 }
 
 Describe 'Persistent Resume state' {
@@ -99,6 +156,15 @@ Describe 'Persistent Resume state' {
         $item=[pscustomobject]@{Path=$metadata.Path;FileName=$metadata.FileName;Version=$metadata.Version;BuildNumber=$metadata.BuildNumber;GitCommit=$metadata.GitCommit;Edition=$metadata.Edition;Environment=$metadata.Environment;FileSize=$metadata.FileSize;SHA256=('F'*64)}
         (Test-ActionThrows {Assert-DDRECSessionClientMetadata -SessionItem $item -Metadata $metadata})|Should Be $true
     }
+    It 'persists and reads auto or manual upload mode' {
+        $state=[pscustomobject]@{ClientUploadMode='auto'}
+        (Get-DDRECSessionUploadMode -State $state)|Should Be 'auto'
+        Set-DDRECSessionUploadMode -State $state -Mode manual|Out-Null
+        (Get-DDRECSessionUploadMode -State $state)|Should Be 'manual'
+    }
+    It 'treats a historical schema-v1 session as manual' {
+        (Get-DDRECSessionUploadMode -State ([pscustomobject]@{SchemaVersion=1}))|Should Be 'manual'
+    }
 }
 
 Describe 'Immutable final and Draft safety' {
@@ -125,6 +191,19 @@ Describe 'Immutable final and Draft safety' {
         $text|Should Match 'mv -T -- "\$staged" "\$final"'
         $text|Should Match "existing immutable client package"
     }
+    It 'server installer accepts canonical exe first and keeps legacy part compatibility' {
+        $text=Get-Content (Join-Path $PSScriptRoot '..\..\deploy\production-release\install-client-package.sh') -Raw
+        $text|Should Match 'canonical_incoming="\$incoming_dir/\$file_name"'
+        $text|Should Match 'legacy_incoming="\$incoming_dir/\$file_name\.part"'
+        $text.IndexOf('incoming=$canonical_incoming')|Should BeLessThan $text.IndexOf('incoming=$legacy_incoming')
+        $text|Should Match 'canonical \.exe and legacy \.part conflict'
+    }
+    It 'incoming client staging remains outside the public download root' {
+        $text=Get-Content (Join-Path $PSScriptRoot '..\..\deploy\production-release\install-client-package.sh') -Raw
+        $text|Should Match 'incoming_dir="\$ROOT/incoming/client/\$session"'
+        $text|Should Match 'DOWNLOAD_ROOT=/var/www/ddrec-downloads'
+        $text|Should Not Match 'incoming_dir="\$DOWNLOAD_ROOT'
+    }
     It 'limits final installation to stable Standard or License paths' {
         $text=Get-Content (Join-Path $PSScriptRoot '..\..\deploy\production-release\install-client-package.sh') -Raw
         $text|Should Match 'releases/stable/standard'
@@ -136,9 +215,10 @@ Describe 'Immutable final and Draft safety' {
 Describe 'Release orchestration regression guards' {
     $releaseText=Get-Content (Join-Path $PSScriptRoot '..\..\scripts\release\release-all.ps1') -Raw
     $moduleText=Get-Content $modulePath -Raw
-    It 'does not SCP client packages from the client flow' {
-        $moduleText|Should Not Match 'SCP 上传客户端安装包'
-        $releaseText|Should Not Match 'Invoke-DDRECClientUpload'
+    It 'supports explicit automatic upload while retaining manual upload' {
+        $moduleText|Should Match 'Invoke-DDRECAutomaticClientUpload'
+        $releaseText|Should Match 'Select-ClientUploadMode'
+        $releaseText|Should Match 'Wait-DDRECManualClientUpload'
     }
     It 'creates the protected incoming directory before displaying the upload prompt' {
         $moduleText.IndexOf('install -d -o root -g root -m 0750')|Should BeGreaterThan -1
@@ -158,6 +238,25 @@ Describe 'Release orchestration regression guards' {
         $releaseText|Should Match '不会重新构建、上传或部署 Cloud'
         $resume=[regex]::Match($releaseText,'(?s)if\(\$Mode -eq ''Resume''\).*?(?=Write-DDRECLog -Context \$context -Message "发布 Session)').Value
         $resume|Should Not Match 'Invoke-DDRECCloudDeploy'
+    }
+    It 'keeps historical Resume packages pinned to the Session commit after client HEAD advances' {
+        $resumeTargets=[regex]::Match($releaseText,'(?s)function Get-ResumeTargets.*?(?=if\(\$Mode -eq ''Menu'')').Value
+        $resumeTargets|Should Match '-ExpectedCommit \(\[string\]\$State.ClientGitCommit\)'
+        $resume=[regex]::Match($releaseText,'(?s)if\(\$Mode -eq ''Resume''\).*?(?=Write-DDRECLog -Context \$context -Message "发布 Session)').Value
+        $resume|Should Not Match 'client HEAD 与 Session 不一致'
+    }
+    It 'uses POSIX helpers rather than Split-Path for remote incoming paths' {
+        $incoming=[regex]::Match($moduleText,'(?s)function Get-DDRECClientIncomingPaths.*?(?=function New-DDRECClientSessionItem)').Value
+        $incoming|Should Match 'Join-DDRECPosixPath'
+        $incoming|Should Not Match 'Split-Path'
+    }
+    It 'keeps automatic part files internal and manual prompts on the original exe name' {
+        $moduleText|Should Match 'AutoFileName = "\$\(\$Metadata.FileName\)\.part"'
+        $moduleText|Should Match '无需修改扩展名'
+    }
+    It 'allows auto failure to switch to manual without redeploying Cloud' {
+        $releaseText|Should Match '\$activeMode=''manual'''
+        $releaseText|Should Match '不会重新执行 Cloud 部署'
     }
     It 'keeps final PUBLISH as an exact explicit confirmation' {$releaseText|Should Match "-ceq 'PUBLISH'"}
     It 'never logs secrets through the session state schema' {

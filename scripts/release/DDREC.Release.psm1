@@ -129,11 +129,17 @@ function Get-DDRECClientIncomingPaths {
     }
     $root = ([string]$Context.Config.RemoteRoot).TrimEnd('/')
     if ($root -cne '/opt/pmsystem-license') { throw '客户端 incoming 根目录不符合生产安全契约。' }
-    $directory = "$root/incoming/client/$($Context.SessionId)"
+    $directory = Join-DDRECPosixPath -Base $root -Child @('incoming','client',[string]$Context.SessionId)
+    $canonicalPath = Join-DDRECPosixPath -Base $directory -Child @([string]$Metadata.FileName)
+    $legacyPath = "$canonicalPath.part"
     return [pscustomobject]@{
         Directory = $directory
-        FileName = "$($Metadata.FileName).part"
-        Path = "$directory/$($Metadata.FileName).part"
+        FileName = [string]$Metadata.FileName
+        Path = $canonicalPath
+        LegacyFileName = "$($Metadata.FileName).part"
+        LegacyPath = $legacyPath
+        AutoFileName = "$($Metadata.FileName).part"
+        AutoPath = $legacyPath
     }
 }
 
@@ -145,6 +151,7 @@ function New-DDRECClientSessionItem {
         BuildNumber=[int]$Metadata.BuildNumber; GitCommit=$Metadata.GitCommit; Edition=$Metadata.Edition
         Environment=$Metadata.Environment; FileSize=[int64]$Metadata.FileSize; SHA256=$Metadata.SHA256
         RemoteIncomingDirectory=$incoming.Directory; RemoteIncomingPath=$incoming.Path
+        RemoteIncomingLegacyPath=$incoming.LegacyPath
         RemoteFinalPath=$Target.RemotePath; DownloadUrl=$Target.Url; RelativePath=$Target.RelativePath
         Uploaded=$false; Installed=$false; Verified=$false; DraftId=$null; DraftStatus=$null; Published=$false
     }
@@ -154,7 +161,8 @@ function New-DDRECReleaseSessionState {
     param(
         [Parameter(Mandatory)]$Context,[Parameter(Mandatory)][string]$CloudGitCommit,
         [Parameter(Mandatory)][string]$CloudRelease,[Parameter(Mandatory)][string]$ClientGitCommit,
-        [Parameter(Mandatory)][string]$DbRevision,[object[]]$Targets=@(),[bool]$CloudDeployed=$false
+        [Parameter(Mandatory)][string]$DbRevision,[object[]]$Targets=@(),[bool]$CloudDeployed=$false,
+        [ValidateSet('auto','manual','')][string]$ClientUploadMode=''
     )
     $standard=$null; $license=$null
     foreach ($item in $Targets) {
@@ -166,10 +174,30 @@ function New-DDRECReleaseSessionState {
         CreatedAt=[DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffZ'); UpdatedAt=$null
         CloudGitCommit=$CloudGitCommit; CloudRelease=$CloudRelease; CloudDeployed=$CloudDeployed
         CurrentSwitched=$Context.CurrentSwitched; ClientGitCommit=$ClientGitCommit; DbRevision=$DbRevision
+        ClientUploadMode=$ClientUploadMode
         DatabaseModified=$Context.DatabaseModified; MigrationExecuted=$Context.MigrationExecuted; AdminReplaced=$Context.AdminReplaced
         CompletedStage=$(if($CloudDeployed){'CloudDeployed'}else{'Prepared'}); Standard=$standard; License=$license
         DraftCreated=$false; Published=$false
     }
+}
+
+function Get-DDRECSessionUploadMode {
+    param([Parameter(Mandatory)]$State)
+    $property=$State.PSObject.Properties['ClientUploadMode']
+    $mode=if($null -eq $property){''}else{[string]$property.Value}
+    if($mode -in @('auto','manual')){return $mode}
+    # Schema v1 sessions created before upload-mode support were manual-only.
+    return 'manual'
+}
+
+function Set-DDRECSessionUploadMode {
+    param([Parameter(Mandatory)]$State,[Parameter(Mandatory)][ValidateSet('auto','manual')][string]$Mode)
+    if($null -eq $State.PSObject.Properties['ClientUploadMode']){
+        $State|Add-Member -NotePropertyName ClientUploadMode -NotePropertyValue $Mode
+    }else{
+        $State.ClientUploadMode=$Mode
+    }
+    return $State
 }
 
 function Update-DDRECReleaseSessionFromContext {
@@ -286,6 +314,33 @@ function Get-DDRECModePlan {
         'Cloud'             { return [pscustomobject]@{Cloud=$true; Lanes=@()} }
         'CloudStandard'     { return [pscustomobject]@{Cloud=$true; Lanes=@('standard')} }
         'CloudBoth'         { return [pscustomobject]@{Cloud=$true; Lanes=@('standard','license-production')} }
+    }
+}
+
+function Get-DDRECMainMenuAction {
+    param([AllowEmptyString()][string]$InputText)
+    switch(($InputText ?? '').Trim()){
+        '1'{return 'Standard'}
+        '2'{return 'LicenseProduction'}
+        '3'{return 'BothClients'}
+        '4'{return 'Cloud'}
+        '5'{return 'CloudStandard'}
+        '6'{return 'CloudBoth'}
+        '7'{return 'DryRun'}
+        '8'{return 'Status'}
+        '9'{return 'Resume'}
+        '0'{return 'Exit'}
+        default{return 'Invalid'}
+    }
+}
+
+function Get-DDRECClientUploadModeAction {
+    param([AllowEmptyString()][string]$InputText)
+    switch(($InputText ?? '').Trim()){
+        '1'{return 'auto'}
+        '2'{return 'manual'}
+        '0'{return 'cancel'}
+        default{return 'invalid'}
     }
 }
 
@@ -802,6 +857,22 @@ function ConvertTo-DDRECShellSingleQuote {
     return "'" + $Value.Replace("'", $replacement) + "'"
 }
 
+function Join-DDRECPosixPath {
+    param(
+        [Parameter(Mandatory)][string]$Base,
+        [Parameter(Mandatory)][string[]]$Child
+    )
+    if($Base -notmatch '^/' -or $Base.Contains('\')){throw "POSIX 基础路径无效：$Base"}
+    $result=$Base.TrimEnd('/')
+    foreach($segment in $Child){
+        if([string]::IsNullOrWhiteSpace($segment) -or $segment -in @('.','..') -or $segment.Contains('/') -or $segment.Contains('\')){
+            throw "POSIX 路径片段无效：$segment"
+        }
+        $result="$result/$segment"
+    }
+    return $result
+}
+
 function Get-DDRECRemoteState {
     param([Parameter(Mandatory)]$Context)
     $root = ConvertTo-DDRECShellSingleQuote ([string]$Context.Config.RemoteRoot)
@@ -970,39 +1041,90 @@ printf 'directory=%s\nmode=%s\nowner=%s\n' "`$directory" "`$(stat -c %a "`$direc
 function Get-DDRECRemoteIncomingStatus {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata)
     $paths=Get-DDRECClientIncomingPaths -Context $Context -Metadata $Metadata
-    $pathQ=ConvertTo-DDRECShellSingleQuote $paths.Path
-    $nameQ=ConvertTo-DDRECShellSingleQuote $paths.FileName
+    $canonicalQ=ConvertTo-DDRECShellSingleQuote $paths.Path
+    $legacyQ=ConvertTo-DDRECShellSingleQuote $paths.LegacyPath
     $command=@"
 set -Eeuo pipefail
-path=$pathQ
-expected_name=$nameQ
-printf 'expectedName=%s\n' "`$expected_name"
-if test ! -e "`$path"; then printf 'exists=false\nregular=false\n'; exit 0; fi
-printf 'exists=true\n'
-if test -f "`$path" && test ! -L "`$path"; then printf 'regular=true\n'; else printf 'regular=false\n'; exit 0; fi
-printf 'actualName=%s\n' "`$(basename -- "`$path")"
-printf 'size=%s\n' "`$(stat -c %s -- "`$path")"
-printf 'sha256=%s\n' "`$(sha256sum -- "`$path" | awk '{print `$1}')"
+inspect_file() {
+  prefix="`$1"
+  path="`$2"
+  if test ! -e "`$path"; then printf '%s.exists=false\n%s.regular=false\n' "`$prefix" "`$prefix"; return; fi
+  printf '%s.exists=true\n' "`$prefix"
+  if test -f "`$path" && test ! -L "`$path"; then
+    printf '%s.regular=true\n' "`$prefix"
+  else
+    printf '%s.regular=false\n' "`$prefix"
+    return
+  fi
+  printf '%s.actualName=%s\n' "`$prefix" "`$(basename -- "`$path")"
+  printf '%s.size=%s\n' "`$prefix" "`$(stat -c %s -- "`$path")"
+  printf '%s.sha256=%s\n' "`$prefix" "`$(sha256sum -- "`$path" | awk '{print `$1}')"
+}
+inspect_file canonical $canonicalQ
+inspect_file legacy $legacyQ
 "@
     $raw=(Invoke-DDRECSsh -Context $Context -Command $command -NoRetry).Output
     $values=@{}
     foreach($line in $raw -split "`r?`n"){if($line -match '^([^=]+)=(.*)$'){$values[$matches[1]]=$matches[2]}}
-    $status=[pscustomobject]@{
-        Exists=$values['exists'] -eq 'true'; Regular=$values['regular'] -eq 'true'; FileName=[string]$values['actualName']
-        ExpectedFileName=$paths.FileName; Size=$(if($values.ContainsKey('size')){[int64]$values['size']}else{[int64]0})
-        SHA256=([string]$values['sha256']).ToUpperInvariant(); Path=$paths.Path
+    $canonical=[pscustomobject]@{
+        Exists=$values['canonical.exists'] -eq 'true'; Regular=$values['canonical.regular'] -eq 'true'
+        FileName=[string]$values['canonical.actualName']; ExpectedFileName=$paths.FileName
+        Size=$(if($values.ContainsKey('canonical.size')){[int64]$values['canonical.size']}else{[int64]0})
+        SHA256=([string]$values['canonical.sha256']).ToUpperInvariant(); Path=$paths.Path
     }
-    return Test-DDRECIncomingPackageStatus -Status $status -Metadata $Metadata
+    $legacy=[pscustomobject]@{
+        Exists=$values['legacy.exists'] -eq 'true'; Regular=$values['legacy.regular'] -eq 'true'
+        FileName=[string]$values['legacy.actualName']; ExpectedFileName=$paths.LegacyFileName
+        Size=$(if($values.ContainsKey('legacy.size')){[int64]$values['legacy.size']}else{[int64]0})
+        SHA256=([string]$values['legacy.sha256']).ToUpperInvariant(); Path=$paths.LegacyPath
+    }
+    return Resolve-DDRECIncomingCandidateStatus -CanonicalStatus $canonical -LegacyStatus $legacy -Metadata $Metadata
 }
 
 function Test-DDRECIncomingPackageStatus {
     param([Parameter(Mandatory)]$Status,[Parameter(Mandatory)]$Metadata)
-    $reason=if(-not $Status.Exists){'文件不存在'}elseif(-not $Status.Regular){'目标不是普通文件或是符号链接'}elseif($Status.FileName -cne "$($Metadata.FileName).part"){'文件名不一致'}elseif([int64]$Status.Size -ne [int64]$Metadata.FileSize){'文件大小不一致'}elseif(([string]$Status.SHA256).ToUpperInvariant() -cne ([string]$Metadata.SHA256).ToUpperInvariant()){'SHA256 不一致'}else{$null}
+    $expectedName=if($null -ne $Status.PSObject.Properties['ExpectedFileName']){[string]$Status.ExpectedFileName}else{[string]$Metadata.FileName}
+    $reason=if(-not $Status.Exists){'文件不存在'}elseif(-not $Status.Regular){'目标不是普通文件或是符号链接'}elseif($Status.FileName -cne $expectedName){'文件名不一致'}elseif([int64]$Status.Size -ne [int64]$Metadata.FileSize){'文件大小不一致'}elseif(([string]$Status.SHA256).ToUpperInvariant() -cne ([string]$Metadata.SHA256).ToUpperInvariant()){'SHA256 不一致'}else{$null}
     return [pscustomobject]@{
         Valid=[string]::IsNullOrEmpty($reason); Reason=$reason; Exists=[bool]$Status.Exists; Regular=[bool]$Status.Regular
-        FileName=[string]$Status.FileName; ExpectedFileName="$($Metadata.FileName).part"
+        FileName=[string]$Status.FileName; ExpectedFileName=$expectedName
         Size=[int64]$Status.Size; ExpectedSize=[int64]$Metadata.FileSize
         SHA256=([string]$Status.SHA256).ToUpperInvariant(); ExpectedSHA256=([string]$Metadata.SHA256).ToUpperInvariant(); Path=$Status.Path
+    }
+}
+
+function Resolve-DDRECIncomingCandidateStatus {
+    param(
+        [Parameter(Mandatory)]$CanonicalStatus,
+        [Parameter(Mandatory)]$LegacyStatus,
+        [Parameter(Mandatory)]$Metadata
+    )
+    $canonical=Test-DDRECIncomingPackageStatus -Status $CanonicalStatus -Metadata $Metadata
+    $legacy=Test-DDRECIncomingPackageStatus -Status $LegacyStatus -Metadata $Metadata
+    if($canonical.Exists -and $legacy.Exists){
+        if(-not $canonical.Valid -or -not $legacy.Valid){
+            return [pscustomobject]@{
+                Valid=$false;Reason="规范 .exe 与历史 .part 冲突：exe=$($canonical.Reason ?? 'PASS')；part=$($legacy.Reason ?? 'PASS')"
+                Exists=$true;Regular=($canonical.Regular -and $legacy.Regular);FileName="$($canonical.FileName), $($legacy.FileName)"
+                ExpectedFileName=$Metadata.FileName;Size=$canonical.Size;ExpectedSize=[int64]$Metadata.FileSize
+                SHA256=$canonical.SHA256;ExpectedSHA256=$Metadata.SHA256;Path=$canonical.Path
+                SelectedFileName=$null;SelectedPath=$null;Canonical=$canonical;Legacy=$legacy
+            }
+        }
+        $selected=$canonical
+    }elseif($canonical.Exists){
+        $selected=$canonical
+    }elseif($legacy.Exists){
+        $selected=$legacy
+    }else{
+        $selected=$canonical
+    }
+    return [pscustomobject]@{
+        Valid=$selected.Valid;Reason=$selected.Reason;Exists=$selected.Exists;Regular=$selected.Regular
+        FileName=$selected.FileName;ExpectedFileName=$selected.ExpectedFileName;Size=$selected.Size
+        ExpectedSize=$selected.ExpectedSize;SHA256=$selected.SHA256;ExpectedSHA256=$selected.ExpectedSHA256
+        Path=$selected.Path;SelectedFileName=$(if($selected.Valid){$selected.FileName}else{$null})
+        SelectedPath=$(if($selected.Valid){$selected.Path}else{$null});Canonical=$canonical;Legacy=$legacy
     }
 }
 
@@ -1019,8 +1141,43 @@ function Show-DDRECManualUploadPrompt {
     Write-Host "`n远端文件名：`n$($Paths.FileName)"
     Write-Host "`n大小：`n$($Metadata.FileSize) bytes"
     Write-Host "`nSHA256：`n$($Metadata.SHA256)"
-    Write-Host "`n请使用 WinSCP / SFTP 上传到上述 incoming 目录；不要上传到最终下载目录。"
+    Write-Host "`n请使用 WinSCP / SFTP 直接上传原 EXE 文件；无需修改扩展名。"
+    Write-Host '不要上传到最终下载目录。'
     Write-Host "`n上传完成后：`n[Enter] 验证并继续`n[R] 重新检查`n[Q] 保存进度并退出"
+}
+
+function Get-DDRECAutoUploadFailureAction {
+    param([AllowEmptyString()][string]$InputText)
+    switch(($InputText ?? '').Trim()){
+        '1'{return 'Retry'}
+        '2'{return 'Manual'}
+        '3'{return 'Save'}
+        default{return 'Invalid'}
+    }
+}
+
+function Invoke-DDRECAutomaticClientUpload {
+    param(
+        [Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata,
+        [scriptblock]$DirectoryInitializer,[scriptblock]$TransferInvoker,[scriptblock]$StatusReader
+    )
+    $paths=if($DirectoryInitializer){& $DirectoryInitializer $Context $Metadata}else{Initialize-DDRECClientIncomingDirectory -Context $Context -Metadata $Metadata}
+    $server=[string]$Context.Config.ServerHost
+    $destination="${server}:$($paths.AutoPath)"
+    Write-DDRECLog -Context $Context -Message "自动上传客户端安装包：$($Metadata.FileName) -> $($paths.AutoPath)"
+    try{
+        $copy=if($TransferInvoker){& $TransferInvoker ([string]$Metadata.Path) $destination}else{Invoke-DDRECNative scp @('-o','BatchMode=yes',[string]$Metadata.Path,$destination) -AllowFailure -NoLogOutput -Context $Context}
+    }catch{
+        return [pscustomobject]@{Action='Failed';Reason="无法启动 SCP/SFTP 传输：$($_.Exception.Message)";Status=$null;Paths=$paths}
+    }
+    if($copy.ExitCode -ne 0){
+        return [pscustomobject]@{Action='Failed';Reason="SCP/SFTP 传输失败（ExitCode=$($copy.ExitCode)）";Status=$null;Paths=$paths}
+    }
+    $status=if($StatusReader){& $StatusReader $Context $Metadata}else{Get-DDRECRemoteIncomingStatus -Context $Context -Metadata $Metadata}
+    if(-not $status.Valid){
+        return [pscustomobject]@{Action='Failed';Reason=$status.Reason;Status=$status;Paths=$paths}
+    }
+    return [pscustomobject]@{Action='Verified';Reason=$null;Status=$status;Paths=$paths}
 }
 
 function Get-DDRECManualUploadAction {

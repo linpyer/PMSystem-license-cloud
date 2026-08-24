@@ -36,11 +36,15 @@ case "$final" in
 esac
 
 incoming_dir="$ROOT/incoming/client/$session"
-incoming="$incoming_dir/$file_name.part"
+canonical_incoming="$incoming_dir/$file_name"
+legacy_incoming="$incoming_dir/$file_name.part"
+incoming=
 final_dir=$(dirname -- "$final")
 staged="$final_dir/.$file_name.$session.part"
 
-[[ $(realpath -m -- "$incoming") == "$incoming" ]] || { echo 'ERROR: incoming path escaped its root' >&2; exit 40; }
+[[ -d $incoming_dir && ! -L $incoming_dir ]] || { echo 'ERROR: incoming client directory is missing or is a symlink' >&2; exit 40; }
+[[ $(realpath -m -- "$canonical_incoming") == "$canonical_incoming" ]] || { echo 'ERROR: canonical incoming path escaped its root' >&2; exit 40; }
+[[ $(realpath -m -- "$legacy_incoming") == "$legacy_incoming" ]] || { echo 'ERROR: legacy incoming path escaped its root' >&2; exit 40; }
 [[ $(realpath -m -- "$final") == "$final" ]] || { echo 'ERROR: final path escaped its root' >&2; exit 40; }
 
 exec 9>"$ROOT/.deploy.lock"
@@ -55,12 +59,30 @@ verify_file() {
   [[ $actual_sha == "$expected_sha" ]] || { echo "ERROR: $label SHA256 mismatch: actual=$actual_sha expected=$expected_sha" >&2; return 1; }
 }
 
+select_incoming() {
+  local canonical_exists=false legacy_exists=false
+  [[ -e $canonical_incoming ]] && canonical_exists=true
+  [[ -e $legacy_incoming ]] && legacy_exists=true
+  if [[ $canonical_exists == true && $legacy_exists == true ]]; then
+    verify_file "$canonical_incoming" 'canonical incoming client package' || return 1
+    verify_file "$legacy_incoming" 'legacy incoming client package' || return 1
+    incoming=$canonical_incoming
+  elif [[ $canonical_exists == true ]]; then
+    incoming=$canonical_incoming
+  else
+    incoming=$legacy_incoming
+  fi
+}
+
+select_incoming || { echo 'ERROR: canonical .exe and legacy .part conflict' >&2; exit 40; }
+
 if [[ -e $final ]]; then
   verify_file "$final" 'existing immutable client package' || exit 40
-  if [[ -e $incoming ]]; then
+  if [[ -n $incoming && -e $incoming ]]; then
     verify_file "$incoming" 'incoming client package' || exit 40
     rm -f -- "$incoming"
   fi
+  if [[ $legacy_incoming != "$incoming" && -e $legacy_incoming ]]; then rm -f -- "$legacy_incoming"; fi
   printf 'result=reused\npath=%s\nsize=%s\nsha256=%s\n' "$final" "$expected_size" "$expected_sha"
   exit 0
 fi
@@ -73,4 +95,5 @@ verify_file "$staged" 'staged client package' || { rm -f -- "$staged"; exit 40; 
 mv -T -- "$staged" "$final"
 verify_file "$final" 'installed client package' || exit 40
 rm -f -- "$incoming"
+if [[ $legacy_incoming != "$incoming" && -e $legacy_incoming ]]; then rm -f -- "$legacy_incoming"; fi
 printf 'result=installed\npath=%s\nsize=%s\nsha256=%s\n' "$final" "$expected_size" "$expected_sha"

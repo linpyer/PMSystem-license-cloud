@@ -295,15 +295,36 @@ Describe 'DDREC release works without local Docker' {
         $candidate = Get-DDRECInstallerCandidate -ClientRoot (Join-Path $script:workspaceRoot 'client') -Lane standard
         ($null -ne $candidate) | Should Be $true
     }
-    It '39 menu exit is handled before assigning the validated mode variable' {
+    It '39 menu uses a stable loop and captures each isolated task exit code' {
         $text = Get-Content -LiteralPath $script:releaseScript -Raw
-        $exitIndex = $text.IndexOf("if(`$selectedMode -eq 'Exit')")
-        $assignIndex = $text.IndexOf('$Mode=$selectedMode')
-        ($exitIndex -ge 0 -and $assignIndex -gt $exitIndex) | Should Be $true
+        $menu=[regex]::Match($text,'(?s)function Invoke-ReleaseMenuLoop.*?(?=function Select-ClientUploadMode)').Value
+        $menu|Should Match 'while\(\$true\)'
+        $menu|Should Match "if\(\`$selectedMode -eq 'Exit'\)\{return"
+        $menu|Should Match '& \$pwsh @arguments'
+        $menu|Should Match '\$taskExitCode=\$LASTEXITCODE'
+        $menu|Should Match '按 Enter 返回主菜单'
     }
     It '40 menu reads the client version from the client repository' {
         $text = Get-Content -LiteralPath $script:releaseScript -Raw
         $text | Should Match 'Push-Location \$context\.ClientRoot'
         $text | Should Match '无法读取客户端版本'
+    }
+    It '41 only menu zero maps to Exit and ordinary actions remain task modes' {
+        (Get-DDRECMainMenuAction -InputText '0')|Should Be 'Exit'
+        (Get-DDRECMainMenuAction -InputText '7')|Should Be 'DryRun'
+        (Get-DDRECMainMenuAction -InputText '8')|Should Be 'Status'
+        (Get-DDRECMainMenuAction -InputText '9')|Should Be 'Resume'
+        (Get-DDRECMainMenuAction -InputText '')|Should Be 'Invalid'
+    }
+    It '42 BAT does not recursively relaunch itself and has no normal-exit second pause' {
+        $bat=Get-Content -LiteralPath (Join-Path $script:workspaceRoot 'DDREC-Release.bat') -Raw -Encoding ASCII
+        $bat|Should Not Match '(?im)^\s*(call|start)\s+.*DDREC-Release\.bat'
+        ([regex]::Matches($bat,'(?im)^\s*pause\s*$')).Count|Should Be 3
+        $bat|Should Match 'if not "%DDREC_EXIT%"=="0" \('
+    }
+    It '43 PowerShell owns the single return-to-menu prompt' {
+        $text=Get-Content -LiteralPath $script:releaseScript -Raw
+        ([regex]::Matches($text,'按 Enter 返回主菜单')).Count|Should Be 1
+        $text|Should Not Match '(?im)^\s*pause\s*$'
     }
 }

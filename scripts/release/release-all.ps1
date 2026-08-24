@@ -4,6 +4,8 @@ param(
     [string]$Mode = 'Menu',
     [ValidateSet('Standard','LicenseProduction','BothClients','Cloud','CloudStandard','CloudBoth')]
     [string]$DryRunScope = 'CloudBoth',
+    [ValidateSet('','auto','manual')]
+    [string]$ClientUploadMode = '',
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'production-config.json'),
     [string]$ResumeSessionId,
     [switch]$NonInteractive
@@ -60,20 +62,11 @@ function Select-MenuMode {
 [9] 继续未完成发布 / Resume Release
 [0] 退出
 '@
-    $result = switch ((Read-Host '选择').Trim()) {
-        '1' { 'Standard' }
-        '2' { 'LicenseProduction' }
-        '3' { 'BothClients' }
-        '4' { 'Cloud' }
-        '5' { 'CloudStandard' }
-        '6' { 'CloudBoth' }
-        '7' { 'DryRun' }
-        '8' { 'Status' }
-        '9' { 'Resume' }
-        '0' { 'Exit' }
-        default { throw '菜单选择无效。' }
+    while($true){
+        $result=Get-DDRECMainMenuAction -InputText (Read-Host '请选择 [0-9]')
+        if($result -ne 'Invalid'){return $result}
+        Write-Host '菜单选择无效，请输入 0～9。' -ForegroundColor Yellow
     }
-    return $result
 }
 
 function Select-DryRunScope {
@@ -88,6 +81,66 @@ function Select-DryRunScope {
         default { 'CloudBoth' }
     }
     return $result
+}
+
+function Invoke-ReleaseMenuLoop {
+    $pwsh=Join-Path $PSHOME 'pwsh.exe'
+    if(-not (Test-Path -LiteralPath $pwsh -PathType Leaf)){throw "PowerShell 7 运行文件不存在：$pwsh"}
+    while($true){
+        try{
+            $menuClientState=Get-DDRECGitState -Repository $context.ClientRoot
+            $menuCloudState=Get-DDRECGitState -Repository $context.CloudRoot
+        }catch{
+            throw "无法读取本地发布仓库状态：$($_.Exception.Message)"
+        }
+        try{
+            $menuRemoteState=Get-DDRECRemoteState -Context $context
+        }catch{
+            Write-DDRECLog -Context $context -Level WARN -Message "主菜单暂时无法读取生产状态：$($_.Exception.Message)"
+            $menuRemoteState=[pscustomobject]@{ApiStatus='不可用';Current='不可用'}
+        }
+        $selectedMode=Select-MenuMode -ClientState $menuClientState -CloudState $menuCloudState -RemoteState $menuRemoteState
+        if($selectedMode -eq 'Exit'){return $exitCodes.Success}
+        $arguments=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$PSCommandPath,'-Mode',$selectedMode,'-ConfigPath',$ConfigPath)
+        & $pwsh @arguments
+        $taskExitCode=$LASTEXITCODE
+        Write-DDRECLog -Context $context -Message "菜单任务结束：Mode=$selectedMode ExitCode=$taskExitCode"
+        Write-Header '本次任务已结束'
+        if($taskExitCode -eq 0){
+            Write-Host '本次任务执行成功。' -ForegroundColor Green
+        }else{
+            Write-Host "本次任务已停止或失败。ExitCode = $taskExitCode" -ForegroundColor Yellow
+            Write-Host '生产状态请参考以上报告。'
+        }
+        [void](Read-Host '按 Enter 返回主菜单')
+    }
+}
+
+function Select-ClientUploadMode {
+    param([string]$CurrentMode='')
+    if($NonInteractive){
+        if($ClientUploadMode -notin @('auto','manual')){throw '非交互客户端发布必须明确指定 -ClientUploadMode auto 或 manual。'}
+        return $ClientUploadMode
+    }
+    Write-Header '客户端安装包上传方式'
+    if($CurrentMode -in @('auto','manual')){
+        $display=if($CurrentMode -eq 'auto'){'自动'}else{'手动'}
+        Write-Host "当前 Session 上传模式：$display（客户端尚未完成时可切换）`n"
+    }
+    Write-Host @'
+[1] 自动上传
+    脚本自动将安装包上传到服务器并完成校验
+
+[2] 手动上传
+    使用 WinSCP / SFTP 手动上传，脚本负责后续校验
+
+[0] 取消
+'@
+    while($true){
+        $selection=Get-DDRECClientUploadModeAction -InputText (Read-Host '请选择 [1/2/0]')
+        if($selection -ne 'invalid'){return $selection}
+        Write-Host '必须明确选择 1、2 或 0；直接按 Enter 不会启动网络传输。' -ForegroundColor Yellow
+    }
 }
 
 function Select-Installer {
@@ -180,20 +233,53 @@ function Save-ReleaseSession {
 }
 
 function Invoke-ClientPackageStages {
-    param([object[]]$Targets,$State)
+    param([object[]]$Targets,$State,[Parameter(Mandatory)][ValidateSet('auto','manual')][string]$UploadMode)
+    $activeMode=$UploadMode
+    Set-DDRECSessionUploadMode -State $State -Mode $activeMode|Out-Null
+    Save-ReleaseSession -State $State -CompletedStage $State.CompletedStage
     foreach($item in $Targets){
         $stateItem=Get-SessionClientItem -State $State -Lane $item.Lane
-        $script:stage="客户端人工上传：$($item.Lane)"
+        $script:stage="客户端安装包上传：$($item.Lane)"
         $remote=Test-DDRECRemoteClientTarget -Context $context -Target $item.Target -Metadata $item.Metadata
         if($remote.Exists){
             $stateItem.Uploaded=$true; $stateItem.Installed=$true
             Write-DDRECLog -Context $context -Message "$($item.Lane) 最终不可变文件已存在且 size/SHA 一致，幂等复用。"
         } else {
-            $upload=Wait-DDRECManualClientUpload -Context $context -Metadata $item.Metadata -Lane $item.Lane -NonInteractive:$NonInteractive
-            if($upload.Action -ne 'Verified'){
-                Save-ReleaseSession -State $State -CompletedStage "Awaiting-$($item.Lane)-Upload"
-                Write-DDRECLog -Context $context -Level WARN -Message "Cloud部署：成功；客户端发布：未完成；线上API：正常。已保存 Session，可使用 Resume Release 继续。"
-                return $false
+            while($true){
+                if($activeMode -eq 'manual'){
+                    $upload=Wait-DDRECManualClientUpload -Context $context -Metadata $item.Metadata -Lane $item.Lane -NonInteractive:$NonInteractive
+                    if($upload.Action -ne 'Verified'){
+                        Save-ReleaseSession -State $State -CompletedStage "Awaiting-$($item.Lane)-Upload"
+                        Write-DDRECLog -Context $context -Level WARN -Message "Cloud部署：成功；客户端发布：未完成；线上API：正常。已保存 Session，可使用 Resume Release 继续。"
+                        return $false
+                    }
+                    break
+                }
+                $upload=Invoke-DDRECAutomaticClientUpload -Context $context -Metadata $item.Metadata
+                if($upload.Action -eq 'Verified'){
+                    Write-Host "自动上传验证 PASS：$($upload.Status.SelectedFileName) / $($upload.Status.ExpectedSize) bytes / $($upload.Status.ExpectedSHA256)" -ForegroundColor Green
+                    break
+                }
+                Write-Host "`n自动上传失败：$($upload.Reason)" -ForegroundColor Yellow
+                if($NonInteractive){
+                    Save-ReleaseSession -State $State -CompletedStage "Awaiting-$($item.Lane)-Upload"
+                    return $false
+                }
+                Write-Host "[1] 重试自动上传`n[2] 切换为人工上传`n[3] 保存 Session 并返回主菜单"
+                $failureAction=Get-DDRECAutoUploadFailureAction -InputText (Read-Host '请选择 [1/2/3]')
+                if($failureAction -eq 'Retry'){continue}
+                if($failureAction -eq 'Manual'){
+                    $activeMode='manual'
+                    Set-DDRECSessionUploadMode -State $State -Mode manual|Out-Null
+                    Save-ReleaseSession -State $State -CompletedStage "Awaiting-$($item.Lane)-Upload"
+                    Write-DDRECLog -Context $context -Message '客户端上传模式已从 auto 切换为 manual；不会重新执行 Cloud 部署。'
+                    continue
+                }
+                if($failureAction -eq 'Save'){
+                    Save-ReleaseSession -State $State -CompletedStage "Awaiting-$($item.Lane)-Upload"
+                    return $false
+                }
+                Write-Host '请输入 1、2 或 3。' -ForegroundColor Yellow
             }
             $stateItem.Uploaded=$true
             Save-ReleaseSession -State $State -CompletedStage "$($item.Lane)-IncomingVerified"
@@ -208,7 +294,7 @@ function Invoke-ClientPackageStages {
         $item.Signed=Invoke-DDRECManifestSigning -Context $context -Metadata $item.Metadata
         $stateItem.Verified=$true
         Save-ReleaseSession -State $State -CompletedStage "$($item.Lane)-DownloadVerified"
-        Add-DDRECStage -Context $context -Stage "$($item.Lane) 人工上传/SHA/原子安装/HTTP 200/Range 206/签名"
+        Add-DDRECStage -Context $context -Stage "$($item.Lane) $activeMode 上传/SHA/原子安装/HTTP 200/Range 206/签名"
     }
     Merge-DDRECReleaseSessionContext -Context $context -State $State | Out-Null
     return $true
@@ -279,6 +365,10 @@ function Get-ResumeTargets {
     return $items
 }
 
+if($Mode -eq 'Menu'){
+    exit (Invoke-ReleaseMenuLoop)
+}
+
 try {
     $stage='读取 Git 状态'
     $clientState=Get-DDRECGitState -Repository $context.ClientRoot
@@ -286,11 +376,6 @@ try {
     $stage='读取生产状态'
     $remoteState=Get-DDRECRemoteState -Context $context
 
-    if($Mode -eq 'Menu'){
-        $selectedMode=Select-MenuMode -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState
-        if($selectedMode -eq 'Exit'){exit $exitCodes.Success}
-        $Mode=$selectedMode
-    }
     if($Mode -eq 'Resume'){
         if([string]::IsNullOrWhiteSpace($ResumeSessionId)){
             $latest=Get-DDRECLatestIncompleteSessionState -Context $context
@@ -302,19 +387,32 @@ try {
         $stage='读取并验证 Resume Session'
         $sessionState=Read-DDRECReleaseSessionState -Context $context -SessionId $ResumeSessionId
         Assert-DDRECGitReleaseState -State $clientState -RequiredBranch $config.RequiredBranch | Out-Null
-        if($clientState.Head -cne [string]$sessionState.ClientGitCommit){throw 'Resume 阻止：当前 client HEAD 与 Session 不一致。'}
         Assert-DDRECResumeProductionState -State $sessionState -RemoteState $remoteState | Out-Null
         if(-not (Test-Path -LiteralPath $config.UpdatePrivateKey -PathType Leaf)){throw '本地更新签名私钥不存在。'}
         Merge-DDRECReleaseSessionContext -Context $context -State $sessionState | Out-Null
         Write-Header '继续未完成发布'
         [pscustomobject]@{
             Session=$sessionState.SessionId;Cloud='已部署成功';Current=$remoteState.Current;ApiCommit=$remoteState.BuildCommit
-            ClientUploaded=([bool]$sessionState.Standard.Uploaded -and [bool]$sessionState.License.Uploaded)
+            ClientUploaded=$context.ClientUploaded
             DraftCreated=$sessionState.DraftCreated;Published=$sessionState.Published;CompletedStage=$sessionState.CompletedStage
         }|Format-List
-        Write-DDRECLog -Context $context -Message 'Resume 仅从客户端人工上传阶段继续；不会重新构建、上传或部署 Cloud。'
+        $resumeUploadMode=Get-DDRECSessionUploadMode -State $sessionState
+        $resumeUploadModeDisplay=if($resumeUploadMode -eq 'auto'){'自动'}else{'手动'}
+        Write-Host "客户端上传模式：$resumeUploadModeDisplay"
+        Write-DDRECLog -Context $context -Message "Resume 使用 Session 固定的客户端 GitCommit=$($sessionState.ClientGitCommit) 重新验证原安装包；不会使用当前 HEAD 替换 Session 包。"
+        Write-DDRECLog -Context $context -Message 'Resume 仅从客户端上传/Draft 阶段继续；不会重新构建、上传或部署 Cloud。'
         $targets=Get-ResumeTargets -State $sessionState
-        if(-not (Invoke-ClientPackageStages -Targets $targets -State $sessionState)){exit $exitCodes.Cancelled}
+        $incompleteClientItems=@(@($sessionState.Standard,$sessionState.License)|Where-Object{$null -ne $_ -and -not ([bool]$_.Installed -and [bool]$_.Verified)})
+        if($incompleteClientItems.Count -gt 0){
+            $resumeUploadMode=Select-ClientUploadMode -CurrentMode $resumeUploadMode
+            if($resumeUploadMode -eq 'cancel'){
+                Write-DDRECLog -Context $context -Level WARN -Message '用户取消 Resume 客户端上传；Session 已保留。'
+                exit $exitCodes.Cancelled
+            }
+            Set-DDRECSessionUploadMode -State $sessionState -Mode $resumeUploadMode|Out-Null
+            Save-ReleaseSession -State $sessionState -CompletedStage $sessionState.CompletedStage
+        }
+        if(-not (Invoke-ClientPackageStages -Targets $targets -State $sessionState -UploadMode $resumeUploadMode)){exit $exitCodes.Cancelled}
         Invoke-ClientDraftAndPublishStages -Targets $targets -State $sessionState
         Write-DDRECLog -Context $context -Message "Resume 流程完成。日志：$($context.LogPath)"
         exit $exitCodes.Success
@@ -391,6 +489,15 @@ try {
         exit $exitCodes.Success
     }
 
+    $selectedClientUploadMode=''
+    if($targets.Count -gt 0){
+        $selectedClientUploadMode=Select-ClientUploadMode
+        if($selectedClientUploadMode -eq 'cancel'){
+            Write-DDRECLog -Context $context -Level WARN -Message '用户取消客户端上传方式选择；生产未修改。'
+            exit $exitCodes.Cancelled
+        }
+    }
+
     Show-Plan -Plan $plan -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState -MigrationPlan $migrationPlan -Packages $package -Targets $targets
     if($NonInteractive -or (Read-Host '请输入 DEPLOY 才允许生产写操作') -cne 'DEPLOY'){
         Write-DDRECLog -Context $context -Level WARN -Message '用户取消 DEPLOY；生产未修改。'
@@ -406,7 +513,7 @@ try {
     if($targets.Count -gt 0){
         $sessionCloudCommit=if($plan.Cloud){$cloudState.Head}else{$remoteState.BuildCommit}
         $sessionCloudRelease=if($plan.Cloud){"$($config.RemoteRoot)/release/$cloudVersion-$($cloudState.Head.Substring(0,7))"}else{$remoteState.Current}
-        $sessionState=New-DDRECReleaseSessionState -Context $context -CloudGitCommit $sessionCloudCommit -CloudRelease $sessionCloudRelease -ClientGitCommit $clientState.Head -DbRevision $remoteState.DbRevision -Targets $targets -CloudDeployed:(-not $plan.Cloud)
+        $sessionState=New-DDRECReleaseSessionState -Context $context -CloudGitCommit $sessionCloudCommit -CloudRelease $sessionCloudRelease -ClientGitCommit $clientState.Head -DbRevision $remoteState.DbRevision -Targets $targets -CloudDeployed:(-not $plan.Cloud) -ClientUploadMode $selectedClientUploadMode
         if(-not $plan.Cloud){$sessionState.CurrentSwitched=$true}
         Write-DDRECReleaseSessionState -Context $context -State $sessionState | Out-Null
     }
@@ -425,7 +532,7 @@ try {
     }
 
     if($targets.Count -gt 0){
-        if(-not (Invoke-ClientPackageStages -Targets $targets -State $sessionState)){exit $exitCodes.Cancelled}
+        if(-not (Invoke-ClientPackageStages -Targets $targets -State $sessionState -UploadMode $selectedClientUploadMode)){exit $exitCodes.Cancelled}
         Invoke-ClientDraftAndPublishStages -Targets $targets -State $sessionState
     }
     Write-DDRECLog -Context $context -Message "流程完成。日志：$($context.LogPath)"
