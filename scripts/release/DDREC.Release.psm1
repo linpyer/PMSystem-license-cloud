@@ -178,11 +178,29 @@ function Update-DDRECReleaseSessionFromContext {
     $State.DatabaseModified=[bool]$Context.DatabaseModified
     $State.MigrationExecuted=[bool]$Context.MigrationExecuted
     $State.AdminReplaced=[bool]$Context.AdminReplaced
-    $State.DraftCreated=[bool]$Context.DraftCreated
-    $State.Published=[bool]$Context.PublishedCreated
+    $State.DraftCreated=[bool]$State.DraftCreated -or [bool]$Context.DraftCreated
+    $State.Published=[bool]$State.Published -or [bool]$Context.PublishedCreated
     if ($CompletedStage) {$State.CompletedStage=$CompletedStage}
     Write-DDRECReleaseSessionState -Context $Context -State $State | Out-Null
     return $State
+}
+
+function Merge-DDRECReleaseSessionContext {
+    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$State)
+    $Context.CurrentSwitched=[bool]$Context.CurrentSwitched -or [bool]$State.CurrentSwitched
+    $Context.DatabaseModified=[bool]$Context.DatabaseModified -or [bool]$State.DatabaseModified
+    $Context.MigrationExecuted=[bool]$Context.MigrationExecuted -or [bool]$State.MigrationExecuted
+    $Context.AdminReplaced=[bool]$Context.AdminReplaced -or [bool]$State.AdminReplaced
+    $clientItems=@(@($State.Standard,$State.License)|Where-Object{$null -ne $_})
+    if($clientItems.Count -gt 0){
+        $Context.ClientUploaded=@($clientItems|Where-Object{-not ([bool]$_.Uploaded -and [bool]$_.Installed -and [bool]$_.Verified)}).Count -eq 0
+    }
+    $Context.DraftCreated=[bool]$Context.DraftCreated -or [bool]$State.DraftCreated -or @($clientItems|Where-Object{$_.DraftId}).Count -gt 0
+    $Context.PublishedCreated=[bool]$Context.PublishedCreated -or [bool]$State.Published -or @($clientItems|Where-Object{[bool]$_.Published}).Count -gt 0
+    $Context.PreparedProductionArtifacts=$Context.PreparedProductionArtifacts -or [bool]$State.CloudDeployed -or $Context.ClientUploaded
+    $Context.ProductionApplicationModified=$Context.ProductionApplicationModified -or $Context.CurrentSwitched -or $Context.AdminReplaced
+    $Context.ProductionModified=$Context.PreparedProductionArtifacts -or $Context.ProductionApplicationModified -or $Context.DatabaseModified -or $Context.ClientUploaded -or $Context.DraftCreated -or $Context.PublishedCreated
+    return $Context
 }
 
 function Protect-DDRECLogText {
@@ -1067,29 +1085,148 @@ function Test-DDRECDownloadUrl {
     return $probe
 }
 
+function ConvertFrom-DDRECSecureInput {
+    param([Parameter(Mandatory)][Security.SecureString]$SecureValue)
+    $pointer=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureValue)
+    try{return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)}finally{[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer)}
+}
+
+function Get-DDRECHttpErrorDetail {
+    param([AllowEmptyString()][string]$ResponseBody)
+    if([string]::IsNullOrWhiteSpace($ResponseBody)){return 'Validation: response body unavailable'}
+    try{$parsed=$ResponseBody|ConvertFrom-Json}catch{return "ResponseBody: $(Protect-DDRECLogText $ResponseBody)"}
+    $lines=[Collections.Generic.List[string]]::new()
+    $detailProperty=$parsed.PSObject.Properties['detail']
+    $errorProperty=$parsed.PSObject.Properties['error']
+    if($detailProperty -and $detailProperty.Value -is [Collections.IEnumerable] -and $detailProperty.Value -isnot [string]){
+        foreach($item in @($detailProperty.Value)){
+            $field=if($item.loc){@($item.loc|ForEach-Object{[string]$_}) -join '.'}else{'unknown'}
+            $message=if($item.msg){[string]$item.msg}else{[string]$item}
+            $lines.Add("field=$field message=$message")
+        }
+    } elseif($errorProperty){
+        $lines.Add("code=$($errorProperty.Value.code) message=$($errorProperty.Value.message)")
+    } else {$lines.Add((Protect-DDRECLogText $ResponseBody))}
+    return 'Validation: ' + ($lines -join '; ')
+}
+
+function New-DDRECApiFailureMessage {
+    param(
+        [Parameter(Mandatory)][string]$Operation,[Parameter(Mandatory)][string]$Method,
+        [Parameter(Mandatory)][string]$Endpoint,[int]$Status,[string[]]$RequestFields=@(),
+        [AllowEmptyString()][string]$ResponseBody
+    )
+    $detail=Get-DDRECHttpErrorDetail -ResponseBody $ResponseBody
+    return "$Operation 请求失败`nMethod: $Method`nEndpoint: $Endpoint`nHTTP: $Status`nRequestFields: $($RequestFields -join ',')`n$detail"
+}
+
+function Invoke-DDRECJsonApiRequest {
+    param(
+        [Parameter(Mandatory)]$Context,[Parameter(Mandatory)][string]$Operation,
+        [ValidateSet('GET','POST','PATCH','PUT','DELETE')][string]$Method,[Parameter(Mandatory)][string]$Endpoint,
+        [Microsoft.PowerShell.Commands.WebRequestSession]$WebSession,[hashtable]$Headers,[System.Collections.IDictionary]$Body,
+        [scriptblock]$RequestInvoker
+    )
+    $fields=if($null -ne $Body){@($Body.Keys|ForEach-Object{[string]$_})}else{@()}
+    $parameters=@{Uri=$Endpoint;Method=$Method;ContentType='application/json'}
+    if($WebSession){$parameters.WebSession=$WebSession}
+    if($Headers){$parameters.Headers=$Headers}
+    if($null -ne $Body){$parameters.Body=$Body|ConvertTo-Json -Depth 8 -Compress}
+    try{
+        $result=if($RequestInvoker){& $RequestInvoker $parameters}else{Invoke-RestMethod @parameters}
+        Write-DDRECLog -Context $Context -Message "$Operation PASS；Method=$Method Endpoint=$Endpoint RequestFields=$($fields -join ',')"
+        return $result
+    }catch{
+        $status=0
+        try{$status=[int]$_.Exception.Response.StatusCode}catch{}
+        $responseBody=[string]$_.ErrorDetails.Message
+        if([string]::IsNullOrWhiteSpace($responseBody)){
+            try{$responseBody=$_.Exception.Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()}catch{}
+        }
+        throw (New-DDRECApiFailureMessage -Operation $Operation -Method $Method -Endpoint $Endpoint -Status $status -RequestFields $fields -ResponseBody $responseBody)
+    }
+}
+
+function Start-DDRECAdminLogin {
+    param(
+        [Parameter(Mandatory)]$Context,[string]$Username,[Security.SecureString]$Password,
+        [scriptblock]$RequestInvoker
+    )
+    if([string]::IsNullOrWhiteSpace($Username)){$Username=Read-Host 'OWNER Username'}
+    $ownsPassword=$false
+    if($null -eq $Password){$Password=Read-Host 'Password' -AsSecureString;$ownsPassword=$true}
+    $plainPassword=ConvertFrom-DDRECSecureInput -SecureValue $Password
+    $session=[Microsoft.PowerShell.Commands.WebRequestSession]::new()
+    try{
+        $login=Invoke-DDRECJsonApiRequest -Context $Context -Operation 'OWNER 登录' -Method POST -Endpoint "$($Context.Config.ApiBaseUrl)/admin/auth/login" -WebSession $session -Body ([ordered]@{username=$Username;password=$plainPassword}) -RequestInvoker $RequestInvoker
+    }finally{$plainPassword=$null;if($ownsPassword){$Password.Dispose()}}
+    if([string]::IsNullOrWhiteSpace([string]$login.challenge)){throw 'OWNER 登录响应缺少 TOTP challenge。'}
+    return [pscustomobject]@{Session=$session;Challenge=[string]$login.challenge;RequestInvoker=$RequestInvoker}
+}
+
+function Complete-DDRECAdminTotp {
+    param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Login,[Security.SecureString]$Totp)
+    $ownsTotp=$false
+    if($null -eq $Totp){$Totp=Read-Host 'TOTP' -AsSecureString;$ownsTotp=$true}
+    $plainTotp=ConvertFrom-DDRECSecureInput -SecureValue $Totp
+    try{
+        if($plainTotp -notmatch '^\d{6}$'){throw 'TOTP 格式无效：必须是6位数字。'}
+        Invoke-DDRECJsonApiRequest -Context $Context -Operation 'OWNER TOTP 验证' -Method POST -Endpoint "$($Context.Config.ApiBaseUrl)/admin/auth/totp/verify" -WebSession $Login.Session -Body ([ordered]@{challenge=$Login.Challenge;code=$plainTotp}) -RequestInvoker $Login.RequestInvoker | Out-Null
+    }finally{$plainTotp=$null;if($ownsTotp){$Totp.Dispose()}}
+    $csrf=($Login.Session.Cookies.GetCookies([uri]$Context.Config.ApiBaseUrl)|Where-Object Name -eq 'pms_admin_csrf'|Select-Object -First 1).Value
+    if(-not $csrf -and $Login.PSObject.Properties['CsrfToken']){$csrf=[string]$Login.CsrfToken}
+    if(-not $csrf){throw 'OWNER TOTP 验证成功但未获得 CSRF 会话。'}
+    return [pscustomobject]@{Session=$Login.Session;CsrfToken=$csrf;RequestInvoker=$Login.RequestInvoker}
+}
+
 function Connect-DDRECAdminApi {
     param([Parameter(Mandatory)]$Context)
-    $username=Read-Host 'OWNER Username'
-    $secure=Read-Host 'Password' -AsSecureString
-    $ptr=[Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-    try { $password=[Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
-    $session=[Microsoft.PowerShell.Commands.WebRequestSession]::new()
-    try {
-        $login=Invoke-RestMethod -Uri "$($Context.Config.ApiBaseUrl)/admin/auth/login" -Method Post -WebSession $session -ContentType 'application/json' -Body (@{username=$username;password=$password}|ConvertTo-Json -Compress)
-    } finally { $password=$null; $secure.Dispose() }
-    $totp=Read-Host 'TOTP'
-    try {
-        Invoke-RestMethod -Uri "$($Context.Config.ApiBaseUrl)/admin/auth/totp/verify" -Method Post -WebSession $session -ContentType 'application/json' -Body (@{challenge=$login.challenge;code=$totp}|ConvertTo-Json -Compress) | Out-Null
-    } finally { $totp=$null }
-    $csrf=($session.Cookies.GetCookies([uri]$Context.Config.ApiBaseUrl) | Where-Object Name -eq 'pms_admin_csrf' | Select-Object -First 1).Value
-    if (-not $csrf) { throw 'OWNER 登录成功但未获得 CSRF 会话。' }
-    return [pscustomobject]@{Session=$session;Headers=@{'X-CSRF-Token'=$csrf; 'X-Request-ID'=[guid]::NewGuid().ToString()}}
+    return Complete-DDRECAdminTotp -Context $Context -Login (Start-DDRECAdminLogin -Context $Context)
+}
+
+function Get-DDRECAdminRequestHeaders {
+    param([Parameter(Mandatory)]$Auth)
+    $csrf=if($Auth.PSObject.Properties['CsrfToken']){[string]$Auth.CsrfToken}elseif($Auth.PSObject.Properties['Headers']){[string]$Auth.Headers['X-CSRF-Token']}else{''}
+    if([string]::IsNullOrWhiteSpace($csrf)){throw 'Admin API Auth 缺少 CSRF Token。'}
+    return @{'X-CSRF-Token'=$csrf;'X-Request-ID'=[guid]::NewGuid().ToString()}
+}
+
+function New-DDRECClientDraftPayload {
+    param([Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Target,[Parameter(Mandatory)]$Signed)
+    $environment=if($Metadata.Edition -eq 'standard'){'production'}else{$Metadata.Environment}
+    $payload=[ordered]@{
+        product='DDREC';version=$Metadata.Version;buildNumber=[int]$Metadata.BuildNumber;gitCommit=$Metadata.GitCommit
+        edition=$Metadata.Edition;environment=$environment;architecture='x64';channel='stable';title="DD Rec V$($Metadata.Version)"
+        releaseNotes="DD Rec V$($Metadata.Version) Build $($Metadata.BuildNumber) formal release."
+        fileName=$Metadata.FileName;downloadPath=$Target.RelativePath;fileSize=[int64]$Metadata.FileSize;sha256=$Metadata.SHA256
+        signature=[string]$Signed.Signature;mandatory=$false;publishedAt=$Signed.Manifest.publishedAt
+    }
+    Assert-DDRECClientDraftPayload -Payload $payload | Out-Null
+    return $payload
+}
+
+function Assert-DDRECClientDraftPayload {
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$Payload)
+    $required=@('product','version','buildNumber','gitCommit','edition','environment','architecture','channel','title','releaseNotes','fileName','downloadPath','fileSize','sha256','signature','mandatory','publishedAt')
+    $actual=@($Payload.Keys|ForEach-Object{[string]$_})
+    foreach($field in $required){if($field -notin $actual -or $null -eq $Payload[$field] -or ($Payload[$field] -is [string] -and [string]::IsNullOrWhiteSpace($Payload[$field]))){throw "Draft Payload 无效：缺少 $field"}}
+    foreach($field in $actual){if($field -notin $required){throw "Draft Payload 无效：API Schema 不接受字段 $field"}}
+    if($Payload.product -cne 'DDREC' -or $Payload.version -notmatch '^\d+\.\d+\.\d+$' -or [int]$Payload.buildNumber -lt 1){throw 'Draft Payload 无效：Product/Version/BuildNumber 不符合 Schema。'}
+    if($Payload.gitCommit -notmatch '^[0-9a-fA-F]{7,40}$' -or $Payload.sha256 -notmatch '^[0-9a-fA-F]{64}$'){throw 'Draft Payload 无效：GitCommit/SHA256 不符合 Schema。'}
+    if($Payload.edition -notin @('standard','license') -or $Payload.environment -cne 'production' -or $Payload.channel -cne 'stable' -or $Payload.architecture -cne 'x64'){throw 'Draft Payload 无效：Edition/Environment/Channel/Architecture 不符合正式规则。'}
+    if(([string]$Payload.signature).Length -lt 80 -or ([string]$Payload.signature).Length -gt 200){throw 'Draft Payload 无效：Signature 长度不符合 API Schema。'}
+    [DateTimeOffset]$published=[DateTimeOffset]::MinValue
+    if(-not [DateTimeOffset]::TryParse([string]$Payload.publishedAt,[ref]$published)){throw 'Draft Payload 无效：publishedAt 必须是带时区时间。'}
+    if(-not ([string]$Payload.downloadPath).StartsWith('/releases/') -or -not ([string]$Payload.downloadPath).EndsWith('/'+[string]$Payload.fileName)){throw 'Draft Payload 无效：downloadPath 与 fileName 不一致。'}
+    return $true
 }
 
 function New-DDRECClientDraft {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Auth,[Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Target,[Parameter(Mandatory)]$Signed)
     Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
-    $list=Invoke-RestMethod -Uri "$($Context.Config.ApiBaseUrl)/admin/client-releases?page=1&pageSize=200" -Method Get -WebSession $Auth.Session -Headers $Auth.Headers
+    $headers=Get-DDRECAdminRequestHeaders -Auth $Auth
+    $requestInvoker=if($Auth.PSObject.Properties['RequestInvoker']){$Auth.RequestInvoker}else{$null}
+    $list=Invoke-DDRECJsonApiRequest -Context $Context -Operation 'Client Release Draft 查询' -Method GET -Endpoint "$($Context.Config.ApiBaseUrl)/admin/client-releases?page=1&pageSize=200" -WebSession $Auth.Session -Headers $headers -RequestInvoker $requestInvoker
     $environment=if($Metadata.Edition -eq 'standard'){'production'}else{$Metadata.Environment}
     $existing=@($list.items|Where-Object{
         $_.product -eq 'DDREC' -and $_.version -eq $Metadata.Version -and [int]$_.buildNumber -eq $Metadata.BuildNumber -and
@@ -1100,14 +1237,9 @@ function New-DDRECClientDraft {
         if($existing.status -eq 'draft'){$Context.Drafts.Add($existing)}else{$Context.Published.Add($existing)}
         return $existing
     }
-    $body=[ordered]@{
-        product='DDREC';version=$Metadata.Version;buildNumber=$Metadata.BuildNumber;gitCommit=$Metadata.GitCommit
-        edition=$Metadata.Edition;environment=$environment
-        architecture='x64';channel='stable';title="DD Rec V$($Metadata.Version)";releaseNotes=''
-        fileName=$Metadata.FileName;downloadPath=$Target.RelativePath;fileSize=$Metadata.FileSize;sha256=$Metadata.SHA256
-        signature=$Signed.Signature;mandatory=$false;publishedAt=$Signed.Manifest.publishedAt
-    }
-    $result=Invoke-RestMethod -Uri "$($Context.Config.ApiBaseUrl)/admin/client-releases" -Method Post -WebSession $Auth.Session -Headers $Auth.Headers -ContentType 'application/json' -Body ($body|ConvertTo-Json -Depth 5 -Compress)
+    $body=New-DDRECClientDraftPayload -Metadata $Metadata -Target $Target -Signed $Signed
+    $operation=if($Metadata.Edition -eq 'standard'){'Standard Draft 创建'}else{'License Draft 创建'}
+    $result=Invoke-DDRECJsonApiRequest -Context $Context -Operation $operation -Method POST -Endpoint "$($Context.Config.ApiBaseUrl)/admin/client-releases" -WebSession $Auth.Session -Headers (Get-DDRECAdminRequestHeaders -Auth $Auth) -Body $body -RequestInvoker $requestInvoker
     $Context.Drafts.Add($result.release)
     $Context.DraftCreated=$true
     return $result.release
@@ -1115,7 +1247,8 @@ function New-DDRECClientDraft {
 
 function Publish-DDRECClientDraft {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Auth,[Parameter(Mandatory)]$Draft)
-    $result=Invoke-RestMethod -Uri "$($Context.Config.ApiBaseUrl)/admin/client-releases/$($Draft.id)/publish" -Method Post -WebSession $Auth.Session -Headers $Auth.Headers -ContentType 'application/json'
+    $requestInvoker=if($Auth.PSObject.Properties['RequestInvoker']){$Auth.RequestInvoker}else{$null}
+    $result=Invoke-DDRECJsonApiRequest -Context $Context -Operation 'Client Release Published' -Method POST -Endpoint "$($Context.Config.ApiBaseUrl)/admin/client-releases/$($Draft.id)/publish" -WebSession $Auth.Session -Headers (Get-DDRECAdminRequestHeaders -Auth $Auth) -RequestInvoker $requestInvoker
     $Context.Published.Add($result.release)
     $Context.PublishedCreated=$true
     return $result.release

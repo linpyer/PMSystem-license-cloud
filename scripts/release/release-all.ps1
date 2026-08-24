@@ -210,21 +210,28 @@ function Invoke-ClientPackageStages {
         Save-ReleaseSession -State $State -CompletedStage "$($item.Lane)-DownloadVerified"
         Add-DDRECStage -Context $context -Stage "$($item.Lane) 人工上传/SHA/原子安装/HTTP 200/Range 206/签名"
     }
+    Merge-DDRECReleaseSessionContext -Context $context -State $State | Out-Null
     return $true
 }
 
 function Invoke-ClientDraftAndPublishStages {
     param([object[]]$Targets,$State)
     if($Targets.Count -eq 0){return}
-    $script:stage='OWNER 登录与 Draft 创建'
-    $auth=Connect-DDRECAdminApi -Context $context
+    $script:stage='OWNER 登录'
+    $login=Start-DDRECAdminLogin -Context $context
+    Add-DDRECStage -Context $context -Stage 'OWNER 登录'
+    $script:stage='OWNER TOTP 验证'
+    $auth=Complete-DDRECAdminTotp -Context $context -Login $login
+    Add-DDRECStage -Context $context -Stage 'OWNER TOTP 验证'
     foreach($item in $Targets){
+        $script:stage=if($item.Lane -eq 'standard'){'Standard Draft 创建'}else{'License Draft 创建'}
         $item.Draft=New-DDRECClientDraft -Context $context -Auth $auth -Metadata $item.Metadata -Target $item.Target -Signed $item.Signed
         Test-UpdateIsolation -Draft $item.Draft
         $stateItem=Get-SessionClientItem -State $State -Lane $item.Lane
         $stateItem.DraftId=$item.Draft.id; $stateItem.DraftStatus=$item.Draft.status
         if($item.Draft.status -eq 'published'){$stateItem.Published=$true}
         Save-ReleaseSession -State $State -CompletedStage 'DraftReady'
+        Add-DDRECStage -Context $context -Stage $script:stage
     }
     Add-DDRECStage -Context $context -Stage 'Draft 创建/幂等复用与更新通道隔离验证'
     Write-Header '发布确认'
@@ -298,13 +305,7 @@ try {
         if($clientState.Head -cne [string]$sessionState.ClientGitCommit){throw 'Resume 阻止：当前 client HEAD 与 Session 不一致。'}
         Assert-DDRECResumeProductionState -State $sessionState -RemoteState $remoteState | Out-Null
         if(-not (Test-Path -LiteralPath $config.UpdatePrivateKey -PathType Leaf)){throw '本地更新签名私钥不存在。'}
-        $context.CurrentSwitched=[bool]$sessionState.CurrentSwitched
-        $context.DatabaseModified=[bool]$sessionState.DatabaseModified
-        $context.MigrationExecuted=[bool]$sessionState.MigrationExecuted
-        $context.AdminReplaced=[bool]$sessionState.AdminReplaced
-        $context.PreparedProductionArtifacts=$true
-        $context.ProductionApplicationModified=$context.CurrentSwitched -or $context.AdminReplaced
-        $context.ProductionModified=$true
+        Merge-DDRECReleaseSessionContext -Context $context -State $sessionState | Out-Null
         Write-Header '继续未完成发布'
         [pscustomobject]@{
             Session=$sessionState.SessionId;Cloud='已部署成功';Current=$remoteState.Current;ApiCommit=$remoteState.BuildCommit

@@ -16,7 +16,7 @@ function New-TestMetadata([string]$edition='standard'){
 function New-TestContext {
     $workspace=Join-Path $TestDrive 'workspace'
     New-Item -ItemType Directory -Path (Join-Path $workspace 'cloud-license') -Force|Out-Null
-    $config=[pscustomobject]@{RemoteRoot='/opt/pmsystem-license';DownloadRoot='/var/www/ddrec-downloads';DownloadBaseUrl='https://download.aixcc.top';ServerAddress='47.98.206.68'}
+    $config=[pscustomobject]@{RemoteRoot='/opt/pmsystem-license';DownloadRoot='/var/www/ddrec-downloads';DownloadBaseUrl='https://download.aixcc.top';ApiBaseUrl='https://license.aixcc.top/api/v1';ServerAddress='47.98.206.68'}
     return New-DDRECReleaseContext -WorkspaceRoot $workspace -Config $config -SessionId '20260823-165958'
 }
 
@@ -165,4 +165,107 @@ Describe 'Release orchestration regression guards' {
         $schema|Should Not Match '(?i)password|privatekey|totp|credential'
     }
     It 'does not invoke rollback for a client upload failure' {$releaseText|Should Not Match 'Rollback-DDREC|rollback-release'}
+}
+
+Describe 'OWNER authentication and Draft API contract' {
+    It 'accepts a valid OWNER login request without exposing the password value' {
+        $context=New-TestContext;$secret=ConvertTo-SecureString 'NeverLogThisPassword!' -AsPlainText -Force
+        $login=Start-DDRECAdminLogin -Context $context -Username 'owner' -Password $secret -RequestInvoker {param($p)[pscustomobject]@{challenge=('c'*40)}}
+        $login.Challenge.Length|Should Be 40
+        (Get-Content $context.LogPath -Raw)|Should Not Match 'NeverLogThisPassword'
+    }
+    It 'formats a 422 OWNER field validation error with endpoint and detail' {
+        $body='{"detail":[{"loc":["body","username"],"msg":"String should have at least 3 characters"}]}'
+        $message=New-DDRECApiFailureMessage -Operation 'OWNER登录' -Method POST -Endpoint 'https://example/admin/auth/login' -Status 422 -RequestFields username,password -ResponseBody $body
+        $message|Should Match 'HTTP: 422';$message|Should Match 'field=body.username';$message|Should Match 'at least 3'
+    }
+    It 'reports TOTP authentication failure as its own endpoint and stage' {
+        $body='{"error":{"code":"ADMIN_INVALID_CREDENTIALS","message":"Invalid TOTP","retryable":false}}'
+        $message=New-DDRECApiFailureMessage -Operation 'OWNER TOTP 验证' -Method POST -Endpoint 'https://example/admin/auth/totp/verify' -Status 401 -RequestFields challenge,code -ResponseBody $body
+        $message|Should Match 'OWNER TOTP';$message|Should Match 'ADMIN_INVALID_CREDENTIALS'
+    }
+    It 'requires TOTP to be a six digit secret before any request' {
+        $context=New-TestContext;$login=[pscustomobject]@{Session=[Microsoft.PowerShell.Commands.WebRequestSession]::new();Challenge=('c'*40);CsrfToken='csrf';RequestInvoker={throw 'must not call'}}
+        $totp=ConvertTo-SecureString '12x456' -AsPlainText -Force
+        (Test-ActionThrows {Complete-DDRECAdminTotp -Context $context -Login $login -Totp $totp})|Should Be $true
+    }
+    It 'uses non-echoing secure input for both Password and TOTP' {
+        $text=Get-Content $modulePath -Raw
+        $text|Should Match "Read-Host 'Password' -AsSecureString"
+        $text|Should Match "Read-Host 'TOTP' -AsSecureString"
+    }
+    It 'never writes a password or TOTP value to logs or session JSON' {
+        $text=Get-Content $modulePath -Raw
+        $text|Should Not Match 'Write-DDRECLog[^\r\n]+plainPassword'
+        $text|Should Not Match 'Write-DDRECLog[^\r\n]+plainTotp'
+        $session=Get-Content (Join-Path $PSScriptRoot '..\..\scripts\release\DDREC.Release.psm1') -Raw
+        [regex]::Match($session,'(?s)function New-DDRECReleaseSessionState.*?(?=function Update-DDRECReleaseSessionFromContext)').Value|Should Not Match '(?i)password|totp|token|cookie'
+    }
+    It 'builds a complete Standard Draft payload compatible with the production wire schema' {
+        $metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.3.0/86/DDREC-1.3.0-standard-Setup.exe'}
+        $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
+        $payload=New-DDRECClientDraftPayload -Metadata $metadata -Target $target -Signed $signed
+        $payload.environment|Should Be 'production';$payload.releaseNotes.Length|Should BeGreaterThan 0
+        Assert-DDRECClientDraftPayload -Payload $payload|Should Be $true
+    }
+    It 'builds a complete License-Production Draft payload' {
+        $metadata=New-TestMetadata 'license';$target=[pscustomobject]@{RelativePath='/releases/stable/license/1.3.0/86/DDREC-1.3.0-license-Setup.exe'}
+        $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
+        $payload=New-DDRECClientDraftPayload -Metadata $metadata -Target $target -Signed $signed
+        $payload.edition|Should Be 'license';$payload.environment|Should Be 'production'
+    }
+    It 'identifies a missing required Draft field before HTTP' {
+        $payload=[ordered]@{product='DDREC'}
+        $message='';try{Assert-DDRECClientDraftPayload -Payload $payload|Out-Null}catch{$message=$_.Exception.Message}
+        $message|Should Match '缺少 version'
+    }
+    It 'does not send retired or unsupported Draft fields' {
+        $metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.3.0/86/DDREC-1.3.0-standard-Setup.exe'}
+        $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
+        $payload=New-DDRECClientDraftPayload -Metadata $metadata -Target $target -Signed $signed
+        ('updaterVersion' -notin @($payload.Keys))|Should Be $true;('licenseLocal' -notin @($payload.Keys))|Should Be $true
+    }
+    It 'creates a Standard Draft with the complete validated payload' {
+        $context=New-TestContext;$metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.3.0/86/DDREC-1.3.0-standard-Setup.exe'}
+        $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
+        $release=[pscustomobject]@{id='standard-draft';status='draft';product='DDREC';version='1.3.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='standard';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256}
+        $auth=[pscustomobject]@{Session=[Microsoft.PowerShell.Commands.WebRequestSession]::new();CsrfToken='csrf';RequestInvoker={param($p)if($p.Method -eq 'GET'){[pscustomobject]@{items=@()}}else{[pscustomobject]@{release=$release}}}}
+        (New-DDRECClientDraft -Context $context -Auth $auth -Metadata $metadata -Target $target -Signed $signed).id|Should Be 'standard-draft'
+    }
+    It 'creates a License-Production Draft independently' {
+        $context=New-TestContext;$metadata=New-TestMetadata 'license';$target=[pscustomobject]@{RelativePath='/releases/stable/license/1.3.0/86/DDREC-1.3.0-license-Setup.exe'}
+        $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
+        $release=[pscustomobject]@{id='license-draft';status='draft';product='DDREC';version='1.3.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='license';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256}
+        $auth=[pscustomobject]@{Session=[Microsoft.PowerShell.Commands.WebRequestSession]::new();CsrfToken='csrf';RequestInvoker={param($p)if($p.Method -eq 'GET'){[pscustomobject]@{items=@()}}else{[pscustomobject]@{release=$release}}}}
+        (New-DDRECClientDraft -Context $context -Auth $auth -Metadata $metadata -Target $target -Signed $signed).id|Should Be 'license-draft'
+    }
+    It 'reuses an existing matching Draft without issuing a POST' {
+        $context=New-TestContext;$metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.3.0/86/DDREC-1.3.0-standard-Setup.exe'}
+        $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
+        $existing=[pscustomobject]@{id='existing';status='draft';product='DDREC';version='1.3.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='standard';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256}
+        $script:draftPostCalls=0
+        $auth=[pscustomobject]@{Session=[Microsoft.PowerShell.Commands.WebRequestSession]::new();CsrfToken='csrf';RequestInvoker={param($p)if($p.Method -eq 'GET'){[pscustomobject]@{items=@($existing)}}else{$script:draftPostCalls++;throw 'unexpected POST'}}}
+        (New-DDRECClientDraft -Context $context -Auth $auth -Metadata $metadata -Target $target -Signed $signed).id|Should Be 'existing'
+        $script:draftPostCalls|Should Be 0
+    }
+}
+
+Describe 'Resume historical state merge' {
+    It 'preserves ClientUploaded true after a later Draft failure' {
+        $context=New-TestContext
+        $item=[pscustomobject]@{Uploaded=$true;Installed=$true;Verified=$true;DraftId=$null;Published=$false}
+        $state=[pscustomobject]@{CurrentSwitched=$true;DatabaseModified=$false;MigrationExecuted=$false;AdminReplaced=$true;CloudDeployed=$true;DraftCreated=$false;Published=$false;Standard=$item;License=$item}
+        Merge-DDRECReleaseSessionContext -Context $context -State $state|Out-Null
+        $context.ClientUploaded|Should Be $true
+    }
+    It 'preserves CurrentSwitched and AdminReplaced historical truth' {
+        $context=New-TestContext
+        $state=[pscustomobject]@{CurrentSwitched=$true;DatabaseModified=$false;MigrationExecuted=$false;AdminReplaced=$true;CloudDeployed=$true;DraftCreated=$false;Published=$false;Standard=$null;License=$null}
+        Merge-DDRECReleaseSessionContext -Context $context -State $state|Out-Null
+        $context.CurrentSwitched|Should Be $true;$context.AdminReplaced|Should Be $true
+    }
+    It 'keeps Draft creation after both idempotent client verifications' {
+        $text=Get-Content (Join-Path $PSScriptRoot '..\..\scripts\release\release-all.ps1') -Raw
+        $text.IndexOf('Invoke-ClientPackageStages -Targets $targets')|Should BeLessThan $text.IndexOf('Invoke-ClientDraftAndPublishStages -Targets $targets')
+    }
 }
