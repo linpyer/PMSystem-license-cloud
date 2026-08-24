@@ -282,6 +282,18 @@ function Invoke-DDRECNative {
     return [pscustomobject]@{ ExitCode=$code; Output=$text }
 }
 
+function Invoke-DDRECConsoleTask {
+    param(
+        [Parameter(Mandatory)][string]$PwshPath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][ref]$ExitCode
+    )
+    # Deliberately do not redirect or assign this invocation. Native stdout and
+    # stderr must flow through the current console while the child is running.
+    & $PwshPath @Arguments
+    $ExitCode.Value=[int]$LASTEXITCODE
+}
+
 function Get-DDRECGitState {
     param([Parameter(Mandatory)][string]$Repository)
     $branch = (Invoke-DDRECNative git @('branch','--show-current') $Repository).Output.Trim()

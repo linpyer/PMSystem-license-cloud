@@ -100,16 +100,24 @@ function Invoke-ReleaseMenuLoop {
             $menuRemoteState=[pscustomobject]@{ApiStatus='不可用';Current='不可用'}
         }
         $selectedMode=Select-MenuMode -ClientState $menuClientState -CloudState $menuCloudState -RemoteState $menuRemoteState
-        if($selectedMode -eq 'Exit'){return $exitCodes.Success}
+        if($selectedMode -eq 'Exit'){return}
         $arguments=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$PSCommandPath,'-Mode',$selectedMode,'-ConfigPath',$ConfigPath)
-        & $pwsh @arguments
-        $taskExitCode=$LASTEXITCODE
+        $taskExitCode=0
+        Invoke-DDRECConsoleTask -PwshPath $pwsh -Arguments $arguments -ExitCode ([ref]$taskExitCode)
         Write-DDRECLog -Context $context -Message "菜单任务结束：Mode=$selectedMode ExitCode=$taskExitCode"
         Write-Header '本次任务已结束'
+        $modeDisplay=switch($selectedMode){
+            'Status'{'Production Status'}
+            'DryRun'{'Dry Run'}
+            'Resume'{'Resume Release'}
+            default{$selectedMode}
+        }
+        Write-Host "Mode     ：$modeDisplay"
+        Write-Host "ExitCode ：$taskExitCode"
         if($taskExitCode -eq 0){
-            Write-Host '本次任务执行成功。' -ForegroundColor Green
+            Write-Host '结果     ：成功' -ForegroundColor Green
         }else{
-            Write-Host "本次任务已停止或失败。ExitCode = $taskExitCode" -ForegroundColor Yellow
+            Write-Host '结果     ：本次任务已停止或失败' -ForegroundColor Yellow
             Write-Host '生产状态请参考以上报告。'
         }
         [void](Read-Host '按 Enter 返回主菜单')
@@ -366,7 +374,8 @@ function Get-ResumeTargets {
 }
 
 if($Mode -eq 'Menu'){
-    exit (Invoke-ReleaseMenuLoop)
+    Invoke-ReleaseMenuLoop
+    exit $exitCodes.Success
 }
 
 try {

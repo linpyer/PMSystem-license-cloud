@@ -300,9 +300,10 @@ Describe 'DDREC release works without local Docker' {
         $menu=[regex]::Match($text,'(?s)function Invoke-ReleaseMenuLoop.*?(?=function Select-ClientUploadMode)').Value
         $menu|Should Match 'while\(\$true\)'
         $menu|Should Match "if\(\`$selectedMode -eq 'Exit'\)\{return"
-        $menu|Should Match '& \$pwsh @arguments'
-        $menu|Should Match '\$taskExitCode=\$LASTEXITCODE'
+        $menu|Should Match 'Invoke-DDRECConsoleTask -PwshPath \$pwsh'
+        $menu|Should Match '-ExitCode \(\[ref\]\$taskExitCode\)'
         $menu|Should Match '按 Enter 返回主菜单'
+        $text|Should Not Match 'exit \(Invoke-ReleaseMenuLoop\)'
     }
     It '40 menu reads the client version from the client repository' {
         $text = Get-Content -LiteralPath $script:releaseScript -Raw
@@ -326,5 +327,62 @@ Describe 'DDREC release works without local Docker' {
         $text=Get-Content -LiteralPath $script:releaseScript -Raw
         ([regex]::Matches($text,'按 Enter 返回主菜单')).Count|Should Be 1
         $text|Should Not Match '(?im)^\s*pause\s*$'
+    }
+    It '44 does not clear the console between tasks' {
+        $text=Get-Content -LiteralPath $script:releaseScript -Raw
+        $text|Should Not Match '(?i)Clear-Host|cmd\s+/c\s+cls|(?m)^\s*cls\s*$'
+    }
+    It '45 streams child stdout and stderr before exit while preserving exit 70' {
+        $child=Join-Path $TestDrive 'stream-child.ps1'
+        $runner=Join-Path $TestDrive 'stream-runner.ps1'
+        @'
+[Console]::Out.WriteLine('STATUS-STDOUT')
+[Console]::Out.Flush()
+[Console]::Error.WriteLine('STATUS-STDERR')
+[Console]::Error.Flush()
+Start-Sleep -Seconds 2
+exit 70
+'@|Set-Content -LiteralPath $child -Encoding UTF8
+        @"
+Import-Module '$($script:moduleScript.Replace("'","''"))' -Force
+`$code=0
+Invoke-DDRECConsoleTask -PwshPath '$(Join-Path $PSHOME 'pwsh.exe')' -Arguments @('-NoLogo','-NoProfile','-File','$($child.Replace("'","''"))') -ExitCode ([ref]`$code)
+Write-Output "CHILD-EXIT=`$code"
+exit 0
+"@|Set-Content -LiteralPath $runner -Encoding UTF8
+        $start=[Diagnostics.ProcessStartInfo]::new()
+        $start.FileName=Join-Path $PSHOME 'pwsh.exe'
+        $start.UseShellExecute=$false;$start.CreateNoWindow=$true
+        $start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
+        [void]$start.ArgumentList.Add('-NoLogo');[void]$start.ArgumentList.Add('-NoProfile');[void]$start.ArgumentList.Add('-File');[void]$start.ArgumentList.Add($runner)
+        $process=[Diagnostics.Process]::Start($start)
+        $watch=[Diagnostics.Stopwatch]::StartNew()
+        $stdout=$process.StandardOutput.ReadLine()
+        $stderr=$process.StandardError.ReadLine()
+        $watch.Stop()
+        $stdout|Should Be 'STATUS-STDOUT'
+        $stderr|Should Be 'STATUS-STDERR'
+        $watch.Elapsed.TotalSeconds|Should BeLessThan 1.5
+        $process.HasExited|Should Be $false
+        $process.WaitForExit()
+        $remaining=$process.StandardOutput.ReadToEnd()
+        $remaining|Should Match 'CHILD-EXIT=70'
+        $process.ExitCode|Should Be 0
+    }
+    It '46 child exit 80 does not terminate the menu host process' {
+        $child=Join-Path $TestDrive 'exit80-child.ps1'
+        $runner=Join-Path $TestDrive 'exit80-runner.ps1'
+        'Write-Output "DRAFT-ERROR"; exit 80'|Set-Content -LiteralPath $child -Encoding UTF8
+        @"
+Import-Module '$($script:moduleScript.Replace("'","''"))' -Force
+`$code=0
+Invoke-DDRECConsoleTask -PwshPath '$(Join-Path $PSHOME 'pwsh.exe')' -Arguments @('-NoLogo','-NoProfile','-File','$($child.Replace("'","''"))') -ExitCode ([ref]`$code)
+Write-Output "MENU-ALIVE=`$code"
+exit 0
+"@|Set-Content -LiteralPath $runner -Encoding UTF8
+        $output=@(& (Join-Path $PSHOME 'pwsh.exe') -NoLogo -NoProfile -File $runner 2>&1)|ForEach-Object{[string]$_}
+        $LASTEXITCODE|Should Be 0
+        ($output -join "`n")|Should Match 'DRAFT-ERROR'
+        ($output -join "`n")|Should Match 'MENU-ALIVE=80'
     }
 }
