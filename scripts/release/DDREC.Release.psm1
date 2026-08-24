@@ -286,11 +286,34 @@ function Invoke-DDRECConsoleTask {
     param(
         [Parameter(Mandatory)][string]$PwshPath,
         [Parameter(Mandatory)][string[]]$Arguments,
-        [Parameter(Mandatory)][ref]$ExitCode
+        [Parameter(Mandatory)][ref]$ExitCode,
+        $MenuCache
     )
-    # Deliberately do not redirect or assign this invocation. Native stdout and
-    # stderr must flow through the current console while the child is running.
-    & $PwshPath @Arguments
+    # Process stdout one line at a time so it remains live while the two summary
+    # fields already printed by every real preflight can refresh the UI cache.
+    # Stderr is deliberately not redirected and inherits the current console.
+    & $PwshPath @Arguments | ForEach-Object {
+        $line=[string]$_
+        if($null -ne $MenuCache){
+            if($line -match '^current=(.*)$'){
+                $MenuCache.ProductionRelease=$matches[1]
+                $MenuCache.LastProductionCheck=[DateTimeOffset]::Now
+            }elseif($line -match '^\s*CurrentRelease\s*:\s*(.+)$'){
+                $MenuCache.ProductionRelease=$matches[1].Trim()
+                $MenuCache.LastProductionCheck=[DateTimeOffset]::Now
+            }elseif($line -match '^healthJson=(\{.*\})$'){
+                try{
+                    $health=$matches[1]|ConvertFrom-Json
+                    $MenuCache.ProductionApi=[string]$health.status
+                    $MenuCache.LastProductionCheck=[DateTimeOffset]::Now
+                }catch{}
+            }elseif($line -match '^\s*ApiStatus\s*:\s*(.+)$'){
+                $MenuCache.ProductionApi=$matches[1].Trim()
+                $MenuCache.LastProductionCheck=[DateTimeOffset]::Now
+            }
+        }
+        Write-Output $_
+    }
     $ExitCode.Value=[int]$LASTEXITCODE
 }
 
@@ -303,6 +326,41 @@ function Get-DDRECGitState {
     return [pscustomobject]@{
         Repository=$Repository; Branch=$branch; Head=$head; Origin=$remote
         Clean=[string]::IsNullOrWhiteSpace($status); Status=$status
+    }
+}
+
+function Get-DDRECLocalGitHead {
+    param([Parameter(Mandatory)][string]$Repository)
+    return (Invoke-DDRECNative git @('rev-parse','HEAD') $Repository).Output.Trim()
+}
+
+function Get-DDRECMenuProductionOverview {
+    param([Parameter(Mandatory)]$Context,[scriptblock]$NativeInvoker)
+    $scriptText=@'
+set -Eeuo pipefail
+printf 'current=%s\n' "$(readlink -f /opt/pmsystem-license/current 2>/dev/null || true)"
+curl -fsS --max-time 2 https://license.aixcc.top/api/v1/health | sed 's/^/healthJson=/'
+echo
+'@
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($scriptText))
+    $command="printf '%s' '$encoded' | base64 -d | bash"
+    try{
+        $result=if($NativeInvoker){
+            & $NativeInvoker
+        }else{
+            Invoke-DDRECNative ssh @('-o','BatchMode=yes','-o','ConnectTimeout=2',[string]$Context.Config.ServerHost,$command) -AllowFailure -NoLogOutput -Context $Context
+        }
+        if([int]$result.ExitCode -ne 0){throw "overview exit $($result.ExitCode)"}
+        $current='unknown';$api='unknown'
+        foreach($line in ([string]$result.Output -split "`r?`n")){
+            if($line -match '^current=(.*)$'){$current=$matches[1]}
+            elseif($line -match '^healthJson=(\{.*\})$'){
+                try{$api=[string](($matches[1]|ConvertFrom-Json).status)}catch{}
+            }
+        }
+        return [pscustomobject]@{Api=$api;Release=$current;CheckedAt=[DateTimeOffset]::Now}
+    }catch{
+        return [pscustomobject]@{Api='unknown';Release='unknown';CheckedAt=$null}
     }
 }
 

@@ -385,4 +385,84 @@ exit 0
         ($output -join "`n")|Should Match 'DRAFT-ERROR'
         ($output -join "`n")|Should Match 'MENU-ALIVE=80'
     }
+    It '47 menu rendering is cache-only and performs no SSH HTTP or git command' {
+        $text=Get-Content -LiteralPath $script:releaseScript -Raw
+        $show=[regex]::Match($text,'(?s)function Show-DDRECReleaseMenu.*?(?=function Read-ReleaseMenuMode)').Value
+        $show|Should Match 'ProductionApi'
+        $show|Should Match 'ProductionRelease'
+        $show|Should Not Match 'Get-DDRECRemoteState|Get-DDRECMenuProductionOverview|Invoke-DDRECSsh|Invoke-WebRequest|Invoke-RestMethod|Invoke-DDRECNative|\bgit\b'
+    }
+    It '48 menu local refresh uses rev-parse only and has no git network or worktree scan' {
+        $text=Get-Content -LiteralPath $script:releaseScript -Raw
+        $refresh=[regex]::Match($text,'(?s)function Update-ReleaseMenuLocalCache.*?(?=function Show-DDRECReleaseMenu)').Value
+        $local=(Get-Command Get-DDRECLocalGitHead).Definition
+        $refresh|Should Match 'Get-DDRECLocalGitHead'
+        $refresh|Should Not Match 'Get-DDRECGitState|Get-DDRECRemoteState|Get-DDRECMenuProductionOverview'
+        $local|Should Not Match "'fetch'|'ls-remote'|'status'|'origin/v1\.3'"
+        $local|Should Match "rev-parse','HEAD"
+    }
+    It '49 Production overview is requested only during menu initialization' {
+        $text=Get-Content -LiteralPath $script:releaseScript -Raw
+        $loop=[regex]::Match($text,'(?s)function Invoke-ReleaseMenuLoop.*?(?=function Select-ClientUploadMode)').Value
+        ([regex]::Matches($text,'Get-DDRECMenuProductionOverview -Context \$context')).Count|Should Be 1
+        $loop|Should Not Match 'Get-DDRECRemoteState|Get-DDRECMenuProductionOverview'
+    }
+    It '50 cached Production overview parses current and API health' {
+        $script:calls=0
+        $fake={
+            $script:calls++
+            [pscustomobject]@{ExitCode=0;Output="current=/opt/pmsystem-license/release/cached`nhealthJson={`"status`":`"ok`"}"}
+        }
+        $ctx=[pscustomobject]@{Config=[pscustomobject]@{ServerHost='test'}}
+        $overview=Get-DDRECMenuProductionOverview -Context $ctx -NativeInvoker $fake
+        $overview.Api|Should Be 'ok'
+        $overview.Release|Should Be '/opt/pmsystem-license/release/cached'
+        $script:calls|Should Be 1
+    }
+    It '51 offline initial overview fails quickly to unknown instead of blocking menu safety' {
+        $ctx=[pscustomobject]@{Config=[pscustomobject]@{ServerHost='test'}}
+        $watch=[Diagnostics.Stopwatch]::StartNew()
+        $overview=Get-DDRECMenuProductionOverview -Context $ctx -NativeInvoker { [pscustomobject]@{ExitCode=255;Output='network unreachable'} }
+        $watch.Stop()
+        $overview.Api|Should Be 'unknown'
+        $overview.Release|Should Be 'unknown'
+        $watch.Elapsed.TotalMilliseconds|Should BeLessThan 100
+    }
+    It '52 Status output refreshes the in-memory menu cache without another remote request' {
+        $child=Join-Path $TestDrive 'status-cache-child.ps1'
+        'Write-Output "CurrentRelease : /opt/pmsystem-license/release/new"; Write-Output "ApiStatus : ok"; exit 0'|Set-Content -LiteralPath $child -Encoding UTF8
+        $cache=[pscustomobject]@{ProductionRelease='old';ProductionApi='unknown';LastProductionCheck=$null}
+        $code=99
+        Invoke-DDRECConsoleTask -PwshPath (Join-Path $PSHOME 'pwsh.exe') -Arguments @('-NoLogo','-NoProfile','-File',$child) -ExitCode ([ref]$code) -MenuCache $cache
+        $code|Should Be 0
+        $cache.ProductionRelease|Should Be '/opt/pmsystem-license/release/new'
+        $cache.ProductionApi|Should Be 'ok'
+        $cache.LastProductionCheck|Should Not Be $null
+    }
+    It '53 Dry Run and release preflight still obtain full live Production state' {
+        $text=Get-Content -LiteralPath $script:releaseScript -Raw
+        $taskBody=$text.Substring($text.IndexOf("if(`$Mode -eq 'Menu')"))
+        $taskBody|Should Match '\$remoteState=Get-DDRECRemoteState -Context \$context'
+        $taskBody|Should Match 'Assert-DDRECGitReleaseState'
+        $taskBody|Should Match 'Assert-DDRECDiskSpace'
+        $taskBody|Should Match "ApiStatus -ne 'ok'"
+    }
+    It '54 menu cache remains process memory and is not saved as a release safety fact' {
+        $text=Get-Content -LiteralPath $script:releaseScript -Raw
+        $save=[regex]::Match($text,'(?s)function Save-ReleaseSession.*?(?=function Invoke-ClientPackageStages)').Value
+        $save|Should Not Match 'menuCache|ProductionApi|LastProductionCheck'
+        $text|Should Not Match 'MenuCachePath|menu-cache\.json'
+    }
+    It '55 returning from Status Dry Run or Publish does not refresh Production remotely' {
+        $text=Get-Content -LiteralPath $script:releaseScript -Raw
+        $loop=[regex]::Match($text,'(?s)function Invoke-ReleaseMenuLoop.*?(?=function Select-ClientUploadMode)').Value
+        $afterTask=[regex]::Match($loop,'(?s)Invoke-DDRECConsoleTask.*?Read-Host ''按 Enter 返回主菜单''').Value
+        $afterTask|Should Match 'Update-ReleaseMenuLocalCache'
+        $afterTask|Should Not Match 'Get-DDRECRemoteState|Get-DDRECMenuProductionOverview|Invoke-DDRECSsh|Invoke-RestMethod|Invoke-WebRequest'
+    }
+    It '56 ten cached menu render paths cannot create an SSH request' {
+        $text=Get-Content -LiteralPath $script:releaseScript -Raw
+        $show=[regex]::Match($text,'(?s)function Show-DDRECReleaseMenu.*?(?=function Read-ReleaseMenuMode)').Value
+        1..10|ForEach-Object{$show|Should Not Match 'ssh|http|Get-DDRECRemoteState'}
+    }
 }

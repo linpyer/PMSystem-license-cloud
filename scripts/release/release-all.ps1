@@ -8,7 +8,8 @@ param(
     [string]$ClientUploadMode = '',
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'production-config.json'),
     [string]$ResumeSessionId,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$MenuPerf
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +26,7 @@ $config = Import-DDRECReleaseConfig -Path $ConfigPath -WorkspaceRoot $workspaceR
 $context = New-DDRECReleaseContext -WorkspaceRoot $workspaceRoot -Config $config
 $stage = '初始化'
 $sessionState = $null
+$menuPerfEnabled = $MenuPerf -or $env:DDREC_MENU_PERF -eq '1'
 
 function Write-Header {
     param([string]$Title)
@@ -34,9 +36,7 @@ function Write-Header {
     Write-Host ('=' * 58) -ForegroundColor Cyan
 }
 
-function Select-MenuMode {
-    param($ClientState,$CloudState,$RemoteState)
-    Write-Header 'DD Rec 生产发布工具'
+function Get-MenuClientVersion {
     Push-Location $context.ClientRoot
     try {
         $version = (& (Join-Path $context.ClientRoot '.venv\Scripts\python.exe') -c 'from app.core.version import APP_VERSION; print(APP_VERSION)' 2>$null | Select-Object -Last 1)
@@ -44,9 +44,50 @@ function Select-MenuMode {
         Pop-Location
     }
     if ([string]::IsNullOrWhiteSpace([string]$version)) { throw '无法读取客户端版本。' }
-    Write-Host "Client:`nVersion : $version`nGit     : $($ClientState.Head)"
-    Write-Host "`nCloud:`nGit     : $($CloudState.Head)"
-    Write-Host "`nProduction:`nAPI     : $($RemoteState.ApiStatus)`nRelease : $($RemoteState.Current)"
+    return [string]$version
+}
+
+function Initialize-ReleaseMenuCache {
+    $measure=[Diagnostics.Stopwatch]::StartNew()
+    $clientVersion=Get-MenuClientVersion
+    $clientInfoMs=$measure.Elapsed.TotalMilliseconds
+    $measure.Restart()
+    $clientHead=Get-DDRECLocalGitHead -Repository $context.ClientRoot
+    $clientGitMs=$measure.Elapsed.TotalMilliseconds
+    $measure.Restart()
+    $cloudHead=Get-DDRECLocalGitHead -Repository $context.CloudRoot
+    $cloudGitMs=$measure.Elapsed.TotalMilliseconds
+    $measure.Restart()
+    $overview=Get-DDRECMenuProductionOverview -Context $context
+    $productionMs=$measure.Elapsed.TotalMilliseconds
+    $measure.Stop()
+    if($menuPerfEnabled){
+        Write-Host ('[PERF] Initialize ClientInfo={0:N1} ms ClientGit={1:N1} ms CloudGit={2:N1} ms ProductionOverview={3:N1} ms' -f $clientInfoMs,$clientGitMs,$cloudGitMs,$productionMs) -ForegroundColor DarkGray
+    }
+    return [pscustomobject]@{
+        ClientVersion=$clientVersion
+        ClientHead=$clientHead
+        CloudHead=$cloudHead
+        ProductionApi=$overview.Api
+        ProductionRelease=$overview.Release
+        LastProductionCheck=$overview.CheckedAt
+    }
+}
+
+function Update-ReleaseMenuLocalCache {
+    param([Parameter(Mandatory)]$Cache)
+    # Local-only refresh is deliberately completed before the Enter prompt. It
+    # never performs git status/fetch/origin or any production network request.
+    try{$Cache.ClientHead=Get-DDRECLocalGitHead -Repository $context.ClientRoot}catch{}
+    try{$Cache.CloudHead=Get-DDRECLocalGitHead -Repository $context.CloudRoot}catch{}
+}
+
+function Show-DDRECReleaseMenu {
+    param([Parameter(Mandatory)]$Cache)
+    Write-Header 'DD Rec 生产发布工具'
+    Write-Host "Client:`nVersion : $($Cache.ClientVersion)`nGit     : $($Cache.ClientHead)"
+    Write-Host "`nCloud:`nGit     : $($Cache.CloudHead)"
+    Write-Host "`nProduction:`nAPI     : $($Cache.ProductionApi)`nRelease : $($Cache.ProductionRelease)"
     Write-Host @'
 
 请选择操作：
@@ -62,6 +103,9 @@ function Select-MenuMode {
 [9] 继续未完成发布 / Resume Release
 [0] 退出
 '@
+}
+
+function Read-ReleaseMenuMode {
     while($true){
         $result=Get-DDRECMainMenuAction -InputText (Read-Host '请选择 [0-9]')
         if($result -ne 'Invalid'){return $result}
@@ -86,24 +130,27 @@ function Select-DryRunScope {
 function Invoke-ReleaseMenuLoop {
     $pwsh=Join-Path $PSHOME 'pwsh.exe'
     if(-not (Test-Path -LiteralPath $pwsh -PathType Leaf)){throw "PowerShell 7 运行文件不存在：$pwsh"}
+    try{
+        $menuCache=Initialize-ReleaseMenuCache
+    }catch{
+        throw "无法初始化本地发布菜单：$($_.Exception.Message)"
+    }
+    $enterReturnWatch=$null
     while($true){
-        try{
-            $menuClientState=Get-DDRECGitState -Repository $context.ClientRoot
-            $menuCloudState=Get-DDRECGitState -Repository $context.CloudRoot
-        }catch{
-            throw "无法读取本地发布仓库状态：$($_.Exception.Message)"
+        $renderWatch=[Diagnostics.Stopwatch]::StartNew()
+        Show-DDRECReleaseMenu -Cache $menuCache
+        $renderWatch.Stop()
+        if($menuPerfEnabled){
+            $returnMs=if($null -eq $enterReturnWatch){0}else{$enterReturnWatch.Elapsed.TotalMilliseconds}
+            Write-Host ('[PERF] MenuRender={0:N1} ms EnterReturn={1:N1} ms' -f $renderWatch.Elapsed.TotalMilliseconds,$returnMs) -ForegroundColor DarkGray
         }
-        try{
-            $menuRemoteState=Get-DDRECRemoteState -Context $context
-        }catch{
-            Write-DDRECLog -Context $context -Level WARN -Message "主菜单暂时无法读取生产状态：$($_.Exception.Message)"
-            $menuRemoteState=[pscustomobject]@{ApiStatus='不可用';Current='不可用'}
-        }
-        $selectedMode=Select-MenuMode -ClientState $menuClientState -CloudState $menuCloudState -RemoteState $menuRemoteState
+        $enterReturnWatch=$null
+        $selectedMode=Read-ReleaseMenuMode
         if($selectedMode -eq 'Exit'){return}
         $arguments=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$PSCommandPath,'-Mode',$selectedMode,'-ConfigPath',$ConfigPath)
         $taskExitCode=0
-        Invoke-DDRECConsoleTask -PwshPath $pwsh -Arguments $arguments -ExitCode ([ref]$taskExitCode)
+        Invoke-DDRECConsoleTask -PwshPath $pwsh -Arguments $arguments -ExitCode ([ref]$taskExitCode) -MenuCache $menuCache
+        Update-ReleaseMenuLocalCache -Cache $menuCache
         Write-DDRECLog -Context $context -Message "菜单任务结束：Mode=$selectedMode ExitCode=$taskExitCode"
         Write-Header '本次任务已结束'
         $modeDisplay=switch($selectedMode){
@@ -121,6 +168,7 @@ function Invoke-ReleaseMenuLoop {
             Write-Host '生产状态请参考以上报告。'
         }
         [void](Read-Host '按 Enter 返回主菜单')
+        $enterReturnWatch=[Diagnostics.Stopwatch]::StartNew()
     }
 }
 
