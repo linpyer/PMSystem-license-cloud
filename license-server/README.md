@@ -130,6 +130,8 @@ $env:LICENSE_TEST_DATABASE_URL='postgresql+asyncpg://user:password@test-db.examp
 .venv\Scripts\pytest
 ```
 
+集成测试只读取显式的 `LICENSE_TEST_DATABASE_URL`。数据库名必须以 `_test` 结尾，并且 URL 必须使用独立的测试用户和测试主机；已知生产数据库、生产用户和生产主机会被测试 Guard 拒绝。未配置时测试保持 SKIP，不会回退到开发或生产数据库。
+
 配置保护会拒绝测试进程连接名称不以 `_test` 结尾的数据库。未提供 `LICENSE_TEST_DATABASE_URL` 时，集成测试按设计 skip，普通单元测试、静态分析和 Admin production build 继续运行。
 
 ## 安全说明

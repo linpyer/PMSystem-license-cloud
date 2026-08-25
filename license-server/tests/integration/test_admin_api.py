@@ -12,7 +12,6 @@ import pytest_asyncio
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import func, select
-from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.admin_security import encrypt_totp_secret, hash_admin_password, verify_admin_password
@@ -37,6 +36,7 @@ from app.db.models.enums import (
     LicenseStatus,
 )
 from app.main import create_app
+from tests.postgres_guard import PostgresTestDatabaseNotConfigured, validate_postgres_test_url
 
 
 pytestmark = pytest.mark.integration
@@ -46,12 +46,12 @@ TOTP_SECRET = "JBSWY3DPEHPK3PXP"
 
 @pytest.fixture(scope="session")
 def admin_database_url() -> str:
-    value = os.getenv("LICENSE_TEST_DATABASE_URL")
-    if not value:
+    try:
+        return validate_postgres_test_url(os.getenv("LICENSE_TEST_DATABASE_URL"))
+    except PostgresTestDatabaseNotConfigured:
         pytest.skip("LICENSE_TEST_DATABASE_URL is not configured")
-    if not (make_url(value).database or "").endswith("_test"):
-        pytest.fail("Administrator integration tests require the dedicated _test database")
-    return value
+    except ValueError as exc:
+        pytest.fail(str(exc))
 
 
 @pytest.fixture(scope="session")

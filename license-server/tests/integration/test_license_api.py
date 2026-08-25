@@ -12,7 +12,6 @@ import pytest_asyncio
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from sqlalchemy import func, select, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import Settings
@@ -22,6 +21,7 @@ from app.db.models import DeviceBinding, DeviceTrial, License, LicenseEvent, Sig
 from app.db.models.enums import DeviceTrialStatus, LicenseStatus, LicenseType
 from app.main import create_app
 from app.services.license_code_service import LicenseCodeService
+from tests.postgres_guard import PostgresTestDatabaseNotConfigured, validate_postgres_test_url
 
 
 pytestmark = pytest.mark.integration
@@ -29,13 +29,12 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(scope="session")
 def integration_database_url() -> str:
-    value = os.getenv("LICENSE_TEST_DATABASE_URL")
-    if not value:
+    try:
+        return validate_postgres_test_url(os.getenv("LICENSE_TEST_DATABASE_URL"))
+    except PostgresTestDatabaseNotConfigured:
         pytest.skip("LICENSE_TEST_DATABASE_URL is not configured; dedicated PostgreSQL tests skipped")
-    database = make_url(value).database or ""
-    if not database.endswith("_test"):
-        pytest.fail("LICENSE_TEST_DATABASE_URL database name must end in _test")
-    return value
+    except ValueError as exc:
+        pytest.fail(str(exc))
 
 
 @pytest.fixture(scope="session")

@@ -11,17 +11,19 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import get_settings
 from app.db.base import Base
+from tests.postgres_guard import PostgresTestDatabaseNotConfigured, validate_postgres_test_url
 
 
 pytestmark = pytest.mark.integration
 
 
 def test_initial_migration_upgrades_and_downgrades_dedicated_database(monkeypatch) -> None:
-    database_url = os.getenv("LICENSE_TEST_DATABASE_URL")
-    if not database_url:
+    try:
+        database_url = validate_postgres_test_url(os.getenv("LICENSE_TEST_DATABASE_URL"))
+    except PostgresTestDatabaseNotConfigured:
         pytest.skip("LICENSE_TEST_DATABASE_URL is not configured; Alembic test skipped")
-    if not database_url.rsplit("/", 1)[-1].split("?", 1)[0].endswith("_test"):
-        pytest.fail("Alembic tests require a database name ending in _test")
+    except ValueError as exc:
+        pytest.fail(str(exc))
 
     root = Path(__file__).resolve().parents[2]
     monkeypatch.setenv("LICENSE_DATABASE_URL", database_url)
