@@ -1559,10 +1559,6 @@ class NetdiskHistoryDialog(QDialog):
         self._build_ui()
         self.reload_records()
 
-    def closeEvent(self, event) -> None:  # type: ignore[override]
-        DialogSizeManager.remember(self, "sync_history")
-        super().closeEvent(event)
-
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 14)

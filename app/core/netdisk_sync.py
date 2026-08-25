@@ -406,57 +406,6 @@ class BaiduNetdiskClient:
         }
         response = self._request_json("GET", BAIDU_FILE_URL, phase="检查远程目录", params=params, timeout=45)
         errno = int(response.get("errno", 0) or 0)
-        returned_path = str(response.get("path") or "")
-        info = response.get("info")
-        if not returned_path and isinstance(info, dict):
-            returned_path = str(info.get("path") or "")
-        if errno in (-8, 31061):
-            if self._remote_directory_exists(remote_dir):
-                self._log_directory_action("skip_existing", remote_dir, remote_dir, "已存在", errno, "目录已存在")
-                return
-        if errno != 0:
-            self._log_directory_action("mkdir_failed", remote_dir, returned_path, "失败", errno, str(response.get("errmsg") or ""))
-            raise self._error_from_baidu(response, "创建远程目录", "创建远程目录失败", remote_path=remote_dir)
-        normalized_returned = self._normalize_remote_dir_path(returned_path) if returned_path else remote_dir
-        normalized_requested = self._normalize_remote_dir_path(remote_dir)
-        if normalized_returned != normalized_requested:
-            self._log_directory_action("mkdir_failed", remote_dir, returned_path, "返回路径不一致")
-            raise NetdiskError(
-                f"远程目录创建异常：请求路径和返回路径不一致，疑似触发重名自动改名。请求：{remote_dir}，返回：{returned_path}",
-                phase="创建远程目录",
-                remote_path=remote_dir,
-                baidu_error_code=errno,
-                response_text=_safe_response_text(response),
-            )
-        self._log_directory_action("mkdir_success", remote_dir, returned_path or remote_dir, "成功", errno, "")
-        return
-        if errno != 0:
-            raise self._error_from_baidu(response, "检查远程目录", "检查远程目录失败", remote_path=remote_dir)
-        for item in response.get("list", []) or []:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("server_filename") or item.get("filename") or "").strip()
-            item_path = str(item.get("path") or "").strip()
-            is_dir = int(item.get("isdir", 0) or 0) == 1
-            if is_dir and (name == target_name or self._normalize_remote_dir_path(item_path) == remote_dir):
-                self._log_directory_action("skip_existing", remote_dir, item_path or remote_dir, "已存在")
-                return True
-        return False
-
-    def _remote_directory_exists(self, remote_dir: str) -> bool:
-        remote_dir = self._normalize_remote_dir_path(remote_dir)
-        if remote_dir == "/":
-            return True
-        parent_dir = self._remote_parent_dir(remote_dir)
-        target_name = self._remote_base_name(remote_dir)
-        self._log_directory_action("check_dir", remote_dir, "", "checking")
-        params = {
-            "method": "list",
-            "access_token": self._access_token(),
-            "dir": parent_dir,
-        }
-        response = self._request_json("GET", BAIDU_FILE_URL, phase="检查远程目录", params=params, timeout=45)
-        errno = int(response.get("errno", 0) or 0)
         if errno != 0:
             raise self._error_from_baidu(response, "检查远程目录", "检查远程目录失败", remote_path=remote_dir)
         for item in response.get("list", []) or []:
@@ -490,18 +439,6 @@ class BaiduNetdiskClient:
             error_code if error_code not in (None, "") else "-",
             error_msg or "-",
         )
-
-    def _create_remote_directory_xpan(self, remote_dir: str) -> None:
-        params = {"method": "create", "access_token": self._access_token()}
-        data = {
-            "path": remote_dir,
-            "isdir": "1",
-            "rtype": "0",
-        }
-        response = self._request_json("POST", BAIDU_FILE_URL, phase="创建远程目录", params=params, data=data, timeout=45)
-        errno = int(response.get("errno", 0) or 0)
-        if errno not in (0, -8, 31061):
-            raise self._error_from_baidu(response, "创建远程目录", "创建远程目录失败", remote_path=remote_dir)
 
     def _create_remote_directory_xpan(self, remote_dir: str) -> None:
         remote_dir = self._normalize_remote_dir_path(remote_dir)
