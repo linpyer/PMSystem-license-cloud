@@ -291,6 +291,8 @@ function Invoke-DDRECConsoleTask {
     )
     # Process stdout one line at a time so it remains live while the two summary
     # fields already printed by every real preflight can refresh the UI cache.
+    # Write directly to the console: returning these lines through the success
+    # pipeline lets PowerShell's formatter race with a child Read-Host prompt.
     # Stderr is deliberately not redirected and inherits the current console.
     & $PwshPath @Arguments | ForEach-Object {
         $line=[string]$_
@@ -312,9 +314,15 @@ function Invoke-DDRECConsoleTask {
                 $MenuCache.LastProductionCheck=[DateTimeOffset]::Now
             }
         }
-        Write-Output $_
+        [Console]::Out.WriteLine($line)
+        [Console]::Out.Flush()
     }
     $ExitCode.Value=[int]$LASTEXITCODE
+}
+
+function Sync-DDRECConsoleOutput {
+    try{[Console]::Out.Flush()}catch{}
+    try{[Console]::Error.Flush()}catch{}
 }
 
 function Get-DDRECGitState {
@@ -469,11 +477,13 @@ function Assert-DDRECInstallerPolicy {
 }
 
 function Show-DDRECPackageMetadata {
-    param([Parameter(Mandatory)]$Metadata)
+    param([Parameter(Mandatory)]$Metadata,[scriptblock]$OutputWriter)
     Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
-    $Metadata |
-        Select-Object FileName,Version,BuildNumber,GitCommit,Edition,Environment,UpdaterVersion,FileSize,SHA256 |
-        Format-List | Out-Host
+    if($null -eq $OutputWriter){$OutputWriter={param($Line) Write-Host $Line}}
+    foreach($field in @('FileName','Version','BuildNumber','GitCommit','Edition','Environment','UpdaterVersion','FileSize','SHA256')){
+        [void](& $OutputWriter ('{0,-14} : {1}' -f $field,[string]$Metadata.$field))
+    }
+    Sync-DDRECConsoleOutput
 }
 
 function Read-DDRECColonMetadataFile {
@@ -662,6 +672,8 @@ function Get-DDRECCloudPackageDecision {
         $allowed = @('R','N')
     }
     if ($null -eq $InputReader) { $InputReader = { param($Prompt) Read-Host $Prompt } }
+    & $OutputWriter '' ''
+    Sync-DDRECConsoleOutput
     while ($true) {
         $answer = [string](& $InputReader '请选择 [Y/R/N]')
         if ([string]::IsNullOrWhiteSpace($answer)) { return [pscustomobject]@{Action='Cancel'} }
@@ -1266,6 +1278,8 @@ function Wait-DDRECManualClientUpload {
     $paths=Initialize-DDRECClientIncomingDirectory -Context $Context -Metadata $Metadata
     Show-DDRECManualUploadPrompt -Context $Context -Metadata $Metadata -Paths $paths -Lane $Lane
     if($NonInteractive){return [pscustomobject]@{Action='Waiting';Status=$null;Paths=$paths}}
+    Write-Host ''
+    Sync-DDRECConsoleOutput
     while($true){
         $answer=if($InputReader){[string](& $InputReader)}else{[string](Read-Host '选择')}
         $action=Get-DDRECManualUploadAction -InputText $answer

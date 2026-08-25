@@ -106,6 +106,7 @@ function Show-DDRECReleaseMenu {
 }
 
 function Read-ReleaseMenuMode {
+    Sync-DDRECConsoleOutput
     while($true){
         $result=Get-DDRECMainMenuAction -InputText (Read-Host '请选择 [0-9]')
         if($result -ne 'Invalid'){return $result}
@@ -115,8 +116,17 @@ function Read-ReleaseMenuMode {
 
 function Select-DryRunScope {
     if ($NonInteractive) { return $DryRunScope }
-    Write-Host "`nDry Run 范围： [1] Standard [2] License [3] 两客户端 [4] Cloud [5] Cloud+Standard [6] 完整"
-    $result = switch ((Read-Host '选择').Trim()) {
+    Write-Host "`nDry Run 范围："
+    Write-Host ''
+    Write-Host '[1] Standard'
+    Write-Host '[2] License-Production'
+    Write-Host '[3] Standard + License-Production'
+    Write-Host '[4] Cloud'
+    Write-Host '[5] Cloud + Standard'
+    Write-Host '[6] Cloud + Standard + License-Production'
+    Write-Host ''
+    Sync-DDRECConsoleOutput
+    $result = switch ((Read-Host '请选择 [1-6]').Trim()) {
         '1' { 'Standard' }
         '2' { 'LicenseProduction' }
         '3' { 'BothClients' }
@@ -192,6 +202,8 @@ function Select-ClientUploadMode {
 
 [0] 取消
 '@
+    Write-Host ''
+    Sync-DDRECConsoleOutput
     while($true){
         $selection=Get-DDRECClientUploadModeAction -InputText (Read-Host '请选择 [1/2/0]')
         if($selection -ne 'invalid'){return $selection}
@@ -211,8 +223,11 @@ function Select-Installer {
     }
     $metadata=Get-DDRECInstallerMetadata -InstallerPath $candidate.FullName -Lane $Lane -ExpectedCommit $ClientCommit
     Write-Host "`n$Lane 安装包" -ForegroundColor Green
+    Write-Host ''
     Show-DDRECPackageMetadata -Metadata $metadata
     if (-not $DryRun -and -not $NonInteractive) {
+        Write-Host ''
+        Sync-DDRECConsoleOutput
         $answer=(Read-Host '[Y] 使用 / [N] 手动选择其它安装包').Trim()
         if ($answer -notmatch '^(?i)y$') {
             Add-Type -AssemblyName System.Windows.Forms
@@ -321,7 +336,11 @@ function Invoke-ClientPackageStages {
                     Save-ReleaseSession -State $State -CompletedStage "Awaiting-$($item.Lane)-Upload"
                     return $false
                 }
-                Write-Host "[1] 重试自动上传`n[2] 切换为人工上传`n[3] 保存 Session 并返回主菜单"
+                Write-Host '[1] 重试自动上传'
+                Write-Host '[2] 切换为人工上传'
+                Write-Host '[3] 保存 Session 并返回主菜单'
+                Write-Host ''
+                Sync-DDRECConsoleOutput
                 $failureAction=Get-DDRECAutoUploadFailureAction -InputText (Read-Host '请选择 [1/2/3]')
                 if($failureAction -eq 'Retry'){continue}
                 if($failureAction -eq 'Manual'){
@@ -385,9 +404,25 @@ function Invoke-ClientDraftAndPublishStages {
         return
     }
     Write-Host "`n默认保持 Draft。只有先选择目标并再次输入 PUBLISH 才会发布。"
-    $publishSelection=if($publishable.Count -eq 1){if((Read-Host '[1] 发布唯一 Draft / [4] 保持 Draft / [0] 退出') -eq '1'){@($publishable[0])}else{@()}}else{
-        switch(Read-Host '[1] Standard [2] License-Production [3] 两个 [4] 全部保持 Draft [0] 退出'){'1'{@(0)}'2'{@(1)}'3'{@(0,1)}default{@()}}
+    Write-Host ''
+    $publishSelection=if($publishable.Count -eq 1){
+        Write-Host '[1] 发布唯一 Draft'
+        Write-Host '[4] 保持 Draft'
+        Write-Host '[0] 退出'
+        Write-Host ''
+        Sync-DDRECConsoleOutput
+        if((Read-Host '请选择 [0/1/4]') -eq '1'){@($publishable[0])}else{@()}
+    }else{
+        Write-Host '[1] Standard'
+        Write-Host '[2] License-Production'
+        Write-Host '[3] 两个'
+        Write-Host '[4] 全部保持 Draft'
+        Write-Host '[0] 退出'
+        Write-Host ''
+        Sync-DDRECConsoleOutput
+        switch(Read-Host '请选择 [0-4]'){'1'{@(0)}'2'{@(1)}'3'{@(0,1)}default{@()}}
     }
+    if($publishSelection.Count -gt 0){Sync-DDRECConsoleOutput}
     if($publishSelection.Count -gt 0 -and (Read-Host '请输入 PUBLISH 二次确认') -ceq 'PUBLISH'){
         $script:stage='Published API'
         foreach($index in $publishSelection){
@@ -556,6 +591,7 @@ try {
     }
 
     Show-Plan -Plan $plan -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState -MigrationPlan $migrationPlan -Packages $package -Targets $targets
+    Sync-DDRECConsoleOutput
     if($NonInteractive -or (Read-Host '请输入 DEPLOY 才允许生产写操作') -cne 'DEPLOY'){
         Write-DDRECLog -Context $context -Level WARN -Message '用户取消 DEPLOY；生产未修改。'
         exit $exitCodes.Cancelled
@@ -564,6 +600,7 @@ try {
     $approveMigration=$false
     if($plan.Cloud -and @($migrationPlan.Pending).Count -gt 0){
         Write-Host "发现数据库 Migration：$($migrationPlan.Current) -> $($migrationPlan.Head)" -ForegroundColor Yellow
+        Sync-DDRECConsoleOutput
         if((Read-Host '是否执行 Migration？[Y/N]') -notmatch '^(?i)y$'){throw '用户拒绝 pending Migration，部署停止。'}
         $approveMigration=$true
     }
