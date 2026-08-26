@@ -27,12 +27,13 @@ $cloudRelease="$($config.RemoteRoot)/release/$releaseName"
 if(-not $releaseName.EndsWith($cloudCommit.Substring(0,7),[StringComparison]::Ordinal)){throw '服务器 current release 名称与 API buildCommit 不一致。'}
 if($log -notmatch [regex]::Escape($cloudCommit)){throw '原日志未记录当前 API buildCommit，禁止恢复。'}
 $clientState=Get-DDRECGitState -Repository $context.ClientRoot
-Assert-DDRECGitReleaseState -State $clientState -RequiredBranch $config.RequiredBranch | Out-Null
+$clientVersion=Get-DDRECClientApplicationVersion -ClientRoot $context.ClientRoot
+Assert-DDRECClientReleaseState -State $clientState -ClientVersion $clientVersion | Out-Null
 $targets=[Collections.Generic.List[object]]::new()
 foreach($lane in @('standard','license-production')){
     $candidate=Get-DDRECInstallerCandidate -ClientRoot $context.ClientRoot -Lane $lane
     if(-not $candidate){throw "$lane 未找到安装包候选，不能重建恢复状态。"}
-    $metadata=Get-DDRECInstallerMetadata -InstallerPath $candidate.FullName -Lane $lane -ExpectedCommit $clientState.Head
+    $metadata=Get-DDRECInstallerMetadata -InstallerPath $candidate.FullName -Lane $lane -ExpectedCommit $clientState.Head -ExpectedVersion $clientVersion
     $target=Get-DDRECClientTarget -Metadata $metadata -Config $config
     $remoteFinal=Test-DDRECRemoteClientTarget -Context $context -Target $target -Metadata $metadata
     if($remoteFinal.Exists){throw "$lane 最终 Build 已存在；当前失败日志与服务器事实不再匹配，禁止自动重建状态。"}

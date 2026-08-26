@@ -1,15 +1,14 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "1.3.0"
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
 $OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $env:PYTHONUTF8 = "1"
 $ProjectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+Import-Module (Join-Path $PSScriptRoot 'release\DDREC.Release.psm1') -Force
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-$ReleaseRoot = Join-Path $ProjectRoot "release\client\$Version"
-$Installer = Join-Path $ReleaseRoot "DDREC-Setup.exe"
 $PublicKey = Join-Path $ProjectRoot "app\assets\license\production_ed25519_public.pem"
 
 function Invoke-Checked {
@@ -61,12 +60,19 @@ if (-not (Test-Path -LiteralPath $Python)) {
 }
 $ActualVersion = (& $Python -c "from app.core.version import APP_VERSION; print(APP_VERSION)").Trim()
 $AppName = (& $Python -c "from app.core.version import APP_NAME; print(APP_NAME)").Trim()
+$GitBranch = (git branch --show-current).Trim()
+$ExpectedVersion = Get-DDRECExpectedClientVersion -Branch $GitBranch
+if ($ActualVersion -cne $ExpectedVersion) {
+    throw "Client branch/version mismatch: $GitBranch requires $ExpectedVersion, actual $ActualVersion"
+}
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = $ActualVersion
+}
 if ($ActualVersion -ne $Version) {
     throw "Requested version $Version does not match application version $ActualVersion"
 }
-if ((git branch --show-current).Trim() -ne "v1.3") {
-    throw "Production client must be built from branch v1.3"
-}
+$ReleaseRoot = Join-Path $ProjectRoot "release\client\$Version"
+$Installer = Join-Path $ReleaseRoot "DDREC-Setup.exe"
 
 $Ffmpeg = Join-Path $ProjectRoot "tools\ffmpeg\ffmpeg.exe"
 $Ffprobe = Join-Path $ProjectRoot "tools\ffmpeg\ffprobe.exe"
@@ -134,7 +140,6 @@ Invoke-Checked {
 } "installer security scan"
 
 $GitCommit = (git rev-parse HEAD).Trim()
-$GitBranch = (git branch --show-current).Trim()
 $BuildTime = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
 $PythonVersion = (& $Python --version 2>&1).ToString().Trim()
 $PyInstallerVersion = (& $Python -m PyInstaller --version).Trim()

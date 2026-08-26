@@ -6,6 +6,10 @@ $script:ExitCodes = [ordered]@{
     Migration = 50; Health = 60; ClientValidation = 70; PublishApi = 80
     Cancelled = 90
 }
+$script:ClientReleaseVersions = [ordered]@{
+    'v1.3' = '1.3.0'
+    'v1.3.1' = '1.3.1'
+}
 
 function Get-DDRECExitCodes { return $script:ExitCodes }
 
@@ -20,7 +24,7 @@ function Import-DDRECReleaseConfig {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$WorkspaceRoot)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "发布配置不存在：$Path" }
     $config = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
-    foreach ($name in @('ServerHost','ApiBaseUrl','AdminUrl','DownloadBaseUrl','RemoteRoot','DownloadRoot','RemoteExecutor')) {
+    foreach ($name in @('RequiredCloudBranch','ServerHost','ApiBaseUrl','AdminUrl','DownloadBaseUrl','RemoteRoot','DownloadRoot','RemoteExecutor')) {
         if ([string]::IsNullOrWhiteSpace([string]$config.$name)) { throw "发布配置缺少：$name" }
     }
     if ([string]$config.RemoteRoot -ne '/opt/pmsystem-license') {
@@ -329,7 +333,11 @@ function Get-DDRECGitState {
     param([Parameter(Mandatory)][string]$Repository)
     $branch = (Invoke-DDRECNative git @('branch','--show-current') $Repository).Output.Trim()
     $head = (Invoke-DDRECNative git @('rev-parse','HEAD') $Repository).Output.Trim()
-    $remote = (Invoke-DDRECNative git @('rev-parse','origin/v1.3') $Repository).Output.Trim()
+    $remote = if ([string]::IsNullOrWhiteSpace($branch)) {
+        ''
+    } else {
+        (Invoke-DDRECNative git @('rev-parse',"origin/$branch") $Repository).Output.Trim()
+    }
     $status = (Invoke-DDRECNative git @('status','--porcelain=v1','--untracked-files=all') $Repository).Output
     return [pscustomobject]@{
         Repository=$Repository; Branch=$branch; Head=$head; Origin=$remote
@@ -373,11 +381,48 @@ echo
 }
 
 function Assert-DDRECGitReleaseState {
-    param([Parameter(Mandatory)]$State,[string]$RequiredBranch='v1.3')
+    param([Parameter(Mandatory)]$State,[Parameter(Mandatory)][string]$RequiredBranch)
     if ($State.Branch -cne $RequiredBranch) { throw "Git 分支错误：需要 $RequiredBranch，实际 $($State.Branch)" }
     if (-not $State.Clean) { throw "Git 工作区不干净：$($State.Repository)`n$($State.Status)" }
     if ($State.Head -cne $State.Origin) { throw "Git HEAD 与 origin/$RequiredBranch 不一致：$($State.Head) != $($State.Origin)" }
     return $true
+}
+
+function Get-DDRECExpectedClientVersion {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Branch)
+    if (-not $script:ClientReleaseVersions.Contains($Branch)) {
+        throw "客户端发布分支不受支持：$Branch"
+    }
+    return [string]$script:ClientReleaseVersions[$Branch]
+}
+
+function Assert-DDRECClientReleaseState {
+    param(
+        [Parameter(Mandatory)]$State,
+        [Parameter(Mandatory)][string]$ClientVersion
+    )
+    $expectedVersion = Get-DDRECExpectedClientVersion -Branch ([string]$State.Branch)
+    if ($ClientVersion -cne $expectedVersion) {
+        throw "客户端分支与版本不一致：$($State.Branch) 需要 $expectedVersion，实际 $ClientVersion"
+    }
+    Assert-DDRECGitReleaseState -State $State -RequiredBranch ([string]$State.Branch) | Out-Null
+    return $true
+}
+
+function Get-DDRECClientApplicationVersion {
+    param([Parameter(Mandatory)][string]$ClientRoot)
+    $python = Join-Path $ClientRoot '.venv\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
+        throw "客户端 Python 不存在：$python"
+    }
+    Push-Location $ClientRoot
+    try {
+        $version = (& $python -c 'from app.core.version import APP_VERSION; print(APP_VERSION)' 2>$null | Select-Object -Last 1)
+    } finally {
+        Pop-Location
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$version)) { throw '无法读取客户端版本。' }
+    return ([string]$version).Trim()
 }
 
 function Get-DDRECModePlan {
@@ -462,7 +507,8 @@ function Assert-DDRECInstallerPolicy {
     param(
         [Parameter(Mandatory)]$Metadata,
         [ValidateSet('standard','license-production')][string]$Lane,
-        [Parameter(Mandatory)][string]$ExpectedCommit
+        [Parameter(Mandatory)][string]$ExpectedCommit,
+        [Parameter(Mandatory)][string]$ExpectedVersion
     )
     Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
     $expectedEdition = if ($Lane -eq 'standard') {'standard'} else {'license'}
@@ -471,6 +517,7 @@ function Assert-DDRECInstallerPolicy {
     if ($Metadata.Environment -cne $expectedEnvironment) { throw "安装包 Environment 错误：$($Metadata.Environment)" }
     if ($Metadata.GitCommit -cne $ExpectedCommit) { throw "安装包 GitCommit 与当前 client HEAD 不一致：$($Metadata.GitCommit) != $ExpectedCommit" }
     if ($Metadata.Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Version 必须为三段式版本号。' }
+    if ($Metadata.Version -cne $ExpectedVersion) { throw "安装包 Version 与客户端分支映射不一致：$($Metadata.Version) != $ExpectedVersion" }
     if ([int64]$Metadata.BuildNumber -lt 1) { throw 'BuildNumber 必须大于 0。' }
     if ($Metadata.UpdaterVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'UpdaterVersion 无效或缺失。' }
     return $true
@@ -524,7 +571,7 @@ function Get-DDRECCloudPackageMetadata {
         [Parameter(Mandatory)][string]$CloudRoot,
         [Parameter(Mandatory)][string]$ExpectedCommit,
         [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$ExpectedVersion,
-        [string]$ExpectedBranch = 'v1.3'
+        [Parameter(Mandatory)][string]$ExpectedBranch
     )
     $root = [IO.Path]::GetFullPath((Join-Path $CloudRoot 'artifacts\cloud\production\all'))
     $manifestPath = Join-Path $root 'RELEASE-MANIFEST.txt'
@@ -624,7 +671,7 @@ function Get-DDRECCloudPackageState {
         [Parameter(Mandatory)][string]$CloudRoot,
         [Parameter(Mandatory)][string]$ExpectedCommit,
         [Parameter(Mandatory)][string]$ExpectedVersion,
-        [string]$ExpectedBranch = 'v1.3'
+        [Parameter(Mandatory)][string]$ExpectedBranch
     )
     $outputRoot = [IO.Path]::GetFullPath((Join-Path $CloudRoot 'artifacts\cloud\production\all'))
     $scratchRoot = [IO.Path]::GetFullPath((Join-Path $CloudRoot 'artifacts\cloud\.build-production-all'))
@@ -695,7 +742,8 @@ function Get-DDRECInstallerMetadata {
     param(
         [Parameter(Mandatory)][string]$InstallerPath,
         [ValidateSet('standard','license-production')][string]$Lane,
-        [Parameter(Mandatory)][string]$ExpectedCommit
+        [Parameter(Mandatory)][string]$ExpectedCommit,
+        [Parameter(Mandatory)][string]$ExpectedVersion
     )
     $file = Get-Item -LiteralPath $InstallerPath -ErrorAction Stop
     $manifestPath = Join-Path $file.DirectoryName 'RELEASE-MANIFEST.txt'
@@ -738,7 +786,7 @@ function Get-DDRECInstallerMetadata {
         UpdaterVersion=[string]$m['UpdaterVersion']
         ManifestPath=$manifestPath; ChecksumsPath=$checksumsPath; PEProductVersion=$peProductVersion
     }
-    Assert-DDRECInstallerPolicy -Metadata $metadata -Lane $Lane -ExpectedCommit $ExpectedCommit | Out-Null
+    Assert-DDRECInstallerPolicy -Metadata $metadata -Lane $Lane -ExpectedCommit $ExpectedCommit -ExpectedVersion $ExpectedVersion | Out-Null
     return $metadata
 }
 
@@ -1506,7 +1554,7 @@ function Invoke-DDRECCloudBuild {
     $arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',$script,'-Environment','production','-Service','all')
     if ($Clean) { $arguments += '-Clean' }
     Invoke-DDRECNative pwsh $arguments -WorkingDirectory $Context.CloudRoot -Context $Context | Out-Null
-    return Get-DDRECCloudPackageMetadata -CloudRoot $Context.CloudRoot -ExpectedCommit $ExpectedCommit -ExpectedVersion $ExpectedVersion -ExpectedBranch $Context.Config.RequiredBranch
+    return Get-DDRECCloudPackageMetadata -CloudRoot $Context.CloudRoot -ExpectedCommit $ExpectedCommit -ExpectedVersion $ExpectedVersion -ExpectedBranch $Context.Config.RequiredCloudBranch
 }
 
 function Update-DDRECDeploymentState {

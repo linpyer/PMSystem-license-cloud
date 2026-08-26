@@ -1,6 +1,6 @@
 {
   "Product": "DDREC",
-  "RequiredBranch": "v1.3",
+  "RequiredCloudBranch": "v1.3",
   "ServerHost": "pmsystem-prod",
   "ServerAddress": "47.98.206.68",
   "SshUser": "root",

@@ -37,14 +37,7 @@ function Write-Header {
 }
 
 function Get-MenuClientVersion {
-    Push-Location $context.ClientRoot
-    try {
-        $version = (& (Join-Path $context.ClientRoot '.venv\Scripts\python.exe') -c 'from app.core.version import APP_VERSION; print(APP_VERSION)' 2>$null | Select-Object -Last 1)
-    } finally {
-        Pop-Location
-    }
-    if ([string]::IsNullOrWhiteSpace([string]$version)) { throw '无法读取客户端版本。' }
-    return [string]$version
+    return Get-DDRECClientApplicationVersion -ClientRoot $context.ClientRoot
 }
 
 function Initialize-ReleaseMenuCache {
@@ -212,7 +205,12 @@ function Select-ClientUploadMode {
 }
 
 function Select-Installer {
-    param([ValidateSet('standard','license-production')][string]$Lane,[string]$ClientCommit,[bool]$DryRun)
+    param(
+        [ValidateSet('standard','license-production')][string]$Lane,
+        [string]$ClientCommit,
+        [string]$ClientVersion,
+        [bool]$DryRun
+    )
     $candidate = Get-DDRECInstallerCandidate -ClientRoot $context.ClientRoot -Lane $Lane
     if (-not $candidate) {
         if ($DryRun -or $NonInteractive) { throw "$Lane 未找到安装包候选。" }
@@ -221,7 +219,7 @@ function Select-Installer {
         if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { throw '用户取消选择安装包。' }
         $candidate=Get-Item -LiteralPath $dialog.FileName
     }
-    $metadata=Get-DDRECInstallerMetadata -InstallerPath $candidate.FullName -Lane $Lane -ExpectedCommit $ClientCommit
+    $metadata=Get-DDRECInstallerMetadata -InstallerPath $candidate.FullName -Lane $Lane -ExpectedCommit $ClientCommit -ExpectedVersion $ClientVersion
     Write-Host "`n$Lane 安装包" -ForegroundColor Green
     Write-Host ''
     Show-DDRECPackageMetadata -Metadata $metadata
@@ -233,7 +231,7 @@ function Select-Installer {
             Add-Type -AssemblyName System.Windows.Forms
             $dialog=[Windows.Forms.OpenFileDialog]::new();$dialog.Filter='DD Rec Setup (*.exe)|*.exe';$dialog.Multiselect=$false
             if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { throw '用户取消选择安装包。' }
-            $metadata=Get-DDRECInstallerMetadata -InstallerPath $dialog.FileName -Lane $Lane -ExpectedCommit $ClientCommit
+            $metadata=Get-DDRECInstallerMetadata -InstallerPath $dialog.FileName -Lane $Lane -ExpectedCommit $ClientCommit -ExpectedVersion $ClientVersion
         }
     }
     return $metadata
@@ -275,7 +273,7 @@ function Show-Plan {
     Write-Header '生产修改计划'
     if($Plan.Cloud){
         Write-Host "Cloud Git       : $($CloudState.Head)"
-        Write-Host "目标 Release    : 1.3.0-$($CloudState.Head.Substring(0,7))"
+        Write-Host "目标 Release    : $($Packages.Version)-$($CloudState.Head.Substring(0,7))"
         Write-Host "当前 Release    : $($RemoteState.Current)"
         Write-Host "Migration       : $($MigrationPlan.Current) -> $($MigrationPlan.Head)（$(@($MigrationPlan.Pending).Count) 个）"
         Write-Host "备份             : $($config.RemoteRoot)/backups/release-$($context.SessionId)"
@@ -447,7 +445,7 @@ function Get-ResumeTargets {
     foreach($entry in $entries){
         $lane=[string]$entry.Lane;$sessionItem=$entry.SessionItem
         if($null -eq $sessionItem){continue}
-        $metadata=Get-DDRECInstallerMetadata -InstallerPath ([string]$sessionItem.Path) -Lane $lane -ExpectedCommit ([string]$State.ClientGitCommit)
+        $metadata=Get-DDRECInstallerMetadata -InstallerPath ([string]$sessionItem.Path) -Lane $lane -ExpectedCommit ([string]$State.ClientGitCommit) -ExpectedVersion ([string]$sessionItem.Version)
         Assert-DDRECSessionClientMetadata -SessionItem $sessionItem -Metadata $metadata | Out-Null
         $target=Get-DDRECClientTarget -Metadata $metadata -Config $config
         if($target.RemotePath -cne [string]$sessionItem.RemoteFinalPath -or $target.Url -cne [string]$sessionItem.DownloadUrl){throw 'Resume 阻止：客户端最终路径或 URL 与 Session 不一致。'}
@@ -465,6 +463,7 @@ try {
     $stage='读取 Git 状态'
     $clientState=Get-DDRECGitState -Repository $context.ClientRoot
     $cloudState=Get-DDRECGitState -Repository $context.CloudRoot
+    $clientVersion=Get-DDRECClientApplicationVersion -ClientRoot $context.ClientRoot
     $stage='读取生产状态'
     $remoteState=Get-DDRECRemoteState -Context $context
 
@@ -478,7 +477,7 @@ try {
         Write-DDRECLog -Context $context -Message "Resume Release Session：$($context.SessionId)"
         $stage='读取并验证 Resume Session'
         $sessionState=Read-DDRECReleaseSessionState -Context $context -SessionId $ResumeSessionId
-        Assert-DDRECGitReleaseState -State $clientState -RequiredBranch $config.RequiredBranch | Out-Null
+        Assert-DDRECClientReleaseState -State $clientState -ClientVersion $clientVersion | Out-Null
         Assert-DDRECResumeProductionState -State $sessionState -RemoteState $remoteState | Out-Null
         if(-not (Test-Path -LiteralPath $config.UpdatePrivateKey -PathType Leaf)){throw '本地更新签名私钥不存在。'}
         Merge-DDRECReleaseSessionContext -Context $context -State $sessionState | Out-Null
@@ -520,8 +519,8 @@ try {
     $plan=Get-DDRECModePlan -Mode $Mode
 
     $stage='Preflight / Git 安全检查'
-    if($plan.Lanes.Count -gt 0){Assert-DDRECGitReleaseState -State $clientState -RequiredBranch $config.RequiredBranch|Out-Null}
-    if($plan.Cloud){Assert-DDRECGitReleaseState -State $cloudState -RequiredBranch $config.RequiredBranch|Out-Null}
+    if($plan.Lanes.Count -gt 0){Assert-DDRECClientReleaseState -State $clientState -ClientVersion $clientVersion|Out-Null}
+    if($plan.Cloud){Assert-DDRECGitReleaseState -State $cloudState -RequiredBranch $config.RequiredCloudBranch|Out-Null}
     Assert-DDRECDiskSpace -AvailableBytes $remoteState.DiskAvailable -RequiredBytes ([int64]$config.MinimumFreeBytes)|Out-Null
     if($remoteState.ApiStatus -ne 'ok' -or $remoteState.Database -ne 'ok' -or $remoteState.AdminHttp -ne 200 -or $remoteState.ApiContainer -ne 'healthy' -or $remoteState.PostgresContainer -ne 'healthy'){
         throw '生产 API、Admin、Docker 或 PostgreSQL 预检失败。'
@@ -533,7 +532,7 @@ try {
     $stage='客户端安装包识别与真实性校验'
     $targets=[Collections.Generic.List[object]]::new()
     foreach($lane in $plan.Lanes){
-        $metadata=Select-Installer -Lane $lane -ClientCommit $clientState.Head -DryRun $dryRun
+        $metadata=Select-Installer -Lane $lane -ClientCommit $clientState.Head -ClientVersion $clientVersion -DryRun $dryRun
         $target=Get-DDRECClientTarget -Metadata $metadata -Config $config
         $remoteTarget=Test-DDRECRemoteClientTarget -Context $context -Target $target -Metadata $metadata
         $targets.Add([pscustomobject]@{Lane=$lane;Metadata=$metadata;Target=$target;Remote=$remoteTarget;Signed=$null;Draft=$null})
@@ -552,7 +551,7 @@ try {
     if($plan.Cloud){
         $stage='Cloud 生产发布包识别与真实性校验'
         $cloudVersion=(Get-Content -LiteralPath (Join-Path $context.CloudRoot 'VERSION') -Raw -Encoding UTF8).Trim()
-        $packageState=Get-DDRECCloudPackageState -CloudRoot $context.CloudRoot -ExpectedCommit $cloudState.Head -ExpectedVersion $cloudVersion -ExpectedBranch $config.RequiredBranch
+        $packageState=Get-DDRECCloudPackageState -CloudRoot $context.CloudRoot -ExpectedCommit $cloudState.Head -ExpectedVersion $cloudVersion -ExpectedBranch $config.RequiredCloudBranch
         if($packageState.IsValid){
             Write-Host "`nCloud 生产发布包" -ForegroundColor Green
             Show-DDRECCloudPackageMetadata -Metadata $packageState.Metadata

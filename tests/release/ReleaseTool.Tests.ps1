@@ -7,11 +7,17 @@ function New-GitState {
 }
 
 function New-Metadata {
-    param([string]$Edition='standard',[string]$Environment='none',[string]$Commit=('a'*40),[int]$Build=82)
+    param(
+        [string]$Edition='standard',
+        [string]$Environment='none',
+        [string]$Commit=('a'*40),
+        [int]$Build=82,
+        [string]$Version='1.3.0'
+    )
     [pscustomobject]@{
         PSTypeName='DDREC.PackageMetadata'
         Path='C:\fixture\DDREC-Setup.exe';FileName='DDREC-Setup.exe';FileSize=1024;SHA256=('A'*64)
-        Version='1.3.0';BuildNumber=$Build;GitCommit=$Commit;Edition=$Edition
+        Version=$Version;BuildNumber=$Build;GitCommit=$Commit;Edition=$Edition
         Environment=$Environment;UpdaterVersion='1.2.0'
     }
 }
@@ -46,6 +52,13 @@ function New-InstallerFixture {
     return $installer
 }
 
+function Get-InstallerFixtureVersion {
+    param([Parameter(Mandatory)][string]$Installer)
+    $productVersion=[string]([Diagnostics.FileVersionInfo]::GetVersionInfo($Installer).ProductVersion)
+    if($productVersion -notmatch '^(\d+\.\d+\.\d+)'){throw "测试 PE ProductVersion 无效：$productVersion"}
+    return $matches[1]
+}
+
 function Assert-Throws {
     param([Parameter(Mandatory)][scriptblock]$Script)
     $threw = $false
@@ -55,25 +68,25 @@ function Assert-Throws {
 
 Describe 'DDREC production release safety failures' {
     It '1 client working tree dirty' {
-        Assert-Throws { Assert-DDRECGitReleaseState (New-GitState -Clean $false) }
+        Assert-Throws { Assert-DDRECGitReleaseState (New-GitState -Clean $false) -RequiredBranch 'v1.3' }
     }
     It '2 cloud working tree dirty' {
-        Assert-Throws { Assert-DDRECGitReleaseState (New-GitState -Clean $false) }
+        Assert-Throws { Assert-DDRECGitReleaseState (New-GitState -Clean $false) -RequiredBranch 'v1.3' }
     }
     It '3 HEAD differs from origin v1.3' {
-        Assert-Throws { Assert-DDRECGitReleaseState (New-GitState -Head ('a'*40) -Origin ('b'*40)) }
+        Assert-Throws { Assert-DDRECGitReleaseState (New-GitState -Head ('a'*40) -Origin ('b'*40)) -RequiredBranch 'v1.3' }
     }
     It '4 SSH failure stops transport' {
         Assert-Throws { Assert-DDRECTransportResult -ExitCode 255 -Stage SSH }
     }
     It '5 installer Edition mismatch' {
-        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Edition license -Environment production) standard ('a'*40) }
+        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Edition license -Environment production) standard ('a'*40) '1.3.0' }
     }
     It '6 installer Build metadata and Git mismatch' {
-        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Commit ('b'*40)) standard ('a'*40) }
+        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Commit ('b'*40)) standard ('a'*40) '1.3.0' }
     }
     It '7 correct filename cannot bypass internal Edition policy' {
-        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Edition license -Environment production) standard ('a'*40) }
+        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Edition license -Environment production) standard ('a'*40) '1.3.0' }
     }
     It '8 local and remote SHA mismatch' {
         Assert-Throws { Assert-DDRECHashCompatibility ('A'*64) ('B'*64) }
@@ -136,9 +149,44 @@ Describe 'DDREC production release safety failures' {
     }
 }
 
+Describe 'DDREC client release branch and version mapping' {
+    It 'accepts historical v1.3 with 1.3.0' {
+        Assert-DDRECClientReleaseState -State (New-GitState -Branch 'v1.3') -ClientVersion '1.3.0' | Should Be $true
+    }
+    It 'accepts v1.3.1 with 1.3.1' {
+        Assert-DDRECClientReleaseState -State (New-GitState -Branch 'v1.3.1') -ClientVersion '1.3.1' | Should Be $true
+    }
+    It 'rejects v1.3 with 1.3.1' {
+        Assert-Throws { Assert-DDRECClientReleaseState -State (New-GitState -Branch 'v1.3') -ClientVersion '1.3.1' }
+    }
+    It 'rejects v1.3.1 with 1.3.0' {
+        Assert-Throws { Assert-DDRECClientReleaseState -State (New-GitState -Branch 'v1.3.1') -ClientVersion '1.3.0' }
+    }
+    It 'rejects an unknown release branch' {
+        Assert-Throws { Assert-DDRECClientReleaseState -State (New-GitState -Branch 'feature/release') -ClientVersion '1.3.1' }
+    }
+    It 'rejects a detached HEAD' {
+        Assert-Throws { Assert-DDRECClientReleaseState -State (New-GitState -Branch '') -ClientVersion '1.3.1' }
+    }
+    It 'rejects a dirty v1.3.1 worktree' {
+        Assert-Throws { Assert-DDRECClientReleaseState -State (New-GitState -Branch 'v1.3.1' -Clean $false) -ClientVersion '1.3.1' }
+    }
+    It 'rejects metadata version that differs from the mapped client version' {
+        Assert-Throws {
+            Assert-DDRECInstallerPolicy -Metadata (New-Metadata -Version '1.3.0') -Lane standard -ExpectedCommit ('a'*40) -ExpectedVersion '1.3.1'
+        }
+    }
+    It 'does not use wildcard or prefix matching for release branches' {
+        $definition=(Get-Command Get-DDRECExpectedClientVersion).Definition
+        $definition|Should Not Match 'StartsWith'
+        $definition|Should Not Match '-like'
+        $definition|Should Not Match 'v1\.3\\\*'
+    }
+}
+
 Describe 'DDREC successful safety policies' {
-    It 'accepts clean matching Git state' { Assert-DDRECGitReleaseState (New-GitState) | Should Be $true }
-    It 'accepts Standard production artifact policy' { Assert-DDRECInstallerPolicy (New-Metadata) standard ('a'*40) | Should Be $true }
+    It 'accepts clean matching Git state' { Assert-DDRECGitReleaseState (New-GitState) -RequiredBranch 'v1.3' | Should Be $true }
+    It 'accepts Standard production artifact policy' { Assert-DDRECInstallerPolicy (New-Metadata) standard ('a'*40) '1.3.0' | Should Be $true }
     It 'accepts equal immutable SHA' { Assert-DDRECHashCompatibility ('F'*64) ('F'*64) | Should Be $true }
     It 'keeps standard and license-production isolated' { Assert-DDRECReleaseIsolation standard standard published | Should Be $true }
     It 'rejects standard receiving license-production stable' { Assert-Throws { Assert-DDRECReleaseIsolation standard license-production published } }
@@ -147,7 +195,7 @@ Describe 'DDREC successful safety policies' {
 Describe 'DDREC PackageMetadata parsing and release modes' {
     It '41 parses Standard metadata into the unified model' {
         $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'standard')
-        $metadata = Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40)
+        $metadata = Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) -ExpectedVersion (Get-InstallerFixtureVersion $installer)
         ($metadata.PSObject.TypeNames -contains 'DDREC.PackageMetadata') | Should Be $true
         (@($metadata.PSObject.Properties.Name) -contains 'Path') | Should Be $true
         (@($metadata.PSObject.Properties.Name) -contains 'FileSize') | Should Be $true
@@ -159,7 +207,7 @@ Describe 'DDREC PackageMetadata parsing and release modes' {
 
     It '42 parses License-Production metadata into the same unified model' {
         $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'license') -Edition license -Environment production
-        $metadata = Get-DDRECInstallerMetadata -InstallerPath $installer -Lane license-production -ExpectedCommit ('a'*40)
+        $metadata = Get-DDRECInstallerMetadata -InstallerPath $installer -Lane license-production -ExpectedCommit ('a'*40) -ExpectedVersion (Get-InstallerFixtureVersion $installer)
         ($metadata.PSObject.TypeNames -contains 'DDREC.PackageMetadata') | Should Be $true
         $metadata.Edition | Should Be 'license'
         $metadata.Environment | Should Be 'production'
@@ -167,28 +215,28 @@ Describe 'DDREC PackageMetadata parsing and release modes' {
 
     It '43 reports a business error when Edition is missing' {
         $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'missing-edition') -MissingField Edition
-        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) | Out-Null; '<no error>' } catch { $_.Exception.Message }
+        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) -ExpectedVersion (Get-InstallerFixtureVersion $installer) | Out-Null; '<no error>' } catch { $_.Exception.Message }
         $message | Should Be '安装包元数据无效：RELEASE-MANIFEST 缺少 Edition'
         $message | Should Not Match "property 'Edition'"
     }
 
     It '44 reports a business error when Environment is missing' {
         $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'missing-environment') -MissingField Environment
-        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) | Out-Null; '<no error>' } catch { $_.Exception.Message }
+        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) -ExpectedVersion (Get-InstallerFixtureVersion $installer) | Out-Null; '<no error>' } catch { $_.Exception.Message }
         $message | Should Be '安装包元数据无效：RELEASE-MANIFEST 缺少 Environment'
         $message | Should Not Match "property 'Environment'"
     }
 
     It '45 reports a business error when GitCommit is missing' {
         $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'missing-commit') -MissingField GitCommit
-        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) | Out-Null; '<no error>' } catch { $_.Exception.Message }
+        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) -ExpectedVersion (Get-InstallerFixtureVersion $installer) | Out-Null; '<no error>' } catch { $_.Exception.Message }
         $message | Should Be '安装包元数据无效：RELEASE-MANIFEST 缺少 GitCommit'
         $message | Should Not Match "property 'GitCommit'"
     }
 
     It '46 strictly rejects Standard and License lane mismatches' {
-        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Edition license -Environment production) standard ('a'*40) }
-        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Edition standard -Environment none) license-production ('a'*40) }
+        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Edition license -Environment production) standard ('a'*40) '1.3.0' }
+        Assert-Throws { Assert-DDRECInstallerPolicy (New-Metadata -Edition standard -Environment none) license-production ('a'*40) '1.3.0' }
     }
 
     It '47 maps Standard mode to Standard client validation only' {
@@ -229,7 +277,7 @@ Describe 'DDREC PackageMetadata parsing and release modes' {
 
     It '53 keeps stale GitCommit protection at exit code 70' {
         $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'stale') -Commit ('b'*40)
-        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) | Out-Null; '<no error>' } catch { $_.Exception.Message }
+        $message = try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) -ExpectedVersion (Get-InstallerFixtureVersion $installer) | Out-Null; '<no error>' } catch { $_.Exception.Message }
         $message | Should Match 'GitCommit 与当前 client HEAD 不一致'
         Get-DDRECFailureExitCode -Stage '客户端安装包识别与真实性校验' | Should Be 70
     }
@@ -237,7 +285,7 @@ Describe 'DDREC PackageMetadata parsing and release modes' {
     It '54 leaves production, Drafts, and Published untouched on missing metadata' {
         $context = New-DDRECReleaseContext -WorkspaceRoot $TestDrive -Config ([pscustomobject]@{}) -SessionId 'metadata-failure'
         $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'safe-failure') -MissingField Edition
-        try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) | Out-Null } catch {}
+        try { Get-DDRECInstallerMetadata -InstallerPath $installer -Lane standard -ExpectedCommit ('a'*40) -ExpectedVersion (Get-InstallerFixtureVersion $installer) | Out-Null } catch {}
         $context.ProductionModified | Should Be $false
         $context.Drafts.Count | Should Be 0
         $context.Published.Count | Should Be 0
@@ -307,8 +355,10 @@ Describe 'DDREC release works without local Docker' {
     }
     It '40 menu reads the client version from the client repository' {
         $text = Get-Content -LiteralPath $script:releaseScript -Raw
-        $text | Should Match 'Push-Location \$context\.ClientRoot'
-        $text | Should Match '无法读取客户端版本'
+        $text | Should Match 'Get-DDRECClientApplicationVersion -ClientRoot \$context\.ClientRoot'
+        $definition=(Get-Command Get-DDRECClientApplicationVersion).Definition
+        $definition | Should Match 'Push-Location \$ClientRoot'
+        $definition | Should Match '无法读取客户端版本'
     }
     It '41 only menu zero maps to Exit and ordinary actions remain task modes' {
         (Get-DDRECMainMenuAction -InputText '0')|Should Be 'Exit'

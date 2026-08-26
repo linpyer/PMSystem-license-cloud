@@ -65,7 +65,7 @@ Describe 'DDREC CloudPackageMetadata authenticity' {
 
     It 'parses a valid production all package into the unified model' {
         New-CloudPackageFixture -CloudRoot $script:cloudRoot | Out-Null
-        $metadata = Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0
+        $metadata = Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 -ExpectedBranch v1.3
         ($metadata.PSObject.TypeNames -contains 'DDREC.CloudPackageMetadata') | Should Be $true
         ($metadata.PSObject.Properties.Name -join ',') | Should Match 'Path.*FileName.*FileSize.*SHA256.*Version.*GitCommit.*Environment.*Service.*ManifestPath.*ChecksumsPath.*BuildTime'
         $metadata.Environment | Should Be 'production'
@@ -75,7 +75,7 @@ Describe 'DDREC CloudPackageMetadata authenticity' {
 
     It 'rejects a stale GitCommit with an explicit old package error' {
         New-CloudPackageFixture -CloudRoot $script:cloudRoot -Commit ('b'*40) | Out-Null
-        $message = Get-ExceptionMessage { Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 }
+        $message = Get-ExceptionMessage { Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 -ExpectedBranch v1.3 }
         $message | Should Match '当前 Cloud 构建产物已过期'
         $message | Should Match 'Package GitCommit'
         $message | Should Match 'Current Git HEAD'
@@ -83,26 +83,26 @@ Describe 'DDREC CloudPackageMetadata authenticity' {
 
     It 'rejects a tampered archive SHA and size' {
         New-CloudPackageFixture -CloudRoot $script:cloudRoot -TamperArchive | Out-Null
-        (Get-ExceptionMessage { Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 }) | Should Match '实际大小|实际 SHA256'
+        (Get-ExceptionMessage { Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 -ExpectedBranch v1.3 }) | Should Match '实际大小|实际 SHA256'
     }
 
     It 'rejects a missing Manifest' {
         New-CloudPackageFixture -CloudRoot $script:cloudRoot -MissingManifest | Out-Null
-        (Get-ExceptionMessage { Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 }) | Should Match 'Manifest 不存在'
+        (Get-ExceptionMessage { Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 -ExpectedBranch v1.3 }) | Should Match 'Manifest 不存在'
     }
 
     It 'rejects a non-production Environment' {
         New-CloudPackageFixture -CloudRoot $script:cloudRoot -Environment staging | Out-Null
-        (Get-ExceptionMessage { Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 }) | Should Match 'Environment 错误'
+        (Get-ExceptionMessage { Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 -ExpectedBranch v1.3 }) | Should Match 'Environment 错误'
     }
 
     It 'rejects a Service other than all' {
         New-CloudPackageFixture -CloudRoot $script:cloudRoot -Service api | Out-Null
-        (Get-ExceptionMessage { Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 }) | Should Match 'Service 错误'
+        (Get-ExceptionMessage { Get-DDRECCloudPackageMetadata -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 -ExpectedBranch v1.3 }) | Should Match 'Service 错误'
     }
 
     It 'reports no package when formal output and staging are absent' {
-        $state = Get-DDRECCloudPackageState -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0
+        $state = Get-DDRECCloudPackageState -CloudRoot $script:cloudRoot -ExpectedCommit ('a'*40) -ExpectedVersion 1.3.0 -ExpectedBranch v1.3
         $state.HasExistingOutput | Should Be $false
         (Get-DDRECCloudPackageDecision -State $state).Action | Should Be 'Build'
     }
