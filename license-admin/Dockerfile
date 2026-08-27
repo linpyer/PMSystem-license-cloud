@@ -9,7 +9,7 @@ COPY scripts ./scripts
 COPY public ./public
 ARG VITE_API_BASE_URL=https://license.aixcc.top/api/v1
 ARG VITE_BASE_PATH=/admin/
-ARG VITE_APP_TITLE="DD Rec 授权管理"
+ARG VITE_APP_TITLE="iVRec 授权管理"
 ARG VITE_APP_ENVIRONMENT=production
 ARG VITE_APP_ENV_LABEL=生产环境
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL \

@@ -16,6 +16,7 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ErrorCode, LicenseServiceError
 from app.core.logging import configure_logging, get_logger
 from app.core.network import resolve_client_ip
+from app.core.product_identity import PRODUCT_DISPLAY_NAME
 from app.core.rate_limiting import ApplicationRateLimiter
 from app.core.signing import Ed25519Signer
 from app.db.session import create_database_runtime
@@ -56,7 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await application.state.database.engine.dispose()
 
     application = FastAPI(
-        title="DDREC License API",
+        title=f"{PRODUCT_DISPLAY_NAME} License API",
         version=resolved_settings.service_version,
         debug=False,
         docs_url="/docs" if resolved_settings.openapi_enabled else None,

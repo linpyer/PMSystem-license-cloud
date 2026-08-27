@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ErrorCode, LicenseServiceError
+from app.core.product_identity import ACTIVE_UPDATE_PROTOCOL_PRODUCT
 from app.core.security import generate_device_credential, hash_device_credential
 from app.db.models import AppVersionPolicy
 from app.db.models.enums import BindingStatus, DeviceTrialStatus, LicenseEventType, LicenseStatus
@@ -508,7 +509,7 @@ class AdminManagementService:
         policy = await self.repository.get_version_policy(session)
         if policy is None:
             return {
-                "product": "DDREC", "platform": "windows",
+                "product": ACTIVE_UPDATE_PROTOCOL_PRODUCT, "platform": "windows",
                 "recommendedVersion": self.settings.minimum_client_version,
                 "minimumSupportedVersion": self.settings.minimum_client_version,
                 "downloadUrl": None, "releaseNotes": None, "updatedAt": None,
@@ -524,7 +525,7 @@ class AdminManagementService:
         now = _utc_now()
         policy = await self.repository.get_version_policy(session)
         if policy is None:
-            policy = AppVersionPolicy(product="DDREC", platform="windows")
+            policy = AppVersionPolicy(product=ACTIVE_UPDATE_PROTOCOL_PRODUCT, platform="windows")
             session.add(policy)
         policy.recommended_version = request.recommended_version
         policy.minimum_supported_version = request.minimum_supported_version

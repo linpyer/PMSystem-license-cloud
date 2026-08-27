@@ -9,7 +9,7 @@
             AdminBaseUrl = 'https://license.aixcc.top/admin/'
             AdminEnvironment = 'production'
             AdminLabel = '生产环境'
-            AdminTitle = 'DD Rec 授权管理'
+            AdminTitle = 'iVRec 授权管理'
             AdminBasePath = '/admin/'
         }
     }

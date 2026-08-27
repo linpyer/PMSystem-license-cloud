@@ -19,6 +19,7 @@ from app.db.models import (
     LicenseEvent,
 )
 from app.db.models.enums import AdminSessionStatus, BindingStatus, DeviceTrialStatus, LicenseStatus
+from app.core.product_identity import ACTIVE_UPDATE_PROTOCOL_PRODUCT
 
 
 class AdminRepository:
@@ -475,6 +476,7 @@ class AdminRepository:
     async def get_version_policy(self, session: AsyncSession) -> AppVersionPolicy | None:
         return await session.scalar(
             select(AppVersionPolicy).where(
-                AppVersionPolicy.product == "DDREC", AppVersionPolicy.platform == "windows"
+                AppVersionPolicy.product == ACTIVE_UPDATE_PROTOCOL_PRODUCT,
+                AppVersionPolicy.platform == "windows",
             )
         )

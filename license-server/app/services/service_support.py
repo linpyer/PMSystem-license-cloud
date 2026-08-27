@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ErrorCode, LicenseServiceError
+from app.core.product_identity import PRODUCT_DISPLAY_NAME
 from app.db.models import License
 from app.db.models.enums import LicenseEventType, LicenseStatus
 from app.repositories.event_repository import EventRepository
@@ -37,7 +38,7 @@ class LicenseOperationSupport:
             if current < Version(required):
                 raise LicenseServiceError(
                     ErrorCode.CLIENT_VERSION_UNSUPPORTED,
-                    f"DD Rec {required} or newer is required",
+                    f"{PRODUCT_DISPLAY_NAME} {required} or newer is required",
                 )
         except InvalidVersion as exc:
             raise LicenseServiceError(ErrorCode.INVALID_REQUEST, "Invalid appVersion") from exc

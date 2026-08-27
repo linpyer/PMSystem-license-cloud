@@ -62,7 +62,7 @@ onMounted(load)
 </script>
 
 <template><div class="page">
-  <PageHeader title="客户端更新" description="管理 DD Rec 客户端安装包；正式发布前强制校验文件、哈希与签名">
+  <PageHeader title="客户端更新" description="管理 iVRec 客户端安装包；正式发布前强制校验文件、哈希与签名">
     <el-button v-if="canEdit" type="primary" @click="openCreate">新建草稿</el-button>
   </PageHeader>
   <section class="surface table-wrap">
@@ -97,7 +97,7 @@ onMounted(load)
         <el-form-item class="wide" label="Ed25519签名"><el-input v-model="form.signature" type="textarea" :rows="2"/></el-form-item>
         <el-form-item label="Manifest发布时间"><el-input v-model="form.publishedAt"/></el-form-item>
       </div>
-      <el-form-item label="标题"><el-input v-model="form.title" placeholder="DD Rec V1.3.1"/></el-form-item>
+      <el-form-item label="标题"><el-input v-model="form.title" placeholder="iVRec V1.4.0"/></el-form-item>
     </el-form>
     <template #footer><el-button @click="visible=false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存草稿</el-button></template>
   </el-dialog>

@@ -1,4 +1,4 @@
-# DD Rec 授权管理端
+# iVRec 授权管理端
 
 ## Production build
 
@@ -49,7 +49,7 @@ npm install
 
 ```text
 VITE_API_BASE_URL=http://localhost:8000/api/v1
-VITE_APP_TITLE=DD Rec 授权管理
+VITE_APP_TITLE=iVRec 授权管理
 VITE_APP_ENVIRONMENT=development
 ```
 

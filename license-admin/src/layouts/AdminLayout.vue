@@ -18,7 +18,7 @@ async function logout() { await auth.logout(); await router.replace({ name: 'log
 <template>
   <div class="shell">
     <aside class="sidebar">
-      <div class="brand"><div class="brand-mark">DD</div><div><strong>DD Rec</strong><span>授权管理</span></div></div>
+      <div class="brand"><div class="brand-mark">iV</div><div><strong>iVRec</strong><span>授权管理</span></div></div>
       <el-menu :default-active="active" router class="nav">
         <el-menu-item v-for="[path,label,icon] in menu" :key="path" :index="path"><el-icon><component :is="icon" /></el-icon><span>{{ label }}</span></el-menu-item>
       </el-menu>

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_app_settings, get_session
 from app.core.config import Settings
+from app.core.product_identity import ACTIVE_UPDATE_PROTOCOL_PRODUCT
 from app.services.client_release_service import ClientReleaseService
 
 
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/client-updates", tags=["client-updates"])
 
 @router.get("/latest")
 async def latest_client_update(
-    product: Literal["DDREC"],
+    product: Literal[ACTIVE_UPDATE_PROTOCOL_PRODUCT],
     edition: Literal["standard", "license"],
     environment: Literal["production"],
     arch: Literal["x64"],

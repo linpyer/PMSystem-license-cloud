@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
+from app.core.product_identity import ACTIVE_UPDATE_PROTOCOL_PRODUCT
 from app.schemas.base import CamelModel
 
 
@@ -16,7 +17,7 @@ FILE_RE = re.compile(r"^DDREC-\d+\.\d+\.\d+-(?:standard|license)-Setup\.exe$")
 
 
 class ClientReleaseDraftRequest(CamelModel):
-    product: Literal["DDREC"] = "DDREC"
+    product: Literal[ACTIVE_UPDATE_PROTOCOL_PRODUCT] = ACTIVE_UPDATE_PROTOCOL_PRODUCT
     version: str
     build_number: int = Field(gt=0)
     git_commit: str

@@ -468,7 +468,7 @@ try {
     if (-not (Test-Path -LiteralPath $alembic -PathType Leaf)) { throw "虚拟环境缺少 Alembic：$alembic" }
 
     Write-Host '========================================'
-    Write-Host ' DD Rec 云端授权系统构建'
+    Write-Host ' iVRec 云端授权系统构建'
     Write-Host '========================================'
     Write-Host "项目路径：$projectRoot"
     Write-Host "Git 分支：$branch"

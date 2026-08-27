@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.core.product_identity import ACTIVE_LICENSE_PROTOCOL_PRODUCT
 from app.core.signing import Ed25519Signer, SignedEnvelope
 from app.db.models import DeviceBinding, DeviceTrial, License
 from app.db.models.enums import LicenseType
@@ -56,7 +57,7 @@ class LicenseSigningService:
         payload = {
             "schemaVersion": 1,
             "licenseId": str(license_record.id),
-            "product": "DDREC",
+            "product": ACTIVE_LICENSE_PROTOCOL_PRODUCT,
             "edition": "professional",
             "deviceId": binding.device_id,
             "fingerprintVersion": binding.fingerprint_version,

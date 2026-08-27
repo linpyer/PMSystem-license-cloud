@@ -77,7 +77,7 @@ function Update-ReleaseMenuLocalCache {
 
 function Show-DDRECReleaseMenu {
     param([Parameter(Mandatory)]$Cache)
-    Write-Header 'DD Rec 生产发布工具'
+    Write-Header 'iVRec 生产发布工具'
     Write-Host "Client:`nVersion : $($Cache.ClientVersion)`nGit     : $($Cache.ClientHead)"
     Write-Host "`nCloud:`nGit     : $($Cache.CloudHead)"
     Write-Host "`nProduction:`nAPI     : $($Cache.ProductionApi)`nRelease : $($Cache.ProductionRelease)"
@@ -88,7 +88,7 @@ function Show-DDRECReleaseMenu {
 [1] 仅发布 Standard 客户端
 [2] 仅发布 License-Production 客户端
 [3] 发布 Standard + License-Production
-[4] 仅部署 DD Rec 云端服务
+[4] 仅部署 iVRec 云端服务
 [5] 云端服务 + Standard
 [6] 云端服务 + Standard + License-Production
 [7] Dry Run / 发布预检
@@ -215,7 +215,7 @@ function Select-Installer {
     if (-not $candidate) {
         if ($DryRun -or $NonInteractive) { throw "$Lane 未找到安装包候选。" }
         Add-Type -AssemblyName System.Windows.Forms
-        $dialog=[Windows.Forms.OpenFileDialog]::new();$dialog.Filter='DD Rec Setup (*.exe)|*.exe';$dialog.Multiselect=$false
+        $dialog=[Windows.Forms.OpenFileDialog]::new();$dialog.Filter='iVRec Setup (*.exe)|*.exe';$dialog.Multiselect=$false
         if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { throw '用户取消选择安装包。' }
         $candidate=Get-Item -LiteralPath $dialog.FileName
     }
@@ -229,7 +229,7 @@ function Select-Installer {
         $answer=(Read-Host '[Y] 使用 / [N] 手动选择其它安装包').Trim()
         if ($answer -notmatch '^(?i)y$') {
             Add-Type -AssemblyName System.Windows.Forms
-            $dialog=[Windows.Forms.OpenFileDialog]::new();$dialog.Filter='DD Rec Setup (*.exe)|*.exe';$dialog.Multiselect=$false
+            $dialog=[Windows.Forms.OpenFileDialog]::new();$dialog.Filter='iVRec Setup (*.exe)|*.exe';$dialog.Multiselect=$false
             if ($dialog.ShowDialog() -ne [Windows.Forms.DialogResult]::OK) { throw '用户取消选择安装包。' }
             $metadata=Get-DDRECInstallerMetadata -InstallerPath $dialog.FileName -Lane $Lane -ExpectedCommit $ClientCommit -ExpectedVersion $ClientVersion
         }

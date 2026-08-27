@@ -7,7 +7,7 @@ const expected = Object.freeze({
   VITE_API_BASE_URL: 'https://license.aixcc.top/api/v1',
   VITE_APP_ENVIRONMENT: 'production',
   VITE_APP_ENV_LABEL: '生产环境',
-  VITE_APP_TITLE: 'DD Rec 授权管理',
+  VITE_APP_TITLE: 'iVRec 授权管理',
   VITE_BASE_PATH: '/admin/',
 })
 

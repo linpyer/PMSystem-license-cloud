@@ -9,6 +9,7 @@ import pyotp
 
 from app.core.admin_security import encrypt_totp_secret, generate_totp_secret, hash_admin_password
 from app.core.config import get_settings
+from app.core.product_identity import ADMIN_TOTP_ISSUER_NAME
 from app.db.models import AdminUser
 from app.db.models.enums import AdminRole, AdminStatus
 from app.db.session import create_database_runtime
@@ -66,7 +67,7 @@ def main() -> None:
     parser.add_argument("--role", choices=[item.value for item in AdminRole], default="OWNER")
     args = parser.parse_args()
     user, secret = asyncio.run(create_admin(args, _read_password()))
-    uri = pyotp.TOTP(secret).provisioning_uri(name=user.username, issuer_name="DD Rec License Admin")
+    uri = pyotp.TOTP(secret).provisioning_uri(name=user.username, issuer_name=ADMIN_TOTP_ISSUER_NAME)
     print("Administrator created. TOTP enrollment information is displayed once.")
     print(f"TOTP secret: {secret}")
     print(f"Provisioning URI: {uri}")

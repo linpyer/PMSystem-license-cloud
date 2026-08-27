@@ -36,7 +36,7 @@ function Show-Menu {
 
     Write-Host ''
     Write-Host '========================================'
-    Write-Host ' DD Rec 云端授权系统生产打包'
+    Write-Host ' iVRec 云端授权系统生产打包'
     Write-Host '========================================'
     Write-Host '[1] License-Production API'
     Write-Host '[2] License-Production Admin'

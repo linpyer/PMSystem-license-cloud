@@ -9,6 +9,7 @@ $script:ExitCodes = [ordered]@{
 $script:ClientReleaseVersions = [ordered]@{
     'v1.3' = '1.3.0'
     'v1.3.1' = '1.3.1'
+    'v1.4' = '1.4.0'
 }
 
 function Get-DDRECExitCodes { return $script:ExitCodes }
@@ -1485,8 +1486,8 @@ function New-DDRECClientDraftPayload {
     $environment=if($Metadata.Edition -eq 'standard'){'production'}else{$Metadata.Environment}
     $payload=[ordered]@{
         product='DDREC';version=$Metadata.Version;buildNumber=[int]$Metadata.BuildNumber;gitCommit=$Metadata.GitCommit
-        edition=$Metadata.Edition;environment=$environment;architecture='x64';channel='stable';title="DD Rec V$($Metadata.Version)"
-        releaseNotes="DD Rec V$($Metadata.Version) Build $($Metadata.BuildNumber) formal release."
+        edition=$Metadata.Edition;environment=$environment;architecture='x64';channel='stable';title="iVRec V$($Metadata.Version)"
+        releaseNotes="iVRec V$($Metadata.Version) Build $($Metadata.BuildNumber) formal release."
         fileName=$Metadata.FileName;downloadPath=$Target.RelativePath;fileSize=[int64]$Metadata.FileSize;sha256=$Metadata.SHA256
         signature=[string]$Signed.Signature;mandatory=$false;publishedAt=$Signed.Manifest.publishedAt
     }

@@ -13,6 +13,7 @@ from app.core.admin_security import (
 )
 from app.core.config import Settings
 from app.core.errors import ErrorCode, LicenseServiceError
+from app.core.product_identity import ADMIN_TOTP_ISSUER_NAME
 from app.db.models import AdminUser
 from app.db.models.enums import AdminStatus
 from app.repositories.admin_repository import AdminRepository
@@ -61,7 +62,7 @@ class AdminUserService:
             "user": self._as_dict(user),
             "totpSecret": secret,
             "provisioningUri": pyotp.TOTP(secret).provisioning_uri(
-                name=user.username, issuer_name="DD Rec License Admin"
+                name=user.username, issuer_name=ADMIN_TOTP_ISSUER_NAME
             ),
             "enrollmentVisibleOnce": True,
         }

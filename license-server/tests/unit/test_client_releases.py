@@ -19,7 +19,7 @@ from app.api.v1.client_updates import latest_client_update
 def release(**values) -> ClientRelease:
     defaults = dict(product="DDREC",version="1.3.1",build_number=72,git_commit="abcdef123456",
         edition="license",environment="production",architecture="x64",channel="stable",
-        title="DD Rec V1.3.1",release_notes="修复问题",file_name="DDREC-1.3.1-license-Setup.exe",
+        title="iVRec V1.3.1",release_notes="修复问题",file_name="DDREC-1.3.1-license-Setup.exe",
         download_path="/releases/stable/license/1.3.1/DDREC-1.3.1-license-Setup.exe",
         file_size=12,sha256="A"*64,signature="x"*86,mandatory=False,status="published",
         published_at=datetime(2026,8,15,10,0,tzinfo=timezone.utc),created_by=None)
@@ -67,19 +67,19 @@ async def test_edition_environment_and_channel_are_strict(settings):
     {"mandatory":True},
 ])
 def test_invalid_release_lanes_are_rejected(changes):
-    data=dict(product="DDREC",version="1.3.1",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="production",architecture="x64",channel="stable",title="DD Rec V1.3.1",releaseNotes="notes",fileName="DDREC-1.3.1-license-Setup.exe",downloadPath="/releases/stable/license/1.3.1/DDREC-1.3.1-license-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
+    data=dict(product="DDREC",version="1.3.1",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="production",architecture="x64",channel="stable",title="iVRec V1.3.1",releaseNotes="notes",fileName="DDREC-1.3.1-license-Setup.exe",downloadPath="/releases/stable/license/1.3.1/DDREC-1.3.1-license-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
     data.update(changes)
     with pytest.raises(ValueError): ClientReleaseDraftRequest.model_validate(data)
 
 
 def test_admin_cannot_create_retired_local_release():
-    data=dict(product="DDREC",version="1.3.1",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="local",architecture="x64",channel="dev",title="DD Rec V1.3.1",fileName="DDREC-1.3.1-license-local-Setup.exe",downloadPath="/releases/dev/license/1.3.1/DDREC-1.3.1-license-local-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
+    data=dict(product="DDREC",version="1.3.1",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="local",architecture="x64",channel="dev",title="iVRec V1.3.1",fileName="DDREC-1.3.1-license-local-Setup.exe",downloadPath="/releases/dev/license/1.3.1/DDREC-1.3.1-license-local-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
     with pytest.raises(ValueError):
         ClientReleaseDraftRequest.model_validate(data)
 
 
 def test_release_notes_remain_api_compatible_but_are_optional_for_new_drafts():
-    data=dict(product="DDREC",version="1.3.1",buildNumber=79,gitCommit="abcdef123456",edition="standard",environment="production",architecture="x64",channel="stable",title="DD Rec V1.3.1",fileName="DDREC-1.3.1-standard-Setup.exe",downloadPath="/releases/stable/standard/1.3.1/DDREC-1.3.1-standard-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-22T10:00:00Z")
+    data=dict(product="DDREC",version="1.3.1",buildNumber=79,gitCommit="abcdef123456",edition="standard",environment="production",architecture="x64",channel="stable",title="iVRec V1.3.1",fileName="DDREC-1.3.1-standard-Setup.exe",downloadPath="/releases/stable/standard/1.3.1/DDREC-1.3.1-standard-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-22T10:00:00Z")
     payload = ClientReleaseDraftRequest.model_validate(data)
     assert payload.release_notes == ""
     data["releaseNotes"] = "旧管理端仍可提交此字段"

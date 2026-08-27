@@ -156,11 +156,17 @@ Describe 'DDREC client release branch and version mapping' {
     It 'accepts v1.3.1 with 1.3.1' {
         Assert-DDRECClientReleaseState -State (New-GitState -Branch 'v1.3.1') -ClientVersion '1.3.1' | Should Be $true
     }
+    It 'accepts v1.4 with 1.4.0' {
+        Assert-DDRECClientReleaseState -State (New-GitState -Branch 'v1.4') -ClientVersion '1.4.0' | Should Be $true
+    }
     It 'rejects v1.3 with 1.3.1' {
         Assert-Throws { Assert-DDRECClientReleaseState -State (New-GitState -Branch 'v1.3') -ClientVersion '1.3.1' }
     }
     It 'rejects v1.3.1 with 1.3.0' {
         Assert-Throws { Assert-DDRECClientReleaseState -State (New-GitState -Branch 'v1.3.1') -ClientVersion '1.3.0' }
+    }
+    It 'rejects v1.4 with 1.3.1' {
+        Assert-Throws { Assert-DDRECClientReleaseState -State (New-GitState -Branch 'v1.4') -ClientVersion '1.3.1' }
     }
     It 'rejects an unknown release branch' {
         Assert-Throws { Assert-DDRECClientReleaseState -State (New-GitState -Branch 'feature/release') -ClientVersion '1.3.1' }
@@ -181,6 +187,7 @@ Describe 'DDREC client release branch and version mapping' {
         $definition|Should Not Match 'StartsWith'
         $definition|Should Not Match '-like'
         $definition|Should Not Match 'v1\.3\\\*'
+        $definition|Should Not Match 'v1\.\*'
     }
 }
 
