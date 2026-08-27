@@ -7,17 +7,17 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
-def test_cloud_product_versions_are_1_3_0() -> None:
-    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "1.3.0"
+def test_cloud_product_versions_are_1_4_0() -> None:
+    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "1.4.0"
     package = json.loads((ROOT / "license-admin" / "package.json").read_text(encoding="utf-8"))
     package_lock = json.loads(
         (ROOT / "license-admin" / "package-lock.json").read_text(encoding="utf-8")
     )
-    assert package["version"] == "1.3.0"
-    assert package_lock["version"] == "1.3.0"
-    assert package_lock["packages"][""]["version"] == "1.3.0"
+    assert package["version"] == "1.4.0"
+    assert package_lock["version"] == "1.4.0"
+    assert package_lock["packages"][""]["version"] == "1.4.0"
     pyproject = (ROOT / "license-server" / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'version = "1.3.0"' in pyproject
+    assert 'version = "1.4.0"' in pyproject
 
 
 def test_production_branch_and_image_tag_are_consistent() -> None:
@@ -29,12 +29,12 @@ def test_production_branch_and_image_tag_are_consistent() -> None:
     env_template = (
         ROOT / "deploy" / "production-nginx" / "env.production.example"
     ).read_text(encoding="utf-8")
-    assert "ProductionBranch = 'v1.3'" in config
+    assert "ProductionBranch = 'v1.4'" in config
     assert '"$script:releaseVersion-$($script:commit.Substring(0, 7))-production"' in build
     assert 'target_api_tag="${version}-${expected_commit:0:7}-production"' in executor
     assert 'docker build --pull=false' in executor
-    assert "DDREC_API_IMAGE_TAG=1.3.0-production" in env_template
-    assert "LICENSE_SERVICE_VERSION=1.3.0" in env_template
+    assert "DDREC_API_IMAGE_TAG=1.4.0-production" in env_template
+    assert "LICENSE_SERVICE_VERSION=1.4.0" in env_template
 
 
 def test_admin_build_receives_the_canonical_version() -> None:

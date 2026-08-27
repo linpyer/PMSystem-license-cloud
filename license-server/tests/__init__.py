@@ -1,1 +1,1 @@
-"""DDREC license-server test support package."""
+"""iVRec license-server test support package."""

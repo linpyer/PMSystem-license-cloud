@@ -17,7 +17,7 @@ const page = ref(1)
 const canEdit = computed(() => ['OWNER', 'ADMIN'].includes(auth.user?.role || ''))
 const isOwner = computed(() => auth.user?.role === 'OWNER')
 const form = reactive({
-  product: 'DDREC', version: '', buildNumber: 1, gitCommit: '', edition: 'standard',
+  product: 'iVRec', version: '', buildNumber: 1, gitCommit: '', edition: 'standard',
   environment: 'production', architecture: 'x64', channel: 'stable', title: '',
   fileName: '', downloadPath: '', fileSize: 1, sha256: '', signature: '',
   mandatory: false, publishedAt: '',
@@ -35,7 +35,7 @@ async function load() {
 }
 
 function openCreate() {
-  Object.assign(form, { product:'DDREC',version:'',buildNumber:1,gitCommit:'',edition:'standard',environment:'production',architecture:'x64',channel:'stable',title:'',fileName:'',downloadPath:'',fileSize:1,sha256:'',signature:'',mandatory:false,publishedAt:new Date().toISOString() })
+  Object.assign(form, { product:'iVRec',version:'',buildNumber:1,gitCommit:'',edition:'standard',environment:'production',architecture:'x64',channel:'stable',title:'',fileName:'',downloadPath:'',fileSize:1,sha256:'',signature:'',mandatory:false,publishedAt:new Date().toISOString() })
   visible.value = true
 }
 async function save() {
@@ -87,12 +87,12 @@ onMounted(load)
   <el-dialog v-model="visible" title="新建客户端更新草稿" width="760px">
     <el-form label-position="top">
       <div class="grid">
-        <el-form-item label="版本"><el-input v-model="form.version" placeholder="1.3.1"/></el-form-item><el-form-item label="Build"><el-input-number v-model="form.buildNumber" :min="1"/></el-form-item>
+        <el-form-item label="版本"><el-input v-model="form.version" placeholder="1.4.0"/></el-form-item><el-form-item label="Build"><el-input-number v-model="form.buildNumber" :min="1"/></el-form-item>
         <el-form-item label="正式版本"><el-select v-model="form.edition"><el-option label="Standard" value="standard"/><el-option label="License-Production" value="license"/></el-select></el-form-item>
         <el-form-item label="环境"><el-input model-value="production" disabled/></el-form-item>
         <el-form-item label="通道"><el-input model-value="stable" disabled/></el-form-item><el-form-item label="Git Commit"><el-input v-model="form.gitCommit"/></el-form-item>
         <el-form-item label="文件名"><el-input v-model="form.fileName"/></el-form-item><el-form-item label="文件大小（字节）"><el-input-number v-model="form.fileSize" :min="1"/></el-form-item>
-        <el-form-item class="wide" label="下载路径"><el-input v-model="form.downloadPath" placeholder="/releases/stable/standard/1.3.1/DDREC-...exe"/></el-form-item>
+        <el-form-item class="wide" label="下载路径"><el-input v-model="form.downloadPath" placeholder="/releases/stable/standard/1.4.0/iVRec-...exe"/></el-form-item>
         <el-form-item class="wide" label="SHA-256"><el-input v-model="form.sha256"/></el-form-item>
         <el-form-item class="wide" label="Ed25519签名"><el-input v-model="form.signature" type="textarea" :rows="2"/></el-form-item>
         <el-form-item label="Manifest发布时间"><el-input v-model="form.publishedAt"/></el-form-item>

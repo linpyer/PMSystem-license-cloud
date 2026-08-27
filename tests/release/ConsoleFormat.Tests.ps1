@@ -6,10 +6,11 @@ Import-Module $modulePath -Force
 
 function New-ConsoleMetadata {
     param([string]$Edition='standard',[string]$Environment='none')
-    $name=if($Edition -eq 'standard'){'DDREC-1.3.0-standard-Setup.exe'}else{'DDREC-1.3.0-license-Setup.exe'}
+    $name=if($Edition -eq 'standard'){'iVRec-1.4.0-standard-Setup.exe'}else{'iVRec-1.4.0-license-Setup.exe'}
     $metadata=[pscustomobject]@{
         Path="C:\artifacts\$name";FileName=$name;FileSize=157521087;SHA256=('A'*64)
-        Version='1.3.0';BuildNumber=102;GitCommit='79b17402aea1f2f97f9188c0aaad8d2c4f318208'
+        Product='iVRec';DisplayName='iVRec';MainExe='iVRec.exe';UpdaterExe='iVRec-Updater.exe'
+        Version='1.4.0';BuildNumber=102;GitCommit='79b17402aea1f2f97f9188c0aaad8d2c4f318208'
         Edition=$Edition;Environment=$Environment;UpdaterVersion='1.2.0'
     }
     $metadata.PSObject.TypeNames.Insert(0,'DDREC.PackageMetadata')
@@ -31,24 +32,25 @@ Describe 'DDREC release console formatting' {
 
     It 'renders Standard metadata completely in a fixed order before confirmation' {
         $lines=Get-RenderedPackageLines (New-ConsoleMetadata)
-        $lines.Count|Should Be 9
-        $lines[0]|Should Be 'FileName       : DDREC-1.3.0-standard-Setup.exe'
-        $lines[1]|Should Be 'Version        : 1.3.0'
-        $lines[2]|Should Be 'BuildNumber    : 102'
-        $lines[3]|Should Be 'GitCommit      : 79b17402aea1f2f97f9188c0aaad8d2c4f318208'
-        $lines[4]|Should Be 'Edition        : standard'
-        $lines[5]|Should Be 'Environment    : none'
-        $lines[8]|Should Be ('SHA256         : '+('A'*64))
+        $lines.Count|Should Be 13
+        $lines[0]|Should Be 'Product        : iVRec'
+        $lines[4]|Should Be 'FileName       : iVRec-1.4.0-standard-Setup.exe'
+        $lines[5]|Should Be 'Version        : 1.4.0'
+        $lines[6]|Should Be 'BuildNumber    : 102'
+        $lines[7]|Should Be 'GitCommit      : 79b17402aea1f2f97f9188c0aaad8d2c4f318208'
+        $lines[8]|Should Be 'Edition        : standard'
+        $lines[9]|Should Be 'Environment    : none'
+        $lines[12]|Should Be ('SHA256         : '+('A'*64))
     }
 
     It 'renders License-Production metadata completely in the same fixed order' {
         $lines=Get-RenderedPackageLines (New-ConsoleMetadata -Edition license -Environment production)
-        $lines[0]|Should Be 'FileName       : DDREC-1.3.0-license-Setup.exe'
-        $lines[2]|Should Be 'BuildNumber    : 102'
-        $lines[3]|Should Be 'GitCommit      : 79b17402aea1f2f97f9188c0aaad8d2c4f318208'
-        $lines[4]|Should Be 'Edition        : license'
-        $lines[5]|Should Be 'Environment    : production'
-        $lines[6]|Should Be 'UpdaterVersion : 1.2.0'
+        $lines[4]|Should Be 'FileName       : iVRec-1.4.0-license-Setup.exe'
+        $lines[6]|Should Be 'BuildNumber    : 102'
+        $lines[7]|Should Be 'GitCommit      : 79b17402aea1f2f97f9188c0aaad8d2c4f318208'
+        $lines[8]|Should Be 'Edition        : license'
+        $lines[9]|Should Be 'Environment    : production'
+        $lines[10]|Should Be 'UpdaterVersion : 1.2.0'
     }
 
     It 'does not return PackageMetadata to the deferred formatting pipeline' {
@@ -69,7 +71,7 @@ Describe 'DDREC release console formatting' {
         $runner=Join-Path $TestDrive 'metadata-order-runner.ps1'
         @"
 Import-Module '$($modulePath.Replace("'","''"))' -Force
-`$metadata=[pscustomobject]@{Path='C:\fixture.exe';FileName='DDREC-1.3.0-license-Setup.exe';FileSize=157521087;SHA256=('A'*64);Version='1.3.0';BuildNumber=102;GitCommit='79b17402aea1f2f97f9188c0aaad8d2c4f318208';Edition='license';Environment='production';UpdaterVersion='1.2.0'}
+`$metadata=[pscustomobject]@{Path='C:\fixture.exe';FileName='iVRec-1.4.0-license-Setup.exe';FileSize=157521087;SHA256=('A'*64);Product='iVRec';DisplayName='iVRec';MainExe='iVRec.exe';UpdaterExe='iVRec-Updater.exe';Version='1.4.0';BuildNumber=102;GitCommit='79b17402aea1f2f97f9188c0aaad8d2c4f318208';Edition='license';Environment='production';UpdaterVersion='1.2.0'}
 `$metadata.PSObject.TypeNames.Insert(0,'DDREC.PackageMetadata')
 Show-DDRECPackageMetadata -Metadata `$metadata
 [Console]::Out.WriteLine('')
@@ -129,7 +131,7 @@ Invoke-DDRECConsoleTask -PwshPath '$(Join-Path $PSHOME 'pwsh.exe')' -Arguments @
     }
 
     It 'keeps all PackageMetadata authenticity fields and SHA validation' {
-        $script:moduleText|Should Match "'Path','FileName','FileSize','SHA256','Version','BuildNumber','GitCommit','Edition','Environment','UpdaterVersion'"
+        $script:moduleText|Should Match "'Path','FileName','FileSize','SHA256','Product','DisplayName','MainExe','UpdaterExe','Version','BuildNumber','GitCommit','Edition','Environment','UpdaterVersion'"
         $script:moduleText|Should Match '安装包 SHA256 与构建元数据不一致'
         $script:moduleText|Should Match '安装包 GitCommit 与当前 client HEAD 不一致'
     }

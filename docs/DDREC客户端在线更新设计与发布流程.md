@@ -12,12 +12,12 @@ DD Rec 在主窗口显示后延迟 7 秒后台访问 `GET https://license.aixcc.
 
 签名字段固定为 `product, version, buildNumber, edition, environment, architecture, channel, fileName, fileSize, sha256, publishedAt`。字段按名称排序，以 UTF-8、无额外空白的 JSON 规范化后使用 Ed25519 签名。客户端在下载前验证签名及发布通道，下载后验证文件大小和 SHA-256；启动 Updater 前和 Updater 启动安装程序前都会再次验证。
 
-更新密钥与授权许可证密钥相互独立。私钥只存放在受保护的发布工作站 `%USERPROFILE%\.ddrec\keys\DDREC-update-ed25519-private.pem`，不得进入 Git、客户端、服务器下载目录、日志或报告。公钥可以进入客户端和 API 容器。密钥轮换必须先发布包含新公钥的客户端，再切换发布签名；旧公钥撤销前需完成覆盖率评估。
+更新密钥与授权许可证密钥相互独立。当前私钥路径为受保护的发布工作站 `%USERPROFILE%\.ivrec\keys\iVRec-update-ed25519-private.pem`；旧 `%USERPROFILE%\.ddrec\keys` 仅作为迁移输入和回滚副本。路径迁移必须保持 key bytes 与 fingerprint 不变，密钥不得进入 Git、客户端、服务器下载目录、日志或报告。
 
 ## 构建与发布
 
 1. 在干净的 `v1.3` 分支执行正式客户端构建。`scripts/build_client.ps1` 动态读取版本、BuildNumber 与 GitCommit，并同时构建 `DDREC.exe` 和 `DDREC-Updater.exe`。
-2. 确认安装包名称为 `DDREC-<version>-standard-Setup.exe` 或 `DDREC-<version>-license-Setup.exe`。同版本重新构建必须提高 BuildNumber，已发布文件不可覆盖。
+2. 确认安装包名称为 `iVRec-<version>-standard-Setup.exe` 或 `iVRec-<version>-license-Setup.exe`。同版本重新构建必须提高 BuildNumber，已发布文件不可覆盖。
 3. 执行 `scripts/publish_client_update.ps1`。脚本读取 RELEASE-MANIFEST、重新计算 SHA-256、生成规范化 Manifest，并使用工作站外部私钥签名。
 4. 脚本先上传到 `/opt/ddrec-updates/incoming/` 的 `.part` 文件，服务器复核大小和 SHA-256，再复制到正式文件系统的隐藏临时文件，并在同一目录原子 rename 为 `/var/www/ddrec-downloads/releases/<channel>/<edition>/<version>/<buildNumber>/...`。BuildNumber 目录确保同一 ProductVersion 的更高 Build 不覆盖历史安装包；Nginx 同时保留对早期无 BuildNumber 路径的只读兼容。
 5. 脚本通过服务器 CLI 创建 `client_releases` 草稿，不会自动发布。
@@ -30,7 +30,7 @@ DD Rec 在主窗口显示后延迟 7 秒后台访问 `GET https://license.aixcc.
 
 录制是最高优先级：检查和提示允许继续，安装入口统一读取 Recorder 的实际状态；录制中不能启动更新或安装。下载过程中开始录制会暂停网络读取并保留 `.part`，录制结束后不会自动恢复抢占业务，必须由用户继续。
 
-校验通过后 `DDREC-Updater.exe` 等待父进程正常退出，通过 Windows UAC 启动现有 Inno Setup 覆盖安装，等待成功后重新启动 `DDREC.exe`。Updater 不接触 SQLite、视频、配置、日志、授权缓存或业务模块。API、网络、签名、哈希、Updater、Installer 任一失败时，当前 DD Rec 和全部用户数据保持可用。
+校验通过后 `iVRec-Updater.exe` 等待父进程正常退出，通过 Windows UAC 启动现有 Inno Setup 覆盖安装，等待成功后重新启动 `iVRec.exe`。Updater 不接触 SQLite、视频、配置、日志、授权缓存或业务模块。API、网络、签名、哈希、Updater、Installer 任一失败时，当前 iVRec 和全部用户数据保持可用。
 
 ## 日志与 OSS/CDN 迁移
 

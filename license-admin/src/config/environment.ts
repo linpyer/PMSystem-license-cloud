@@ -15,7 +15,7 @@ export function resolveEnvironmentLabel(environment: string, configuredLabel = '
 }
 
 export const appEnvironment = import.meta.env.VITE_APP_ENVIRONMENT || import.meta.env.MODE
-export const appVersion = import.meta.env.VITE_APP_VERSION || '1.3.0'
+export const appVersion = import.meta.env.VITE_APP_VERSION || '1.4.0'
 export const environmentLabel = import.meta.env.PROD
   ? (import.meta.env.VITE_APP_ENV_LABEL || '环境未配置')
   : resolveEnvironmentLabel(appEnvironment, import.meta.env.VITE_APP_ENV_LABEL)

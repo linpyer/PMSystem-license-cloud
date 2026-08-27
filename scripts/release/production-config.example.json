@@ -1,6 +1,6 @@
 {
-  "Product": "DDREC",
-  "RequiredCloudBranch": "v1.3",
+  "Product": "iVRec",
+  "RequiredCloudBranch": "v1.4",
   "ServerHost": "pmsystem-prod",
   "ServerAddress": "47.98.206.68",
   "SshUser": "root",
@@ -11,7 +11,7 @@
   "DownloadRoot": "/var/www/ddrec-downloads",
   "AdminRoot": "/var/www/pmsystem-license/admin",
   "RemoteExecutor": "/opt/pmsystem-license/scripts/deploy-release.sh",
-  "UpdatePrivateKey": "%USERPROFILE%\\.ddrec\\keys\\DDREC-update-ed25519-private.pem",
+  "UpdatePrivateKey": "%USERPROFILE%\\.ivrec\\keys\\iVRec-update-ed25519-private.pem",
   "UpdatePublicKey": "client\\app\\assets\\update\\update_ed25519_public.pem",
   "MinimumFreeBytes": 5368709120,
   "SshAttempts": 3,

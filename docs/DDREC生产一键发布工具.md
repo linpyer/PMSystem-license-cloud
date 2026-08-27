@@ -5,7 +5,7 @@
 DD Rec 生产发布统一从下面的 Windows 启动器进入：
 
 ```text
-E:\AI-Project\DDREC\DDREC-Release.bat
+E:\AI-Project\DDREC\iVRec-Release.bat
 ```
 
 BAT 只定位并启动 PowerShell、传递退出码和暂停显示结果。真正受 Git 管理的发布逻辑位于：
@@ -30,8 +30,8 @@ cloud-license\deploy\production-release\*.sh
 - API 为 `https://license.aixcc.top/api/v1`，Admin 为 `https://license.aixcc.top/admin/`。
 - 下载域名 Nginx `root` 为 `/var/www/ddrec-downloads`，不是猜测值。
 - 正式客户端路径为 `/releases/stable/<standard|license>/<version>/<build>/<file>`。
-- Build 78 Standard 实际文件：`/var/www/ddrec-downloads/releases/stable/standard/1.3.0/78/DDREC-1.3.0-standard-Setup.exe`。
-- Build 78 License Production 实际文件：`/var/www/ddrec-downloads/releases/stable/license/1.3.0/78/DDREC-1.3.0-license-Setup.exe`。
+- Standard 实际文件：`/var/www/ddrec-downloads/releases/stable/standard/1.4.0/<build>/iVRec-1.4.0-standard-Setup.exe`。
+- License Production 实际文件：`/var/www/ddrec-downloads/releases/stable/license/1.4.0/<build>/iVRec-1.4.0-license-Setup.exe`。
 - Build 78 两个文件的服务器 SHA-256 与 `client_releases` published 记录一致。
 - Admin 创建、编辑、发布、下架接口分别为：
   - `POST /api/v1/admin/client-releases`
@@ -58,7 +58,7 @@ cloud-license\scripts\release\production-config.json
 更新签名私钥默认只从下面的本机路径读取：
 
 ```text
-%USERPROFILE%\.ddrec\keys\DDREC-update-ed25519-private.pem
+%USERPROFILE%\.ivrec\keys\iVRec-update-ed25519-private.pem
 ```
 
 私钥内容不会上传服务器、写日志、写 JSON 或进入 Git。服务器只收到安装包以及通过 Admin API保存的公开 Manifest 元数据和签名。

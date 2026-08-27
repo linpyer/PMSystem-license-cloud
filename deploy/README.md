@@ -28,7 +28,7 @@ commit-specific API image on the server from the current production API image. T
 `production-nginx/build-production-release.ps1` entry now delegates to this unified implementation.
 
 The repository root `VERSION` is the release version source. API and admin package metadata must
-match it or the build stops. Production builds require branch `v1.3`, a clean worktree,
+match it or the build stops. Production builds require branch `v1.4`, a clean worktree,
 `https://license.aixcc.top/api/v1`, the `生产环境` label, and all security checks.
 
 The former local authorization stack and local cloud build profile are retired and unsupported.

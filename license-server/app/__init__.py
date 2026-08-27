@@ -1,1 +1,1 @@
-"""DDREC license service."""
+"""iVRec license service."""

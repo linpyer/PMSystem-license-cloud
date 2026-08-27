@@ -12,7 +12,7 @@ function Get-CloudBuildTarget {
     $artifactBase = [System.IO.Path]::GetFullPath((Join-Path $root 'artifacts\cloud')).TrimEnd('\', '/')
     $outputRoot = [System.IO.Path]::GetFullPath((Join-Path $artifactBase "$Environment\$Service")).TrimEnd('\', '/')
     $scratchRoot = [System.IO.Path]::GetFullPath((Join-Path $artifactBase ".build-$Environment-$Service")).TrimEnd('\', '/')
-    $releaseName = "DDREC-License-Cloud-$Version-$Environment-$Service"
+    $releaseName = "iVRec-License-Cloud-$Version-$Environment-$Service"
 
     return [pscustomobject]@{
         PSTypeName = 'DDREC.CloudBuildTarget'

@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ddrec-license-server"
-version = "1.3.0"
-description = "DDREC authorization backend foundation"
+version = "1.4.0"
+description = "iVRec authorization backend foundation"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "alembic>=1.16,<2",

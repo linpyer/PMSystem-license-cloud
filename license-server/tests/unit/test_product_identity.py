@@ -12,12 +12,12 @@ from app.core.product_identity import (
 from app.schemas.client_releases import ClientReleaseDraftRequest
 
 
-def test_ivrec_brand_is_separate_from_active_legacy_protocols() -> None:
+def test_ivrec_brand_and_active_protocols_are_aligned() -> None:
     assert PRODUCT_DISPLAY_NAME == "iVRec"
     assert PRODUCT_PACKAGE_NAME == "iVRec"
-    assert ACTIVE_LICENSE_PROTOCOL_PRODUCT == "DDREC"
+    assert ACTIVE_LICENSE_PROTOCOL_PRODUCT == "iVRec"
     assert TARGET_LICENSE_PROTOCOL_PRODUCT == "iVRec"
-    assert ACTIVE_UPDATE_PROTOCOL_PRODUCT == "DDREC"
+    assert ACTIVE_UPDATE_PROTOCOL_PRODUCT == "iVRec"
     assert TARGET_UPDATE_PROTOCOL_PRODUCT == "iVRec"
     assert ADMIN_TOTP_ISSUER_NAME == "iVRec License Admin"
 

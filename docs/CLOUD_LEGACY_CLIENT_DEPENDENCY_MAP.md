@@ -7,7 +7,7 @@ This map is read-only Batch 1 evidence. It does not authorize deletion of the co
 
 | Consumer or entrypoint | Classification | Evidence |
 |---|---|---|
-| Current DDREC-Release | `no dependency` | `scripts/release/DDREC.Release.psm1` resolves `ClientRoot` to the sibling workspace `client` repository. Client artifacts and update public keys are read from that repository, not from `cloud-license/app`. |
+| Current iVRec Release | `no dependency` | `scripts/release/DDREC.Release.psm1` retains its internal historical module name but resolves `ClientRoot` to the sibling workspace `client` repository. Current iVRec artifacts and update public keys are read from that repository, not from `cloud-license/app`. |
 | Current Cloud Build | `no dependency` | `scripts/build_cloud_release.ps1` packages `license-server` and `license-admin`; its tracked scopes do not include root `app` or `main.py`. |
 | Current Admin Build | `no dependency` | Admin npm/Vite inputs are confined to `license-admin`; no import, copy, or build step references root `app`. |
 | Current license-server | `no dependency` | Server packaging and runtime use `license-server/app` from the license-server working directory. They do not import the historical root `app`. |

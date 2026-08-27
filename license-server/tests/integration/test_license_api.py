@@ -168,6 +168,7 @@ async def test_duration_expiration_is_calculated_from_first_activation(api, lice
     code, _ = await create_license(application, license_type)
     response = await activate(client, code, f"device-{license_type.value}")
     payload = signed_payload(response)
+    assert payload["product"] == "iVRec"
     issued = datetime.fromisoformat(payload["issuedAt"].replace("Z", "+00:00"))
     expires = datetime.fromisoformat(payload["expiresAt"].replace("Z", "+00:00"))
     assert abs((expires - issued) - timedelta(days=days)) < timedelta(seconds=2)
@@ -228,6 +229,9 @@ async def test_verify_updates_time_and_issues_new_license(api) -> None:
     )
     assert response.status_code == 200
     assert response.json()["license"]["payload"] != first_payload
+    refreshed = signed_payload(response)
+    assert refreshed["product"] == "iVRec"
+    assert refreshed["deviceId"] == "device-verify"
 
 
 async def test_expired_license_fails_verification(api) -> None:

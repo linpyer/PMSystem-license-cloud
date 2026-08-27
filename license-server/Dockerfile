@@ -15,7 +15,7 @@ FROM python:3.12.10-slim-bookworm AS runtime
 ARG DDREC_VERSION
 ARG DDREC_GIT_COMMIT
 
-LABEL org.opencontainers.image.title="DDREC License API" \
+LABEL org.opencontainers.image.title="iVRec License API" \
       org.opencontainers.image.version="${DDREC_VERSION}" \
       org.opencontainers.image.revision="${DDREC_GIT_COMMIT}" \
       com.ddrec.environment="production" \

@@ -1,6 +1,6 @@
 ﻿@{
-    ProjectName = 'DDREC License Cloud'
-    ProductionBranch = 'v1.3'
+    ProjectName = 'iVRec License Cloud'
+    ProductionBranch = 'v1.4'
     VersionFile = 'VERSION'
     Environments = @{
         production = @{

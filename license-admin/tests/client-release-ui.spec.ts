@@ -7,6 +7,9 @@ describe('客户端更新管理界面', () => {
   const policySource = readFileSync(resolve(process.cwd(), 'src/views/versions/VersionPolicyView.vue'), 'utf8')
 
   it('只允许 Standard 与 License-Production 正式发布组合', () => {
+    expect(source).toContain("product: 'iVRec'")
+    expect(source).not.toContain("product: 'DDREC'")
+    expect(source).toContain('/iVRec-...exe')
     expect(source).not.toContain('label="更新说明"')
     expect(source).not.toContain('编辑说明')
     expect(source).toContain('label="正式版本"')

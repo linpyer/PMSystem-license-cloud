@@ -17,10 +17,10 @@ from app.api.v1.client_updates import latest_client_update
 
 
 def release(**values) -> ClientRelease:
-    defaults = dict(product="DDREC",version="1.3.1",build_number=72,git_commit="abcdef123456",
+    defaults = dict(product="iVRec",version="1.4.0",build_number=72,git_commit="abcdef123456",
         edition="license",environment="production",architecture="x64",channel="stable",
-        title="iVRec V1.3.1",release_notes="修复问题",file_name="DDREC-1.3.1-license-Setup.exe",
-        download_path="/releases/stable/license/1.3.1/DDREC-1.3.1-license-Setup.exe",
+        title="iVRec V1.4.0",release_notes="修复问题",file_name="iVRec-1.4.0-license-Setup.exe",
+        download_path="/releases/stable/license/1.4.0/iVRec-1.4.0-license-Setup.exe",
         file_size=12,sha256="A"*64,signature="x"*86,mandatory=False,status="published",
         published_at=datetime(2026,8,15,10,0,tzinfo=timezone.utc),created_by=None)
     defaults.update(values)
@@ -36,50 +36,63 @@ class Repo:
 @pytest.mark.asyncio
 async def test_only_published_is_returned_and_withdrawn_stops_immediately(settings):
     rows=[release(status="draft"),release(status="withdrawn",build_number=73),release(status="published",build_number=74)]
-    result=await ClientReleaseService(settings,repository=Repo(rows)).latest(None,product="DDREC",edition="license",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=64)
+    result=await ClientReleaseService(settings,repository=Repo(rows)).latest(None,product="iVRec",edition="license",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=64)
     assert result["updateAvailable"] and result["buildNumber"]==74
     rows[2].status="withdrawn"
-    assert await ClientReleaseService(settings,repository=Repo(rows)).latest(None,product="DDREC",edition="license",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=64)=={"updateAvailable":False}
+    assert await ClientReleaseService(settings,repository=Repo(rows)).latest(None,product="iVRec",edition="license",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=64)=={"updateAvailable":False}
 
 
 @pytest.mark.asyncio
 async def test_version_then_build_ordering_and_no_downgrade(settings):
-    rows=[release(version="1.3.0",build_number=68,file_name="DDREC-1.3.0-license-Setup.exe"),release(version="1.3.1",build_number=1)]
+    rows=[release(version="1.4.0",build_number=68),release(version="1.4.1",build_number=1,file_name="iVRec-1.4.1-license-Setup.exe",download_path="/releases/stable/license/1.4.1/iVRec-1.4.1-license-Setup.exe")]
     service=ClientReleaseService(settings,repository=Repo(rows))
-    result=await service.latest(None,product="DDREC",edition="license",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=64)
-    assert (result["version"],result["buildNumber"])==("1.3.1",1)
-    assert await service.latest(None,product="DDREC",edition="license",environment="production",architecture="x64",channel="stable",version="1.4.0",build_number=1)=={"updateAvailable":False}
+    result=await service.latest(None,product="iVRec",edition="license",environment="production",architecture="x64",channel="stable",version="1.4.0",build_number=64)
+    assert (result["version"],result["buildNumber"])==("1.4.1",1)
+    assert await service.latest(None,product="iVRec",edition="license",environment="production",architecture="x64",channel="stable",version="1.5.0",build_number=1)=={"updateAvailable":False}
 
 
 @pytest.mark.asyncio
 async def test_edition_environment_and_channel_are_strict(settings):
-    rows=[release(edition="standard",file_name="DDREC-1.3.1-standard-Setup.exe",download_path="/releases/stable/standard/1.3.1/DDREC-1.3.1-standard-Setup.exe"),release()]
+    rows=[release(edition="standard",file_name="iVRec-1.4.0-standard-Setup.exe",download_path="/releases/stable/standard/1.4.0/iVRec-1.4.0-standard-Setup.exe"),release()]
     service=ClientReleaseService(settings,repository=Repo(rows))
-    standard=await service.latest(None,product="DDREC",edition="standard",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=1)
-    production=await service.latest(None,product="DDREC",edition="license",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=1)
+    standard=await service.latest(None,product="iVRec",edition="standard",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=1)
+    production=await service.latest(None,product="iVRec",edition="license",environment="production",architecture="x64",channel="stable",version="1.3.0",build_number=1)
     assert standard["edition"]=="standard"
     assert production["edition"]=="license" and production["environment"]=="production"
 
 
 @pytest.mark.parametrize("changes", [
-    {"edition":"standard","fileName":"DDREC-1.3.1-license-Setup.exe"},
+    {"edition":"standard","fileName":"iVRec-1.4.0-license-Setup.exe"},
     {"environment":"local","channel":"stable"},
     {"mandatory":True},
 ])
 def test_invalid_release_lanes_are_rejected(changes):
-    data=dict(product="DDREC",version="1.3.1",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="production",architecture="x64",channel="stable",title="iVRec V1.3.1",releaseNotes="notes",fileName="DDREC-1.3.1-license-Setup.exe",downloadPath="/releases/stable/license/1.3.1/DDREC-1.3.1-license-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
+    data=dict(product="iVRec",version="1.4.0",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="production",architecture="x64",channel="stable",title="iVRec V1.4.0",releaseNotes="notes",fileName="iVRec-1.4.0-license-Setup.exe",downloadPath="/releases/stable/license/1.4.0/iVRec-1.4.0-license-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
     data.update(changes)
     with pytest.raises(ValueError): ClientReleaseDraftRequest.model_validate(data)
 
 
 def test_admin_cannot_create_retired_local_release():
-    data=dict(product="DDREC",version="1.3.1",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="local",architecture="x64",channel="dev",title="iVRec V1.3.1",fileName="DDREC-1.3.1-license-local-Setup.exe",downloadPath="/releases/dev/license/1.3.1/DDREC-1.3.1-license-local-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
+    data=dict(product="iVRec",version="1.4.0",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="local",architecture="x64",channel="dev",title="iVRec V1.4.0",fileName="iVRec-1.4.0-license-local-Setup.exe",downloadPath="/releases/dev/license/1.4.0/iVRec-1.4.0-license-local-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
     with pytest.raises(ValueError):
         ClientReleaseDraftRequest.model_validate(data)
 
 
+def test_new_draft_rejects_legacy_product_but_historical_model_remains_readable():
+    data=dict(product="DDREC",version="1.4.0",buildNumber=72,gitCommit="abcdef123456",edition="license",environment="production",architecture="x64",channel="stable",title="historical",fileName="iVRec-1.4.0-license-Setup.exe",downloadPath="/releases/stable/license/1.4.0/iVRec-1.4.0-license-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-15T10:00:00Z")
+    with pytest.raises(ValueError):
+        ClientReleaseDraftRequest.model_validate(data)
+    historical = release(
+        product="DDREC",
+        version="1.3.1",
+        file_name="DDREC-1.3.1-license-Setup.exe",
+        download_path="/releases/stable/license/1.3.1/DDREC-1.3.1-license-Setup.exe",
+    )
+    assert historical.product == "DDREC"
+
+
 def test_release_notes_remain_api_compatible_but_are_optional_for_new_drafts():
-    data=dict(product="DDREC",version="1.3.1",buildNumber=79,gitCommit="abcdef123456",edition="standard",environment="production",architecture="x64",channel="stable",title="iVRec V1.3.1",fileName="DDREC-1.3.1-standard-Setup.exe",downloadPath="/releases/stable/standard/1.3.1/DDREC-1.3.1-standard-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-22T10:00:00Z")
+    data=dict(product="iVRec",version="1.4.0",buildNumber=79,gitCommit="abcdef123456",edition="standard",environment="production",architecture="x64",channel="stable",title="iVRec V1.4.0",fileName="iVRec-1.4.0-standard-Setup.exe",downloadPath="/releases/stable/standard/1.4.0/iVRec-1.4.0-standard-Setup.exe",fileSize=12,sha256="A"*64,signature="x"*86,mandatory=False,publishedAt="2026-08-22T10:00:00Z")
     payload = ClientReleaseDraftRequest.model_validate(data)
     assert payload.release_notes == ""
     data["releaseNotes"] = "旧管理端仍可提交此字段"
@@ -89,7 +102,7 @@ def test_release_notes_remain_api_compatible_but_are_optional_for_new_drafts():
 def test_publish_requires_real_file_sha_and_valid_signature(settings, tmp_path):
     private=Ed25519PrivateKey.generate(); public=tmp_path/"public.pem"
     public.write_bytes(private.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
-    content=b"installer"; target=tmp_path/"releases/stable/license/1.3.1/DDREC-1.3.1-license-Setup.exe"; target.parent.mkdir(parents=True); target.write_bytes(content)
+    content=b"installer"; target=tmp_path/"releases/stable/license/1.4.0/iVRec-1.4.0-license-Setup.exe"; target.parent.mkdir(parents=True); target.write_bytes(content)
     import hashlib
     row=release(file_size=len(content),sha256=hashlib.sha256(content).hexdigest().upper())
     values={"product":row.product,"version":row.version,"buildNumber":row.build_number,"edition":row.edition,"environment":row.environment,"architecture":row.architecture,"channel":row.channel,"fileName":row.file_name,"fileSize":row.file_size,"sha256":row.sha256,"publishedAt":"2026-08-15T10:00:00Z"}
@@ -103,7 +116,7 @@ def test_publish_requires_real_file_sha_and_valid_signature(settings, tmp_path):
 def test_bad_signature_cannot_publish(settings, tmp_path):
     private=Ed25519PrivateKey.generate(); public=tmp_path/"public.pem"
     public.write_bytes(private.public_key().public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
-    content=b"installer"; target=tmp_path/"releases/stable/license/1.3.1/DDREC-1.3.1-license-Setup.exe"; target.parent.mkdir(parents=True); target.write_bytes(content)
+    content=b"installer"; target=tmp_path/"releases/stable/license/1.4.0/iVRec-1.4.0-license-Setup.exe"; target.parent.mkdir(parents=True); target.write_bytes(content)
     import hashlib
     row=release(file_size=len(content),sha256=hashlib.sha256(content).hexdigest().upper(),signature="A"*86)
     configured=settings.model_copy(update={"update_download_root":tmp_path,"update_signing_public_key_path":public})
@@ -121,7 +134,7 @@ class EmptySession:
 @pytest.mark.asyncio
 async def test_public_update_api_requires_no_license_or_activation(settings):
     result = await latest_client_update(
-        product="DDREC", edition="standard", environment="production", arch="x64",
+        product="iVRec", edition="standard", environment="production", arch="x64",
         channel="stable", version="1.3.0", build_number=64,
         session=EmptySession(), settings=settings,
     )

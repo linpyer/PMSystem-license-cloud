@@ -2,7 +2,7 @@ import { api } from './client'
 
 export type ClientRelease = {
   id: string
-  product: 'DDREC'
+  product: 'DDREC' | 'iVRec'
   version: string
   buildNumber: number
   gitCommit: string
@@ -24,7 +24,8 @@ export type ClientRelease = {
 }
 
 // local/dev remain response-only so historical rows can still be displayed.
-export type ClientReleaseDraft = Omit<ClientRelease, 'id' | 'status' | 'createdAt' | 'releaseNotes' | 'environment' | 'channel'> & {
+export type ClientReleaseDraft = Omit<ClientRelease, 'id' | 'status' | 'createdAt' | 'releaseNotes' | 'environment' | 'channel' | 'product'> & {
+  product: 'iVRec'
   environment: 'production'
   channel: 'stable'
   releaseNotes?: string

@@ -50,7 +50,7 @@ def verify(manifest: Path, signature: str, public_key: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sign and verify DDREC update manifests")
+    parser = argparse.ArgumentParser(description="Sign and verify iVRec update manifests")
     commands = parser.add_subparsers(dest="command", required=True)
     sign_parser = commands.add_parser("sign")
     sign_parser.add_argument("--manifest", required=True, type=Path)

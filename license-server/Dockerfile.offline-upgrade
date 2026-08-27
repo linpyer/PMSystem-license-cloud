@@ -14,7 +14,7 @@ WORKDIR /srv/license-server
 COPY --chown=license:license alembic.ini ./
 COPY --chown=license:license alembic ./alembic
 
-LABEL org.opencontainers.image.title="DDREC License API" \
+LABEL org.opencontainers.image.title="iVRec License API" \
       org.opencontainers.image.version="${DDREC_VERSION}" \
       org.opencontainers.image.revision="${DDREC_GIT_COMMIT}" \
       com.ddrec.environment="production" \

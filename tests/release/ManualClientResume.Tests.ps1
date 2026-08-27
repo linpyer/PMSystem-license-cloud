@@ -4,12 +4,13 @@ Import-Module $modulePath -Force
 function Test-ActionThrows([scriptblock]$Action){try{& $Action|Out-Null;return $false}catch{return $true}}
 
 function New-TestMetadata([string]$edition='standard'){
-    $name=if($edition -eq 'standard'){'DDREC-1.3.0-standard-Setup.exe'}else{'DDREC-1.3.0-license-Setup.exe'}
+    $name=if($edition -eq 'standard'){'iVRec-1.4.0-standard-Setup.exe'}else{'iVRec-1.4.0-license-Setup.exe'}
     $environment=if($edition -eq 'standard'){'none'}else{'production'}
     return [pscustomobject]@{
         PSTypeName='DDREC.PackageMetadata';Path="C:\artifacts\$name";FileName=$name;FileSize=[int64]100
-        SHA256=('A'*64);Version='1.3.0';BuildNumber=86;GitCommit=('b'*40);Edition=$edition
-        Environment=$environment;UpdaterVersion='1.2.0';ManifestPath='m';ChecksumsPath='s';PEProductVersion='1.3.0'
+        SHA256=('A'*64);Product='iVRec';DisplayName='iVRec';MainExe='iVRec.exe';UpdaterExe='iVRec-Updater.exe'
+        Version='1.4.0';BuildNumber=86;GitCommit=('b'*40);Edition=$edition
+        Environment=$environment;UpdaterVersion='1.2.0';ManifestPath='m';ChecksumsPath='s';PEProductVersion='1.4.0'
     }
 }
 
@@ -29,8 +30,8 @@ Describe 'Manual client upload contract' {
         $paths=Get-DDRECClientIncomingPaths -Context (New-TestContext) -Metadata (New-TestMetadata)
         $paths.Directory|Should Be '/opt/pmsystem-license/incoming/client/20260823-165958'
         $paths.Path.Contains('\')|Should Be $false
-        $paths.FileName|Should Be 'DDREC-1.3.0-standard-Setup.exe'
-        $paths.LegacyFileName|Should Be 'DDREC-1.3.0-standard-Setup.exe.part'
+        $paths.FileName|Should Be 'iVRec-1.4.0-standard-Setup.exe'
+        $paths.LegacyFileName|Should Be 'iVRec-1.4.0-standard-Setup.exe.part'
         $paths.AutoPath|Should Be $paths.LegacyPath
     }
     It 'rejects an unsafe session id' {
@@ -38,27 +39,27 @@ Describe 'Manual client upload contract' {
         (Test-ActionThrows {Get-DDRECClientIncomingPaths -Context $context -Metadata (New-TestMetadata)})|Should Be $true
     }
     It 'treats a missing Standard upload as invalid' {
-        $status=New-IncomingStatus 'DDREC-1.3.0-standard-Setup.exe' $false $false
+        $status=New-IncomingStatus 'iVRec-1.4.0-standard-Setup.exe' $false $false
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata)).Reason|Should Be '文件不存在'
     }
     It 'accepts a canonical exe manual upload' {
-        $status=New-IncomingStatus 'DDREC-1.3.0-standard-Setup.exe'
+        $status=New-IncomingStatus 'iVRec-1.4.0-standard-Setup.exe'
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata)).Valid|Should Be $true
     }
     It 'blocks a partially uploaded Standard exe by exact size' {
-        $status=New-IncomingStatus 'DDREC-1.3.0-standard-Setup.exe' $true $true 50
+        $status=New-IncomingStatus 'iVRec-1.4.0-standard-Setup.exe' $true $true 50
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata)).Reason|Should Be '文件大小不一致'
     }
     It 'blocks a Standard exe upload with the wrong SHA' {
-        $status=New-IncomingStatus 'DDREC-1.3.0-standard-Setup.exe' $true $true 100 ('C'*64)
+        $status=New-IncomingStatus 'iVRec-1.4.0-standard-Setup.exe' $true $true 100 ('C'*64)
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata)).Reason|Should Be 'SHA256 不一致'
     }
     It 'accepts the historical Standard part name' {
-        $status=New-IncomingStatus 'DDREC-1.3.0-standard-Setup.exe.part' $true $true 100 ('a'*64)
+        $status=New-IncomingStatus 'iVRec-1.4.0-standard-Setup.exe.part' $true $true 100 ('a'*64)
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata)).Valid|Should Be $true
     }
     It 'accepts License-Production with its exact lane file name' {
-        $status=New-IncomingStatus 'DDREC-1.3.0-license-Setup.exe'
+        $status=New-IncomingStatus 'iVRec-1.4.0-license-Setup.exe'
         (Test-DDRECIncomingPackageStatus -Status $status -Metadata (New-TestMetadata 'license')).Valid|Should Be $true
     }
     It 'prefers canonical exe when exe and part are identical' {
@@ -96,13 +97,13 @@ Describe 'Automatic client upload contract' {
         $result=Invoke-DDRECAutomaticClientUpload -Context $context -Metadata (New-TestMetadata) -DirectoryInitializer $script:initializer -TransferInvoker $script:transfer -StatusReader $script:status
         $result.Action|Should Be 'Verified'
         $script:destinations.Count|Should Be 1
-        $script:destinations[0]|Should Match '/DDREC-1\.3\.0-standard-Setup\.exe\.part$'
+        $script:destinations[0]|Should Match '/iVRec-1\.4\.0-standard-Setup\.exe\.part$'
     }
     It 'automatically uploads and verifies License-Production' {
         $context=New-TestContext;$context.Config|Add-Member -NotePropertyName ServerHost -NotePropertyValue 'root@example'
         (Invoke-DDRECAutomaticClientUpload -Context $context -Metadata (New-TestMetadata 'license') -DirectoryInitializer $script:initializer -TransferInvoker $script:transfer -StatusReader $script:status).Action|Should Be 'Verified'
         $script:destinations.Count|Should Be 1
-        $script:destinations[0]|Should Match '/DDREC-1\.3\.0-license-Setup\.exe\.part$'
+        $script:destinations[0]|Should Match '/iVRec-1\.4\.0-license-Setup\.exe\.part$'
     }
     It 'maps auto upload failure choices without a dangerous default' {
         (Get-DDRECAutoUploadFailureAction '1')|Should Be 'Retry'
@@ -177,13 +178,13 @@ Describe 'Immutable final and Draft safety' {
         (Test-ActionThrows {Assert-DDRECDownloadProbe -Probe $probe -ExpectedLength 100})|Should Be $true
     }
     It 'reuses an existing Draft only when all immutable metadata match' {
-        $metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.3.0/86/DDREC-1.3.0-standard-Setup.exe'}
-        $existing=[pscustomobject]@{product='DDREC';version='1.3.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='standard';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256;status='draft'}
+        $metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.4.0/86/iVRec-1.4.0-standard-Setup.exe'}
+        $existing=[pscustomobject]@{product='iVRec';version='1.4.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='standard';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256;status='draft'}
         Assert-DDRECExistingDraftCompatibility -Existing $existing -Metadata $metadata -Target $target|Should Be $true
     }
     It 'blocks a Draft with conflicting metadata' {
         $metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/correct'}
-        $existing=[pscustomobject]@{product='DDREC';version='1.3.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='standard';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath='/wrong';fileSize=100;sha256=$metadata.SHA256;status='draft'}
+        $existing=[pscustomobject]@{product='iVRec';version='1.4.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='standard';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath='/wrong';fileSize=100;sha256=$metadata.SHA256;status='draft'}
         (Test-ActionThrows {Assert-DDRECExistingDraftCompatibility -Existing $existing -Metadata $metadata -Target $target})|Should Be $true
     }
     It 'uses an atomic rename and never overwrites a different final package' {
@@ -301,47 +302,47 @@ Describe 'OWNER authentication and Draft API contract' {
         [regex]::Match($session,'(?s)function New-DDRECReleaseSessionState.*?(?=function Update-DDRECReleaseSessionFromContext)').Value|Should Not Match '(?i)password|totp|token|cookie'
     }
     It 'builds a complete Standard Draft payload compatible with the production wire schema' {
-        $metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.3.0/86/DDREC-1.3.0-standard-Setup.exe'}
+        $metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.4.0/86/iVRec-1.4.0-standard-Setup.exe'}
         $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
         $payload=New-DDRECClientDraftPayload -Metadata $metadata -Target $target -Signed $signed
         $payload.environment|Should Be 'production';$payload.releaseNotes.Length|Should BeGreaterThan 0
         Assert-DDRECClientDraftPayload -Payload $payload|Should Be $true
     }
     It 'builds a complete License-Production Draft payload' {
-        $metadata=New-TestMetadata 'license';$target=[pscustomobject]@{RelativePath='/releases/stable/license/1.3.0/86/DDREC-1.3.0-license-Setup.exe'}
+        $metadata=New-TestMetadata 'license';$target=[pscustomobject]@{RelativePath='/releases/stable/license/1.4.0/86/iVRec-1.4.0-license-Setup.exe'}
         $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
         $payload=New-DDRECClientDraftPayload -Metadata $metadata -Target $target -Signed $signed
         $payload.edition|Should Be 'license';$payload.environment|Should Be 'production'
     }
     It 'identifies a missing required Draft field before HTTP' {
-        $payload=[ordered]@{product='DDREC'}
+        $payload=[ordered]@{product='iVRec'}
         $message='';try{Assert-DDRECClientDraftPayload -Payload $payload|Out-Null}catch{$message=$_.Exception.Message}
         $message|Should Match '缺少 version'
     }
     It 'does not send retired or unsupported Draft fields' {
-        $metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.3.0/86/DDREC-1.3.0-standard-Setup.exe'}
+        $metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.4.0/86/iVRec-1.4.0-standard-Setup.exe'}
         $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
         $payload=New-DDRECClientDraftPayload -Metadata $metadata -Target $target -Signed $signed
         ('updaterVersion' -notin @($payload.Keys))|Should Be $true;('licenseLocal' -notin @($payload.Keys))|Should Be $true
     }
     It 'creates a Standard Draft with the complete validated payload' {
-        $context=New-TestContext;$metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.3.0/86/DDREC-1.3.0-standard-Setup.exe'}
+        $context=New-TestContext;$metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.4.0/86/iVRec-1.4.0-standard-Setup.exe'}
         $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
-        $release=[pscustomobject]@{id='standard-draft';status='draft';product='DDREC';version='1.3.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='standard';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256}
+        $release=[pscustomobject]@{id='standard-draft';status='draft';product='iVRec';version='1.4.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='standard';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256}
         $auth=[pscustomobject]@{Session=[Microsoft.PowerShell.Commands.WebRequestSession]::new();CsrfToken='csrf';RequestInvoker={param($p)if($p.Method -eq 'GET'){[pscustomobject]@{items=@()}}else{[pscustomobject]@{release=$release}}}}
         (New-DDRECClientDraft -Context $context -Auth $auth -Metadata $metadata -Target $target -Signed $signed).id|Should Be 'standard-draft'
     }
     It 'creates a License-Production Draft independently' {
-        $context=New-TestContext;$metadata=New-TestMetadata 'license';$target=[pscustomobject]@{RelativePath='/releases/stable/license/1.3.0/86/DDREC-1.3.0-license-Setup.exe'}
+        $context=New-TestContext;$metadata=New-TestMetadata 'license';$target=[pscustomobject]@{RelativePath='/releases/stable/license/1.4.0/86/iVRec-1.4.0-license-Setup.exe'}
         $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
-        $release=[pscustomobject]@{id='license-draft';status='draft';product='DDREC';version='1.3.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='license';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256}
+        $release=[pscustomobject]@{id='license-draft';status='draft';product='iVRec';version='1.4.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='license';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256}
         $auth=[pscustomobject]@{Session=[Microsoft.PowerShell.Commands.WebRequestSession]::new();CsrfToken='csrf';RequestInvoker={param($p)if($p.Method -eq 'GET'){[pscustomobject]@{items=@()}}else{[pscustomobject]@{release=$release}}}}
         (New-DDRECClientDraft -Context $context -Auth $auth -Metadata $metadata -Target $target -Signed $signed).id|Should Be 'license-draft'
     }
     It 'reuses an existing matching Draft without issuing a POST' {
-        $context=New-TestContext;$metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.3.0/86/DDREC-1.3.0-standard-Setup.exe'}
+        $context=New-TestContext;$metadata=New-TestMetadata;$target=[pscustomobject]@{RelativePath='/releases/stable/standard/1.4.0/86/iVRec-1.4.0-standard-Setup.exe'}
         $signed=[pscustomobject]@{Signature=('s'*86);Manifest=[pscustomobject]@{publishedAt='2026-08-23T10:41:13Z'}}
-        $existing=[pscustomobject]@{id='existing';status='draft';product='DDREC';version='1.3.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='standard';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256}
+        $existing=[pscustomobject]@{id='existing';status='draft';product='iVRec';version='1.4.0';buildNumber=86;gitCommit=$metadata.GitCommit;edition='standard';environment='production';architecture='x64';channel='stable';fileName=$metadata.FileName;downloadPath=$target.RelativePath;fileSize=100;sha256=$metadata.SHA256}
         $script:draftPostCalls=0
         $auth=[pscustomobject]@{Session=[Microsoft.PowerShell.Commands.WebRequestSession]::new();CsrfToken='csrf';RequestInvoker={param($p)if($p.Method -eq 'GET'){[pscustomobject]@{items=@($existing)}}else{$script:draftPostCalls++;throw 'unexpected POST'}}}
         (New-DDRECClientDraft -Context $context -Auth $auth -Metadata $metadata -Target $target -Signed $signed).id|Should Be 'existing'

@@ -13,14 +13,14 @@ function New-CloudPackageFixture {
     )
     $root = Join-Path $CloudRoot 'artifacts\cloud\production\all'
     New-Item -ItemType Directory -Path $root -Force | Out-Null
-    $name = "DDREC-License-Cloud-$Version-production-all.tar.gz"
+    $name = "iVRec-License-Cloud-$Version-production-all.tar.gz"
     $archive = Join-Path $root $name
     [IO.File]::WriteAllText($archive, 'cloud-package-fixture', [Text.Encoding]::ASCII)
     $item = Get-Item -LiteralPath $archive
     $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
     if (-not $MissingManifest) {
         $manifest = @(
-            'Project: DDREC License Cloud'
+            'Project: iVRec License Cloud'
             "Release version: $Version"
             "Environment: $Environment"
             "Service: $Service"

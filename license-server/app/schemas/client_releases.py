@@ -13,7 +13,7 @@ from app.schemas.base import CamelModel
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
-FILE_RE = re.compile(r"^DDREC-\d+\.\d+\.\d+-(?:standard|license)-Setup\.exe$")
+FILE_RE = re.compile(r"^iVRec-\d+\.\d+\.\d+-(?:standard|license)-Setup\.exe$")
 
 
 class ClientReleaseDraftRequest(CamelModel):
@@ -61,7 +61,7 @@ class ClientReleaseDraftRequest(CamelModel):
     @classmethod
     def validate_file_name(cls, value: str) -> str:
         if not FILE_RE.fullmatch(value):
-            raise ValueError("fileName does not follow the DDREC installer naming convention")
+            raise ValueError("fileName does not follow the iVRec installer naming convention")
         return value
 
     @field_validator("download_path")

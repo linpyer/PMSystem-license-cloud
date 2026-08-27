@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     database_statement_timeout_ms: int = Field(
         default=15_000, ge=1_000, le=300_000, alias="LICENSE_DB_STATEMENT_TIMEOUT_MS"
     )
-    service_version: str = Field(default="1.3.0", alias="LICENSE_SERVICE_VERSION")
+    service_version: str = Field(default="1.4.0", alias="LICENSE_SERVICE_VERSION")
     build_commit: str = Field(default="development", alias="LICENSE_BUILD_COMMIT")
     rate_limit_enabled: bool = Field(default=True, alias="LICENSE_RATE_LIMIT_ENABLED")
     update_download_root: Path = Field(

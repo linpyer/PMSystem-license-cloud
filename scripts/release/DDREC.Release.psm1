@@ -11,6 +11,8 @@ $script:ClientReleaseVersions = [ordered]@{
     'v1.3.1' = '1.3.1'
     'v1.4' = '1.4.0'
 }
+$script:CurrentProduct = 'iVRec'
+$script:LegacyProduct = 'DDREC'
 
 function Get-DDRECExitCodes { return $script:ExitCodes }
 
@@ -25,6 +27,7 @@ function Import-DDRECReleaseConfig {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$WorkspaceRoot)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "发布配置不存在：$Path" }
     $config = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$config.Product -cne $script:CurrentProduct) { throw '当前发布 Product 必须为 iVRec。' }
     foreach ($name in @('RequiredCloudBranch','ServerHost','ApiBaseUrl','AdminUrl','DownloadBaseUrl','RemoteRoot','DownloadRoot','RemoteExecutor')) {
         if ([string]::IsNullOrWhiteSpace([string]$config.$name)) { throw "发布配置缺少：$name" }
     }
@@ -129,7 +132,7 @@ function Get-DDRECClientIncomingPaths {
     param([Parameter(Mandatory)]$Context,[Parameter(Mandatory)]$Metadata)
     Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
     if ([string]$Context.SessionId -notmatch '^\d{8}-\d{6}$') { throw '客户端 incoming SessionId 不安全。' }
-    if ([IO.Path]::GetFileName([string]$Metadata.FileName) -cne [string]$Metadata.FileName -or $Metadata.FileName -notmatch '^DDREC-[0-9.]+-(standard|license)-Setup\.exe$') {
+    if ([IO.Path]::GetFileName([string]$Metadata.FileName) -cne [string]$Metadata.FileName -or $Metadata.FileName -notmatch '^iVRec-[0-9.]+-(standard|license)-Setup\.exe$') {
         throw '客户端安装包文件名不安全。'
     }
     $root = ([string]$Context.Config.RemoteRoot).TrimEnd('/')
@@ -495,7 +498,7 @@ function Assert-DDRECPackageMetadata {
     if ($Metadata.PSObject.TypeNames -notcontains 'DDREC.PackageMetadata') {
         throw "安装包元数据无效：预期 DDREC.PackageMetadata，实际 $($Metadata.GetType().FullName)"
     }
-    foreach ($field in @('Path','FileName','FileSize','SHA256','Version','BuildNumber','GitCommit','Edition','Environment','UpdaterVersion')) {
+    foreach ($field in @('Path','FileName','FileSize','SHA256','Product','DisplayName','MainExe','UpdaterExe','Version','BuildNumber','GitCommit','Edition','Environment','UpdaterVersion')) {
         $property = $Metadata.PSObject.Properties[$field]
         if ($null -eq $property -or [string]::IsNullOrWhiteSpace([string]$property.Value)) {
             throw "安装包元数据无效：PackageMetadata 缺少 $field"
@@ -512,6 +515,8 @@ function Assert-DDRECInstallerPolicy {
         [Parameter(Mandatory)][string]$ExpectedVersion
     )
     Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
+    if ($Metadata.Product -cne $script:CurrentProduct -or $Metadata.DisplayName -cne 'iVRec') { throw '安装包 Product/DisplayName 必须为 iVRec。' }
+    if ($Metadata.MainExe -cne 'iVRec.exe' -or $Metadata.UpdaterExe -cne 'iVRec-Updater.exe') { throw '安装包 MainExe/UpdaterExe 不符合 iVRec 包身份。' }
     $expectedEdition = if ($Lane -eq 'standard') {'standard'} else {'license'}
     $expectedEnvironment = if ($Lane -eq 'standard') {'none'} else {'production'}
     if ($Metadata.Edition -cne $expectedEdition) { throw "安装包 Edition 错误：$($Metadata.Edition)" }
@@ -528,7 +533,7 @@ function Show-DDRECPackageMetadata {
     param([Parameter(Mandatory)]$Metadata,[scriptblock]$OutputWriter)
     Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
     if($null -eq $OutputWriter){$OutputWriter={param($Line) Write-Host $Line}}
-    foreach($field in @('FileName','Version','BuildNumber','GitCommit','Edition','Environment','UpdaterVersion','FileSize','SHA256')){
+    foreach($field in @('Product','DisplayName','MainExe','UpdaterExe','FileName','Version','BuildNumber','GitCommit','Edition','Environment','UpdaterVersion','FileSize','SHA256')){
         [void](& $OutputWriter ('{0,-14} : {1}' -f $field,[string]$Metadata.$field))
     }
     Sync-DDRECConsoleOutput
@@ -751,6 +756,7 @@ function Get-DDRECInstallerMetadata {
     $checksumsPath = Join-Path $file.DirectoryName 'SHA256SUMS.txt'
     $m = Read-DDRECKeyValueFile $manifestPath
     $manifestFields = [ordered]@{
+        Product='Product'; DisplayName='DisplayName'; MainExe='MainExe'; UpdaterExe='UpdaterExe'
         Version='Version'; BuildNumber='BuildNumber'; GitCommit='GitCommit'; Edition='Edition'
         Environment='LicenseEnvironment'; UpdaterVersion='UpdaterVersion'; Installer='Installer'
         FileSize='SizeBytes'; SHA256='SHA256'
@@ -782,6 +788,8 @@ function Get-DDRECInstallerMetadata {
     $metadata = [pscustomobject]@{
         PSTypeName='DDREC.PackageMetadata'
         Path=$file.FullName; FileName=$file.Name; FileSize=[int64]$file.Length; SHA256=$actualHash
+        Product=[string]$m['Product']; DisplayName=[string]$m['DisplayName']
+        MainExe=[string]$m['MainExe']; UpdaterExe=[string]$m['UpdaterExe']
         Version=[string]$m['Version']; BuildNumber=$buildNumber; GitCommit=([string]$m['GitCommit']).ToLowerInvariant()
         Edition=([string]$m['Edition']).ToLowerInvariant(); Environment=([string]$m['LicenseEnvironment']).ToLowerInvariant()
         UpdaterVersion=[string]$m['UpdaterVersion']
@@ -898,7 +906,7 @@ function Assert-DDRECExistingDraftCompatibility {
     param([Parameter(Mandatory)]$Existing,[Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Target)
     $environment=if($Metadata.Edition -eq 'standard'){'production'}else{$Metadata.Environment}
     $expected=[ordered]@{
-        product='DDREC';version=$Metadata.Version;buildNumber=[string]$Metadata.BuildNumber;gitCommit=$Metadata.GitCommit
+        product=$script:CurrentProduct;version=$Metadata.Version;buildNumber=[string]$Metadata.BuildNumber;gitCommit=$Metadata.GitCommit
         edition=$Metadata.Edition;environment=$environment;architecture='x64';channel='stable';fileName=$Metadata.FileName
         downloadPath=$Target.RelativePath;fileSize=[string]$Metadata.FileSize;sha256=$Metadata.SHA256
     }
@@ -1063,7 +1071,7 @@ printf '%s' "$sql" | docker exec -i "$pg" sh -lc 'psql -X -v ON_ERROR_STOP=1 -U 
 function Get-DDRECPublicRelease {
     param([ValidateSet('standard','license-production')][string]$Lane,[Parameter(Mandatory)]$Config)
     $edition = if ($Lane -eq 'standard') {'standard'} else {'license'}
-    $query = "product=DDREC&edition=$edition&environment=production&arch=x64&channel=stable&version=0.0.0&buildNumber=1"
+    $query = "product=$($script:CurrentProduct)&edition=$edition&environment=production&arch=x64&channel=stable&version=0.0.0&buildNumber=1"
     try { return Invoke-RestMethod -Uri "$($Config.ApiBaseUrl)/client-updates/latest?$query" -TimeoutSec ([int]$Config.HttpTimeoutSeconds) }
     catch { return [pscustomobject]@{ updateAvailable=$false; error=$_.Exception.Message } }
 }
@@ -1118,7 +1126,7 @@ function New-DDRECManifest {
     param([Parameter(Mandatory)]$Metadata)
     Assert-DDRECPackageMetadata -Metadata $Metadata | Out-Null
     return [ordered]@{
-        product='DDREC'; version=$Metadata.Version; buildNumber=$Metadata.BuildNumber
+        product=$script:CurrentProduct; version=$Metadata.Version; buildNumber=$Metadata.BuildNumber
         edition=$Metadata.Edition; environment=($(if($Metadata.Edition -eq 'standard'){'production'}else{$Metadata.Environment}))
         architecture='x64'; channel='stable'; fileName=$Metadata.FileName; fileSize=$Metadata.FileSize
         sha256=$Metadata.SHA256; publishedAt=[DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -1485,7 +1493,7 @@ function New-DDRECClientDraftPayload {
     param([Parameter(Mandatory)]$Metadata,[Parameter(Mandatory)]$Target,[Parameter(Mandatory)]$Signed)
     $environment=if($Metadata.Edition -eq 'standard'){'production'}else{$Metadata.Environment}
     $payload=[ordered]@{
-        product='DDREC';version=$Metadata.Version;buildNumber=[int]$Metadata.BuildNumber;gitCommit=$Metadata.GitCommit
+        product=$script:CurrentProduct;version=$Metadata.Version;buildNumber=[int]$Metadata.BuildNumber;gitCommit=$Metadata.GitCommit
         edition=$Metadata.Edition;environment=$environment;architecture='x64';channel='stable';title="iVRec V$($Metadata.Version)"
         releaseNotes="iVRec V$($Metadata.Version) Build $($Metadata.BuildNumber) formal release."
         fileName=$Metadata.FileName;downloadPath=$Target.RelativePath;fileSize=[int64]$Metadata.FileSize;sha256=$Metadata.SHA256
@@ -1501,7 +1509,7 @@ function Assert-DDRECClientDraftPayload {
     $actual=@($Payload.Keys|ForEach-Object{[string]$_})
     foreach($field in $required){if($field -notin $actual -or $null -eq $Payload[$field] -or ($Payload[$field] -is [string] -and [string]::IsNullOrWhiteSpace($Payload[$field]))){throw "Draft Payload 无效：缺少 $field"}}
     foreach($field in $actual){if($field -notin $required){throw "Draft Payload 无效：API Schema 不接受字段 $field"}}
-    if($Payload.product -cne 'DDREC' -or $Payload.version -notmatch '^\d+\.\d+\.\d+$' -or [int]$Payload.buildNumber -lt 1){throw 'Draft Payload 无效：Product/Version/BuildNumber 不符合 Schema。'}
+    if($Payload.product -cne $script:CurrentProduct -or $Payload.version -notmatch '^\d+\.\d+\.\d+$' -or [int]$Payload.buildNumber -lt 1){throw 'Draft Payload 无效：Product/Version/BuildNumber 不符合 Schema。'}
     if($Payload.gitCommit -notmatch '^[0-9a-fA-F]{7,40}$' -or $Payload.sha256 -notmatch '^[0-9a-fA-F]{64}$'){throw 'Draft Payload 无效：GitCommit/SHA256 不符合 Schema。'}
     if($Payload.edition -notin @('standard','license') -or $Payload.environment -cne 'production' -or $Payload.channel -cne 'stable' -or $Payload.architecture -cne 'x64'){throw 'Draft Payload 无效：Edition/Environment/Channel/Architecture 不符合正式规则。'}
     if(([string]$Payload.signature).Length -lt 80 -or ([string]$Payload.signature).Length -gt 200){throw 'Draft Payload 无效：Signature 长度不符合 API Schema。'}
@@ -1519,7 +1527,7 @@ function New-DDRECClientDraft {
     $list=Invoke-DDRECJsonApiRequest -Context $Context -Operation 'Client Release Draft 查询' -Method GET -Endpoint "$($Context.Config.ApiBaseUrl)/admin/client-releases?page=1&pageSize=200" -WebSession $Auth.Session -Headers $headers -RequestInvoker $requestInvoker
     $environment=if($Metadata.Edition -eq 'standard'){'production'}else{$Metadata.Environment}
     $existing=@($list.items|Where-Object{
-        $_.product -eq 'DDREC' -and $_.version -eq $Metadata.Version -and [int]$_.buildNumber -eq $Metadata.BuildNumber -and
+        $_.product -eq $script:CurrentProduct -and $_.version -eq $Metadata.Version -and [int]$_.buildNumber -eq $Metadata.BuildNumber -and
         $_.edition -eq $Metadata.Edition -and $_.environment -eq $environment -and $_.channel -eq 'stable'
     })|Select-Object -First 1
     if($existing){

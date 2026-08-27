@@ -2,7 +2,7 @@ $modulePath = Join-Path $PSScriptRoot '..\..\scripts\release\DDREC.Release.psm1'
 Import-Module $modulePath -Force
 
 function New-GitState {
-    param([bool]$Clean=$true,[string]$Branch='v1.3',[string]$Head=('a'*40),[string]$Origin=('a'*40))
+    param([bool]$Clean=$true,[string]$Branch='v1.4',[string]$Head=('a'*40),[string]$Origin=('a'*40))
     [pscustomobject]@{Clean=$Clean;Branch=$Branch;Head=$Head;Origin=$Origin;Repository='mock';Status=' M file'}
 }
 
@@ -12,11 +12,12 @@ function New-Metadata {
         [string]$Environment='none',
         [string]$Commit=('a'*40),
         [int]$Build=82,
-        [string]$Version='1.3.0'
+        [string]$Version='1.4.0'
     )
     [pscustomobject]@{
         PSTypeName='DDREC.PackageMetadata'
-        Path='C:\fixture\DDREC-Setup.exe';FileName='DDREC-Setup.exe';FileSize=1024;SHA256=('A'*64)
+        Path="C:\fixture\iVRec-$Version-$Edition-Setup.exe";FileName="iVRec-$Version-$Edition-Setup.exe";FileSize=1024;SHA256=('A'*64)
+        Product='iVRec';DisplayName='iVRec';MainExe='iVRec.exe';UpdaterExe='iVRec-Updater.exe'
         Version=$Version;BuildNumber=$Build;GitCommit=$Commit;Edition=$Edition
         Environment=$Environment;UpdaterVersion='1.2.0'
     }
@@ -32,15 +33,16 @@ function New-InstallerFixture {
     )
     New-Item -ItemType Directory -Path $Root -Force | Out-Null
     $source = (Get-Command where.exe -ErrorAction Stop).Source
-    $fileName = if ($Edition -eq 'standard') {'DDREC-standard-fixture.exe'} else {'DDREC-license-fixture.exe'}
-    $installer = Join-Path $Root $fileName
-    Copy-Item -LiteralPath $source -Destination $installer
-    $peProductVersion = [string]([Diagnostics.FileVersionInfo]::GetVersionInfo($installer).ProductVersion)
+    $peProductVersion = [string]([Diagnostics.FileVersionInfo]::GetVersionInfo($source).ProductVersion)
     if ($peProductVersion -notmatch '^(\d+\.\d+\.\d+)') { throw "测试 PE ProductVersion 无效：$peProductVersion" }
     $version = $matches[1]
+    $fileName = "iVRec-$version-$Edition-Setup.exe"
+    $installer = Join-Path $Root $fileName
+    Copy-Item -LiteralPath $source -Destination $installer
     $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToUpperInvariant()
     $size = (Get-Item -LiteralPath $installer).Length
     $values = [ordered]@{
+        Product='iVRec';DisplayName='iVRec';MainExe='iVRec.exe';UpdaterExe='iVRec-Updater.exe'
         Version=$version;BuildNumber='85';GitCommit=$Commit;Edition=$Edition;LicenseEnvironment=$Environment
         UpdaterVersion='1.2.0';Installer=$fileName;SizeBytes=[string]$size;SHA256=$hash
     }
@@ -192,8 +194,8 @@ Describe 'DDREC client release branch and version mapping' {
 }
 
 Describe 'DDREC successful safety policies' {
-    It 'accepts clean matching Git state' { Assert-DDRECGitReleaseState (New-GitState) -RequiredBranch 'v1.3' | Should Be $true }
-    It 'accepts Standard production artifact policy' { Assert-DDRECInstallerPolicy (New-Metadata) standard ('a'*40) '1.3.0' | Should Be $true }
+    It 'accepts clean matching Git state' { Assert-DDRECGitReleaseState (New-GitState) -RequiredBranch 'v1.4' | Should Be $true }
+    It 'accepts Standard production artifact policy' { Assert-DDRECInstallerPolicy (New-Metadata) standard ('a'*40) '1.4.0' | Should Be $true }
     It 'accepts equal immutable SHA' { Assert-DDRECHashCompatibility ('F'*64) ('F'*64) | Should Be $true }
     It 'keeps standard and license-production isolated' { Assert-DDRECReleaseIsolation standard standard published | Should Be $true }
     It 'rejects standard receiving license-production stable' { Assert-Throws { Assert-DDRECReleaseIsolation standard license-production published } }
@@ -375,10 +377,10 @@ Describe 'DDREC release works without local Docker' {
         (Get-DDRECMainMenuAction -InputText '')|Should Be 'Invalid'
     }
     It '42 BAT does not recursively relaunch itself and has no normal-exit second pause' {
-        $bat=Get-Content -LiteralPath (Join-Path $script:workspaceRoot 'DDREC-Release.bat') -Raw -Encoding ASCII
-        $bat|Should Not Match '(?im)^\s*(call|start)\s+.*DDREC-Release\.bat'
+        $bat=Get-Content -LiteralPath (Join-Path $script:workspaceRoot 'iVRec-Release.bat') -Raw -Encoding ASCII
+        $bat|Should Not Match '(?im)^\s*(call|start)\s+.*iVRec-Release\.bat'
         ([regex]::Matches($bat,'(?im)^\s*pause\s*$')).Count|Should Be 3
-        $bat|Should Match 'if not "%DDREC_EXIT%"=="0" \('
+        $bat|Should Match 'if not "%IVREC_EXIT%"=="0" \('
     }
     It '43 PowerShell owns the single return-to-menu prompt' {
         $text=Get-Content -LiteralPath $script:releaseScript -Raw

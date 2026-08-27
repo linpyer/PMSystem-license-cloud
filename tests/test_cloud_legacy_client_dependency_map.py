@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_legacy_client_dependency_map_covers_every_required_consumer() -> None:
     text = (ROOT / "docs" / "CLOUD_LEGACY_CLIENT_DEPENDENCY_MAP.md").read_text(encoding="utf-8")
     for consumer in (
-        "Current DDREC-Release",
+        "Current iVRec Release",
         "Current Cloud Build",
         "Current Admin Build",
         "Current license-server",
