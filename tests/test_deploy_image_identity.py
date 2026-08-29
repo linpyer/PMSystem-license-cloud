@@ -130,6 +130,12 @@ def test_untrusted_expected_image_reference_fails_closed() -> None:
     assert "invalid-expected-image-reference" in result.stdout
 
 
+def test_remote_guard_uses_server_python_compatible_syntax() -> None:
+    source = GUARD.read_text(encoding="utf-8")
+    assert "from __future__ import annotations" not in source
+    assert "list[" not in source
+
+
 def test_deploy_and_health_both_enforce_image_identity() -> None:
     deploy = DEPLOY.read_text(encoding="utf-8")
     health = HEALTH.read_text(encoding="utf-8")

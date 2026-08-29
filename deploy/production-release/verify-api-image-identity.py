@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import re
 import sys
@@ -12,7 +10,7 @@ COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 IMAGE_RE = re.compile(r"^ddrec-license-api:[A-Za-z0-9_.-]+$")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(description="Verify the deployed API image identity")
     parser.add_argument("--expected-image", required=True)
     parser.add_argument("--compose-image", required=True)
@@ -24,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
+def main():
     args = parse_args()
     values = {
         "EXPECTED_IMAGE": args.expected_image.strip(),
@@ -51,7 +49,7 @@ def main() -> int:
         print("DEPLOY_IDENTITY=FAIL reason=invalid-expected-commit")
         return EXIT_PREFLIGHT
 
-    mismatches: list[str] = []
+    mismatches = []
     if values["COMPOSE_RESOLVED_IMAGE"] != values["EXPECTED_IMAGE"]:
         mismatches.append("compose-image")
     if values["RUNNING_CONTAINER_IMAGE"] != values["EXPECTED_IMAGE"]:
