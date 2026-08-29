@@ -152,4 +152,15 @@ Describe 'detailed production modification state' {
         $report.CurrentSwitched | Should Be $false
         $report.DatabaseModified | Should Be $false
     }
+
+    It 'does not treat container recreation as verified deployment identity' {
+        $context=New-DDRECReleaseContext -WorkspaceRoot $TestDrive -Config ([pscustomobject]@{}) -SessionId identity-fixture
+        Update-DDRECDeploymentState -Context $context -Output 'DDREC_STATE Uploaded=true BackupCreated=true ReleaseInstalled=true ContainerRecreated=true DeploymentIdentityVerified=false DeploymentSucceeded=false CurrentSwitched=true DatabaseModified=false MigrationExecuted=false AdminReplaced=true RollbackAttempted=false RollbackHealthy=false' | Out-Null
+        $context.ContainerRecreated | Should Be $true
+        $context.DeploymentIdentityVerified | Should Be $false
+        $context.DeploymentSucceeded | Should Be $false
+        $report=Get-DDRECFailureReport -Context $context -Stage deploy -ErrorRecord ([Management.Automation.ErrorRecord]::new([Exception]::new('identity mismatch'),'fixture',[Management.Automation.ErrorCategory]::InvalidOperation,$null))
+        $report.DeploymentIdentityVerified | Should Be $false
+        $report.DeploymentSucceeded | Should Be $false
+    }
 }

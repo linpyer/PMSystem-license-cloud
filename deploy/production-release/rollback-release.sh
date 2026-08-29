@@ -32,5 +32,8 @@ fi
 compose_at "${previous}" "${ENV_FILE}" up -d --no-deps --pull never license-api
 wait_healthy "${previous}" "${ENV_FILE}" license-api 120
 previous_commit="$(read_env_value "${ENV_FILE}" LICENSE_BUILD_COMMIT)"
-bash "${SCRIPT_DIR}/health-check.sh" "${previous_commit}"
+previous_api_tag="$(read_env_value "${ENV_FILE}" DDREC_API_IMAGE_TAG)"
+[[ -n "${previous_api_tag}" ]] || die "${EXIT_DEPLOY}" 'rollback env does not define DDREC_API_IMAGE_TAG'
+previous_api_image="ddrec-license-api:${previous_api_tag}"
+bash "${SCRIPT_DIR}/health-check.sh" "${previous_commit}" "${previous_api_image}"
 log "automatic application rollback restored ${previous}"

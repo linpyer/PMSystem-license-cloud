@@ -68,6 +68,8 @@ function New-DDRECReleaseContext {
         BackupCreated = $false
         ReleaseInstalled = $false
         ContainerRecreated = $false
+        DeploymentIdentityVerified = $false
+        DeploymentSucceeded = $false
         AdminReplaced = $false
         ClientUploaded = $false
         DraftCreated = $false
@@ -1570,7 +1572,7 @@ function Update-DDRECDeploymentState {
     param([Parameter(Mandatory)]$Context,[AllowEmptyString()][string]$Output)
     $stateLine = @($Output -split "`r?`n" | Where-Object { $_ -match 'DDREC_STATE\s+' } | Select-Object -Last 1)
     if ($stateLine.Count -gt 0) {
-        foreach ($name in @('Uploaded','BackupCreated','ReleaseInstalled','ContainerRecreated','CurrentSwitched','DatabaseModified','MigrationExecuted','AdminReplaced','RollbackAttempted','RollbackHealthy')) {
+        foreach ($name in @('Uploaded','BackupCreated','ReleaseInstalled','ContainerRecreated','DeploymentIdentityVerified','DeploymentSucceeded','CurrentSwitched','DatabaseModified','MigrationExecuted','AdminReplaced','RollbackAttempted','RollbackHealthy')) {
             if ($stateLine[0] -match "(?:^|\s)$name=(true|false)(?:\s|$)") {
                 $Context.$name = $matches[1] -eq 'true'
             }
@@ -1616,7 +1618,7 @@ function Get-DDRECFailureReport {
         PreparedProductionArtifacts=$Context.PreparedProductionArtifacts
         ProductionApplicationModified=$Context.ProductionApplicationModified
         Uploaded=$Context.Uploaded; BackupCreated=$Context.BackupCreated; ReleaseInstalled=$Context.ReleaseInstalled
-        ContainerRecreated=$Context.ContainerRecreated; CurrentSwitched=$Context.CurrentSwitched
+        ContainerRecreated=$Context.ContainerRecreated; DeploymentIdentityVerified=$Context.DeploymentIdentityVerified; DeploymentSucceeded=$Context.DeploymentSucceeded; CurrentSwitched=$Context.CurrentSwitched
         DatabaseModified=$Context.DatabaseModified; MigrationExecuted=$Context.MigrationExecuted; AdminReplaced=$Context.AdminReplaced
         ClientUploaded=$Context.ClientUploaded; DraftCreated=$Context.DraftCreated; PublishedCreated=$Context.PublishedCreated
         RollbackAttempted=$Context.RollbackAttempted; RollbackHealthy=$Context.RollbackHealthy

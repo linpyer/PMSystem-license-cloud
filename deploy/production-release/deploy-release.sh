@@ -38,10 +38,12 @@ container_recreated=false
 current_switched=false
 database_modified=false
 admin_replaced=false
+deployment_identity_verified=false
+deployment_succeeded=false
 rollback_attempted=false
 rollback_healthy=false
 report_state() {
-  log "DDREC_STATE Uploaded=${uploaded} BackupCreated=${backup_created} ReleaseInstalled=${release_installed} ContainerRecreated=${container_recreated} CurrentSwitched=${current_switched} DatabaseModified=${database_modified} MigrationExecuted=${migration_executed:-false} AdminReplaced=${admin_replaced} RollbackAttempted=${rollback_attempted} RollbackHealthy=${rollback_healthy}"
+  log "DDREC_STATE Uploaded=${uploaded} BackupCreated=${backup_created} ReleaseInstalled=${release_installed} ContainerRecreated=${container_recreated} DeploymentIdentityVerified=${deployment_identity_verified} DeploymentSucceeded=${deployment_succeeded} CurrentSwitched=${current_switched} DatabaseModified=${database_modified} MigrationExecuted=${migration_executed:-false} AdminReplaced=${admin_replaced} RollbackAttempted=${rollback_attempted} RollbackHealthy=${rollback_healthy}"
 }
 cleanup_ephemeral() {
   [[ -n "${staging}" && -d "${staging}" ]] && rm -rf -- "${staging}" || true
@@ -58,6 +60,8 @@ bash "${SCRIPT_DIR}/verify-release.sh" "${archive}" "${archive_sha}" "${expected
 version="$(tr -d '\r\n' <"${staging}/RELEASE-VERSION.txt")"
 release_id="${version}-${expected_commit:0:7}"
 final="${DDREC_ROOT}/release/${release_id}"
+target_api_tag="${version}-${expected_commit:0:7}-production"
+target_api_image="ddrec-license-api:${target_api_tag}"
 
 if [[ -d "${final}" ]]; then
   installed_commit="$(tr -d '\r\n' <"${final}/RELEASE-GIT-COMMIT.txt")"
@@ -80,8 +84,13 @@ staging=''
 
 current="$(readlink -f "${CURRENT_LINK}")"
 if [[ "${current}" == "${final}" ]] && curl -fsS https://license.aixcc.top/api/v1/health | grep -Fq "\"buildCommit\":\"${expected_commit}\""; then
-  log "release already deployed: ${release_id}"
-  exit 0
+  if verify_application_image_identity "${final}" "${ENV_FILE}" "${target_api_image}" "${expected_commit}"; then
+    deployment_identity_verified=true
+    deployment_succeeded=true
+    log "release already deployed with verified image identity: ${release_id}"
+    exit 0
+  fi
+  die "${EXIT_DEPLOY}" 'DEPLOY_SEMANTIC_FAILURE: current release health metadata matches but image identity does not'
 fi
 
 ${allow_nginx_change} && die "${EXIT_DEPLOY}" '--allow-nginx-change is disabled for application releases; use the separate audited Nginx deployment workflow'
@@ -152,8 +161,6 @@ rollback_on_error() {
   exit "${code}"
 }
 trap rollback_on_error ERR
-target_api_tag="${version}-${expected_commit:0:7}-production"
-target_api_image="ddrec-license-api:${target_api_tag}"
 docker build --pull=false \
   --file "${final}/api-source/Dockerfile.offline-upgrade" \
   --tag "${target_api_image}" \
@@ -234,6 +241,11 @@ admin_replaced=true
 compose_at "${final}" "${ENV_FILE}" up -d --no-deps --pull never license-api
 container_recreated=true
 wait_healthy "${final}" "${ENV_FILE}" license-api 120
+if verify_application_image_identity "${final}" "${ENV_FILE}" "${target_api_image}" "${expected_commit}"; then
+  deployment_identity_verified=true
+else
+  die "${EXIT_DEPLOY}" 'DEPLOY_SEMANTIC_FAILURE: running API image identity does not match target release'
+fi
 postgres_container_after="$(compose_at "${final}" "${ENV_FILE}" ps -q postgres)"
 postgres_image_id_after="$(docker inspect --format '{{.Image}}' "${postgres_container_after}")"
 [[ "${postgres_container_after}" == "${postgres_container}" && "${postgres_image_id_after}" == "${current_postgres_image_id}" ]] \
@@ -242,7 +254,8 @@ log "PostgreSQLIdentity=unchanged Container=${postgres_container_after} ImageId=
 
 log 'Nginx is outside the application release transaction; configuration write and reload skipped'
 
-bash "${SCRIPT_DIR}/health-check.sh" "${expected_commit}" "${counts_before}"
+bash "${SCRIPT_DIR}/health-check.sh" "${expected_commit}" "${target_api_image}" "${counts_before}"
+deployment_succeeded=true
 trap - ERR
 log "release deployed successfully: ${release_id}"
 log "previousRelease=${previous}"

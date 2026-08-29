@@ -21,6 +21,18 @@ install -d -m 0700 "${backup}"
 printf '%s\n' "${current}" >"${backup}/current-release.txt"
 cp -a "${ENV_FILE}" "${backup}/env.production"
 chmod 0600 "${backup}/env.production"
+cp -a "${current}/compose.yml" "${backup}/current-compose.yml"
+compose_at "${current}" "${ENV_FILE}" config --images >"${backup}/compose-images.txt"
+api_container="$(compose_at "${current}" "${ENV_FILE}" ps -q license-api)"
+postgres_container="$(compose_at "${current}" "${ENV_FILE}" ps -q postgres)"
+{
+  printf 'currentRelease=%s\n' "${current}"
+  printf 'apiImage=%s\n' "$(docker inspect --format '{{.Config.Image}}' "${api_container}")"
+  printf 'apiImageId=%s\n' "$(docker inspect --format '{{.Image}}' "${api_container}")"
+  printf 'apiRevision=%s\n' "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$(docker inspect --format '{{.Image}}' "${api_container}")")"
+  printf 'postgresImage=%s\n' "$(docker inspect --format '{{.Config.Image}}' "${postgres_container}")"
+  printf 'postgresImageId=%s\n' "$(docker inspect --format '{{.Image}}' "${postgres_container}")"
+} >"${backup}/image-state.txt"
 if [[ -d "${DDREC_ADMIN_ROOT}" ]]; then tar -C "$(dirname "${DDREC_ADMIN_ROOT}")" -czf "${backup}/admin.tar.gz" "$(basename "${DDREC_ADMIN_ROOT}")"; fi
 if [[ -f "${DDREC_LICENSE_NGINX_CONF}" ]]; then cp -a "${DDREC_LICENSE_NGINX_CONF}" "${backup}/nginx.conf"; fi
 nginx -T >"${backup}/nginx-full.txt" 2>&1

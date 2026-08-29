@@ -16,7 +16,7 @@ if(-not (Test-Path -LiteralPath $logPath -PathType Leaf)){throw "原发布日志
 $log=Get-Content -LiteralPath $logPath -Raw -Encoding UTF8
 if($log -notmatch "release deployed successfully:\s*(?<release>[0-9.]+-[0-9a-f]{7})"){throw '日志不能证明 Cloud release 部署成功。'}
 $releaseName=$matches.release
-if($log -notmatch 'DDREC_STATE Uploaded=true BackupCreated=true ReleaseInstalled=true ContainerRecreated=true CurrentSwitched=true DatabaseModified=false MigrationExecuted=false AdminReplaced=true'){throw '日志中的 Cloud 部署状态不满足安全恢复条件。'}
+if($log -notmatch 'DDREC_STATE Uploaded=true BackupCreated=true ReleaseInstalled=true ContainerRecreated=true DeploymentIdentityVerified=true DeploymentSucceeded=true CurrentSwitched=true DatabaseModified=false MigrationExecuted=false AdminReplaced=true RollbackAttempted=false RollbackHealthy=false'){throw '日志中的 Cloud 部署状态不满足安全恢复条件。'}
 if($log -notmatch '"ClientUploaded"\s*:\s*false' -or $log -notmatch '"DraftCreated"\s*:\s*false' -or $log -notmatch '"PublishedCreated"\s*:\s*false'){
     throw '日志不能证明客户端、Draft 和 Published 均未完成。'
 }
@@ -44,6 +44,8 @@ $context.Uploaded=$true
 $context.BackupCreated=$true
 $context.ReleaseInstalled=$true
 $context.ContainerRecreated=$true
+$context.DeploymentIdentityVerified=$true
+$context.DeploymentSucceeded=$true
 $context.CurrentSwitched=$true
 $context.AdminReplaced=$true
 $context.PreparedProductionArtifacts=$true

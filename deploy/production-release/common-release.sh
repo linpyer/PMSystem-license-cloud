@@ -14,6 +14,25 @@ EXIT_DEPLOY=40
 EXIT_MIGRATION=50
 EXIT_HEALTH=60
 
+# Docker Compose gives exported shell variables precedence over --env-file.
+# Keep every production compose substitution, plus application identity values
+# carried by the service env file, out of the compose subprocess environment so
+# the explicitly selected release env file remains the sole source of truth.
+COMPOSE_MANAGED_ENV_VARS=(
+  DDREC_API_IMAGE_TAG
+  DDREC_COMPOSE_PROJECT_NAME
+  DDREC_ENV_FILE
+  DDREC_LICENSE_SIGNING_PRIVATE_KEY_HOST_PATH
+  DDREC_POSTGRES_VOLUME_NAME
+  DDREC_UPDATE_DOWNLOAD_ROOT_HOST
+  DDREC_UPDATE_SIGNING_PUBLIC_KEY_HOST_PATH
+  POSTGRES_DB
+  POSTGRES_PASSWORD
+  POSTGRES_USER
+  LICENSE_SERVICE_VERSION
+  LICENSE_BUILD_COMMIT
+)
+
 log() {
   local message="$*"
   printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "${message}" | tee -a "${SERVER_LOG:-/dev/null}"
@@ -46,7 +65,45 @@ load_environment() {
 compose_at() {
   local release="$1" env="$2"
   shift 2
-  docker compose --project-directory "${release}" --env-file "${env}" -f "${release}/compose.yml" "$@"
+  (
+    local name
+    for name in "${COMPOSE_MANAGED_ENV_VARS[@]}"; do
+      unset "${name}"
+    done
+    docker compose --project-directory "${release}" --env-file "${env}" -f "${release}/compose.yml" "$@"
+  )
+}
+
+verify_application_image_identity() {
+  local release="$1" env="$2" expected_image="$3" expected_commit="$4"
+  local compose_images compose_image container running_image running_image_id
+  local expected_image_id oci_revision output code
+  require_file "${SCRIPT_DIR}/verify-api-image-identity.py"
+
+  compose_images="$(compose_at "${release}" "${env}" config --images)"
+  compose_image="$(printf '%s\n' "${compose_images}" | grep '^ddrec-license-api:' || true)"
+  [[ "$(printf '%s\n' "${compose_image}" | sed '/^$/d' | wc -l)" -eq 1 ]] \
+    || die "${EXIT_DEPLOY}" 'could not resolve exactly one API image from Compose'
+  container="$(compose_at "${release}" "${env}" ps -q license-api)"
+  [[ -n "${container}" ]] || die "${EXIT_DEPLOY}" 'license-api container is missing'
+  running_image="$(docker inspect --format '{{.Config.Image}}' "${container}")"
+  running_image_id="$(docker inspect --format '{{.Image}}' "${container}")"
+  expected_image_id="$(docker image inspect --format '{{.Id}}' "${expected_image}")"
+  oci_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${running_image_id}")"
+
+  set +e
+  output="$(python3 "${SCRIPT_DIR}/verify-api-image-identity.py" \
+    --expected-image "${expected_image}" \
+    --compose-image "${compose_image}" \
+    --running-image "${running_image}" \
+    --running-image-id "${running_image_id}" \
+    --expected-image-id "${expected_image_id}" \
+    --oci-revision "${oci_revision}" \
+    --expected-commit "${expected_commit}" 2>&1)"
+  code=$?
+  set -e
+  [[ -n "${output}" ]] && printf '%s\n' "${output}" | tee -a "${SERVER_LOG:-/dev/null}"
+  (( code == 0 )) || return "${code}"
 }
 
 container_health() {
