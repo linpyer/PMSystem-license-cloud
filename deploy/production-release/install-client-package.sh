@@ -9,6 +9,7 @@ file_name=
 final=
 expected_size=
 expected_sha=
+dry_run=false
 
 while (($#)); do
   case "$1" in
@@ -17,23 +18,33 @@ while (($#)); do
     --final) final=${2-}; shift 2 ;;
     --size) expected_size=${2-}; shift 2 ;;
     --sha256) expected_sha=${2-}; shift 2 ;;
+    --dry-run) dry_run=true; shift ;;
     *) echo "ERROR: unsupported client install argument: $1" >&2; exit 40 ;;
   esac
 done
 
 [[ $EUID -eq 0 ]] || { echo 'ERROR: client package installation requires root' >&2; exit 40; }
 [[ $session =~ ^[0-9]{8}-[0-9]{6}$ ]] || { echo 'ERROR: invalid release session' >&2; exit 40; }
-[[ $file_name =~ ^DDREC-[0-9.]+-(standard|license)-Setup\.exe$ ]] || { echo 'ERROR: invalid client package file name' >&2; exit 40; }
+# NEW WRITE PATH: current production releases are iVRec-only. Historical DDREC
+# packages remain readable in their immutable download locations, but this
+# installer must never create a new DDREC package.
+[[ $file_name =~ ^iVRec-[0-9]+\.[0-9]+\.[0-9]+-(standard|license)-Setup\.exe$ ]] || { echo 'ERROR: invalid current iVRec client package file name' >&2; exit 40; }
 [[ $expected_size =~ ^[1-9][0-9]*$ ]] || { echo 'ERROR: invalid expected client package size' >&2; exit 40; }
 expected_sha=${expected_sha^^}
 [[ $expected_sha =~ ^[0-9A-F]{64}$ ]] || { echo 'ERROR: invalid expected client package SHA256' >&2; exit 40; }
 [[ $(basename -- "$final") == "$file_name" ]] || { echo 'ERROR: final client file name mismatch' >&2; exit 40; }
 
 case "$final" in
-  "$DOWNLOAD_ROOT"/releases/stable/standard/*/*/DDREC-*-standard-Setup.exe) ;;
-  "$DOWNLOAD_ROOT"/releases/stable/license/*/*/DDREC-*-license-Setup.exe) ;;
+  "$DOWNLOAD_ROOT"/releases/stable/standard/*/*/iVRec-*-standard-Setup.exe) ;;
+  "$DOWNLOAD_ROOT"/releases/stable/license/*/*/iVRec-*-license-Setup.exe) ;;
   *) echo 'ERROR: final client path is outside an approved stable lane' >&2; exit 40 ;;
 esac
+
+if [[ $dry_run == true ]]; then
+  printf 'result=dry-run\nfileName=%s\nfinal=%s\nsize=%s\nsha256=%s\n' \
+    "$file_name" "$final" "$expected_size" "$expected_sha"
+  exit 0
+fi
 
 incoming_dir="$ROOT/incoming/client/$session"
 canonical_incoming="$incoming_dir/$file_name"

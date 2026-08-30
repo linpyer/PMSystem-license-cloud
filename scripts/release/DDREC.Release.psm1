@@ -521,6 +521,10 @@ function Assert-DDRECInstallerPolicy {
     if ($Metadata.MainExe -cne 'iVRec.exe' -or $Metadata.UpdaterExe -cne 'iVRec-Updater.exe') { throw '安装包 MainExe/UpdaterExe 不符合 iVRec 包身份。' }
     $expectedEdition = if ($Lane -eq 'standard') {'standard'} else {'license'}
     $expectedEnvironment = if ($Lane -eq 'standard') {'none'} else {'production'}
+    $expectedFileName = "iVRec-$ExpectedVersion-$expectedEdition-Setup.exe"
+    if ($Metadata.FileName -cne $expectedFileName -or [IO.Path]::GetFileName([string]$Metadata.Path) -cne $expectedFileName) {
+        throw "安装包文件名必须精确匹配当前 iVRec 发布身份：$expectedFileName"
+    }
     if ($Metadata.Edition -cne $expectedEdition) { throw "安装包 Edition 错误：$($Metadata.Edition)" }
     if ($Metadata.Environment -cne $expectedEnvironment) { throw "安装包 Environment 错误：$($Metadata.Environment)" }
     if ($Metadata.GitCommit -cne $ExpectedCommit) { throw "安装包 GitCommit 与当前 client HEAD 不一致：$($Metadata.GitCommit) != $ExpectedCommit" }

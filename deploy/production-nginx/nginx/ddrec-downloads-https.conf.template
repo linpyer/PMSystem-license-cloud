@@ -17,7 +17,10 @@ server {
         return 404;
     }
 
-    location ~ ^/releases/stable/(standard|license)/[0-9]+\.[0-9]+\.[0-9]+(?:/[1-9][0-9]*)?/DDREC-[0-9]+\.[0-9]+\.[0-9]+-(standard|license)-Setup\.exe$ {
+    # HISTORICAL READ PATH: retained DDREC artifacts remain downloadable and
+    # current iVRec artifacts use the same immutable release tree. New writes
+    # are independently restricted to iVRec by install-client-package.sh.
+    location ~ ^/releases/stable/(standard|license)/[0-9]+\.[0-9]+\.[0-9]+(?:/[1-9][0-9]*)?/(?:DDREC|iVRec)-[0-9]+\.[0-9]+\.[0-9]+-(standard|license)-Setup\.exe$ {
         try_files $uri =404;
         limit_rate_after 1m;
         limit_rate 4m;

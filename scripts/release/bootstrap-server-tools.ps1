@@ -14,6 +14,8 @@ $source = Join-Path $cloudRoot 'deploy\production-release'
 if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "服务器工具源码不存在：$source" }
 $executorFiles = @(Get-ChildItem -LiteralPath $source -File | Where-Object { $_.Extension -in @('.sh','.py') } | Sort-Object Name)
 if ($executorFiles.Count -eq 0) { throw '未找到服务器 executor 文件。' }
+$downloadNginxSource = Join-Path $cloudRoot 'deploy\production-nginx\nginx\ddrec-downloads-https.conf.template'
+if (-not (Test-Path -LiteralPath $downloadNginxSource -PathType Leaf)) { throw '缺少客户端下载安装 Nginx 配置。' }
 
 foreach ($file in $executorFiles) {
     if ($file.Extension -eq '.sh') {
@@ -37,7 +39,11 @@ foreach ($file in $executorFiles) {
     $copy = Invoke-DDRECNative scp @('-o','BatchMode=yes',$file.FullName,"$($config.ServerHost):$staging/$($file.Name)") -AllowFailure -Context $context
     if ($copy.ExitCode -ne 0) { throw "Bootstrap 上传失败：$($file.Name)" }
 }
-$expected = $executorFiles | ForEach-Object { "$(($_ | Get-FileHash -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)" }
+$downloadNginxTargetName = 'client-download-nginx.conf'
+$copy = Invoke-DDRECNative scp @('-o','BatchMode=yes',$downloadNginxSource,"$($config.ServerHost):$staging/$downloadNginxTargetName") -AllowFailure -Context $context
+if ($copy.ExitCode -ne 0) { throw 'Bootstrap 上传客户端下载安装 Nginx 配置失败。' }
+$expected = @($executorFiles | ForEach-Object { "$(($_ | Get-FileHash -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)" })
+$expected += "$((Get-FileHash -LiteralPath $downloadNginxSource -Algorithm SHA256).Hash.ToLowerInvariant())  $downloadNginxTargetName"
 $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($expected -join "`n")+"`n"))
 $command = @"
 set -Eeuo pipefail
@@ -52,10 +58,13 @@ rm -rf -- __pycache__
 backup='$($config.RemoteRoot)/backups/release-tools-$($context.SessionId)'
 install -d -m 750 "`$backup" "`$target"
 for f in *.sh *.py; do if test -e "`$f" && test -e "`$target/`$f"; then cp -a "`$target/`$f" "`$backup/`$f"; fi; done
+if test -e '$downloadNginxTargetName' && test -e "`$target/$downloadNginxTargetName"; then cp -a "`$target/$downloadNginxTargetName" "`$backup/$downloadNginxTargetName"; fi
 for f in *.sh; do install -m 0755 "`$f" "`$target/`$f.new"; done
 for f in *.py; do install -m 0644 "`$f" "`$target/`$f.new"; done
+install -m 0644 '$downloadNginxTargetName' "`$target/$downloadNginxTargetName.new"
 for f in *.sh; do mv -f "`$target/`$f.new" "`$target/`$f"; done
 for f in *.py; do mv -f "`$target/`$f.new" "`$target/`$f"; done
+mv -f "`$target/$downloadNginxTargetName.new" "`$target/$downloadNginxTargetName"
 printf 'installed=%s\nbackup=%s\n' "`$target" "`$backup"
 "@
 Invoke-DDRECSsh -Context $context -Command $command -NoRetry | Out-Null

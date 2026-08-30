@@ -211,6 +211,28 @@ Describe 'Immutable final and Draft safety' {
         $text|Should Match 'releases/stable/license'
         $text|Should Not Match 'license-local'
     }
+    It 'accepts only strict current iVRec filenames for new writes' {
+        $text=Get-Content (Join-Path $PSScriptRoot '..\..\deploy\production-release\install-client-package.sh') -Raw
+        $match=[regex]::Match($text,'\[\[ \$file_name =~ (\^iVRec-[^\r\n]+?) \]\]')
+        $match.Success|Should Be $true
+        $pattern=$match.Groups[1].Value
+        & bash -c '[[ "$1" =~ $2 ]]' _ 'iVRec-1.4.0-standard-Setup.exe' $pattern
+        $LASTEXITCODE|Should Be 0
+        & bash -c '[[ "$1" =~ $2 ]]' _ 'iVRec-1.4.0-license-Setup.exe' $pattern
+        $LASTEXITCODE|Should Be 0
+        foreach($invalid in @('iVRec-1.4-standard-Setup.exe','iVRec-1.4.0-standard.exe','DDREC-1.4.0-standard-Setup.exe','random.exe')){
+            & bash -c '[[ "$1" =~ $2 ]]' _ $invalid $pattern
+            $LASTEXITCODE|Should Not Be 0
+        }
+        $text|Should Match 'NEW WRITE PATH'
+        $text|Should Not Match 'releases/stable/standard/\*/\*/DDREC-'
+        $text|Should Not Match 'releases/stable/license/\*/\*/DDREC-'
+    }
+    It 'supports a zero-write production helper dry run before incoming paths are touched' {
+        $text=Get-Content (Join-Path $PSScriptRoot '..\..\deploy\production-release\install-client-package.sh') -Raw
+        $text|Should Match '--dry-run'
+        $text.IndexOf('if [[ $dry_run == true ]]')|Should BeLessThan $text.IndexOf('incoming_dir="$ROOT/incoming/client/$session"')
+    }
 }
 
 Describe 'Release orchestration regression guards' {

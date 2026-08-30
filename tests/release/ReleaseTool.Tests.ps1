@@ -201,6 +201,37 @@ Describe 'DDREC successful safety policies' {
     It 'rejects standard receiving license-production stable' { Assert-Throws { Assert-DDRECReleaseIsolation standard license-production published } }
 }
 
+Describe 'iVRec current package identity guards' {
+    It 'accepts the exact Standard filename' {
+        Assert-DDRECInstallerPolicy (New-Metadata) standard ('a'*40) '1.4.0' | Should Be $true
+    }
+    It 'accepts the exact License filename' {
+        Assert-DDRECInstallerPolicy (New-Metadata -Edition license -Environment production) license-production ('a'*40) '1.4.0' | Should Be $true
+    }
+    It 'rejects a new DDREC filename' {
+        $metadata=New-Metadata
+        $metadata.FileName='DDREC-1.4.0-standard-Setup.exe';$metadata.Path="C:\fixture\$($metadata.FileName)"
+        Assert-Throws { Assert-DDRECInstallerPolicy $metadata standard ('a'*40) '1.4.0' }
+    }
+    It 'rejects a malformed current filename' {
+        $metadata=New-Metadata
+        $metadata.FileName='iVRec-1.4-standard-Setup.exe';$metadata.Path="C:\fixture\$($metadata.FileName)"
+        Assert-Throws { Assert-DDRECInstallerPolicy $metadata standard ('a'*40) '1.4.0' }
+    }
+    It 'rejects the wrong product' {
+        $metadata=New-Metadata;$metadata.Product='DDREC'
+        Assert-Throws { Assert-DDRECInstallerPolicy $metadata standard ('a'*40) '1.4.0' }
+    }
+    It 'rejects the wrong main executable' {
+        $metadata=New-Metadata;$metadata.MainExe='DDREC.exe'
+        Assert-Throws { Assert-DDRECInstallerPolicy $metadata standard ('a'*40) '1.4.0' }
+    }
+    It 'rejects the wrong updater executable' {
+        $metadata=New-Metadata;$metadata.UpdaterExe='DDREC-Updater.exe'
+        Assert-Throws { Assert-DDRECInstallerPolicy $metadata standard ('a'*40) '1.4.0' }
+    }
+}
+
 Describe 'DDREC PackageMetadata parsing and release modes' {
     It '41 parses Standard metadata into the unified model' {
         $installer = New-InstallerFixture -Root (Join-Path $TestDrive 'standard')
