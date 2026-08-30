@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Allow only the audited DDREC-history + iVRec-current download transition."""
 
-from __future__ import annotations
-
 import argparse
 import importlib.util
 import sys
