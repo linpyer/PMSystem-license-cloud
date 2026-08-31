@@ -70,6 +70,7 @@ function New-DDRECReleaseContext {
         ContainerRecreated = $false
         DeploymentIdentityVerified = $false
         DeploymentSucceeded = $false
+        CloudAlreadyCurrent = $false
         AdminReplaced = $false
         ClientUploaded = $false
         DraftCreated = $false
@@ -446,6 +447,52 @@ function Get-DDRECModePlan {
     }
 }
 
+function Get-DDRECCloudDeploymentCurrency {
+    param(
+        [Parameter(Mandatory)]$RemoteState,
+        [Parameter(Mandatory)][ValidatePattern('^[0-9a-f]{40}$')][string]$LocalCommit,
+        [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
+        [Parameter(Mandatory)][string]$RemoteRoot
+    )
+    $commit=$LocalCommit.ToLowerInvariant()
+    $releaseRoot=$RemoteRoot.TrimEnd('/')
+    $expectedRelease="$releaseRoot/release/$Version-$($commit.Substring(0,7))"
+    $expectedImage="ddrec-license-api:$Version-$($commit.Substring(0,7))-production"
+    $runningImageId=([string]$RemoteState.RunningApiImageId).ToLowerInvariant()
+    $expectedImageId=([string]$RemoteState.ExpectedApiImageId).ToLowerInvariant()
+    $checks=[ordered]@{
+        CurrentRelease=([string]$RemoteState.Current -ceq $expectedRelease)
+        CurrentReleaseCommit=(([string]$RemoteState.CurrentReleaseCommit).ToLowerInvariant() -ceq $commit)
+        HealthBuildCommit=(([string]$RemoteState.BuildCommit).ToLowerInvariant() -ceq $commit)
+        ComposeImage=([string]$RemoteState.ComposeApiImage -ceq $expectedImage)
+        RunningImage=([string]$RemoteState.RunningApiImage -ceq $expectedImage)
+        ImageId=(-not [string]::IsNullOrWhiteSpace($runningImageId) -and $runningImageId -ceq $expectedImageId)
+        OciRevision=(([string]$RemoteState.RunningApiOciRevision).ToLowerInvariant() -ceq $commit)
+    }
+    $mismatches=@($checks.GetEnumerator()|Where-Object{-not $_.Value}|ForEach-Object{$_.Key})
+    return [pscustomobject]@{
+        PSTypeName='DDREC.CloudDeploymentCurrency'
+        IsCurrent=($mismatches.Count -eq 0)
+        ExpectedRelease=$expectedRelease
+        ExpectedImage=$expectedImage
+        Checks=[pscustomobject]$checks
+        Mismatches=$mismatches
+    }
+}
+
+function Get-DDRECCloudExecutionPlan {
+    param([Parameter(Mandatory)]$Plan,$Currency)
+    $requested=[bool]$Plan.Cloud
+    $alreadyCurrent=$requested -and $null -ne $Currency -and [bool]$Currency.IsCurrent
+    return [pscustomobject]@{
+        CloudRequested=$requested
+        CloudAlreadyCurrent=$alreadyCurrent
+        CloudDeploymentRequired=($requested -and -not $alreadyCurrent)
+        ClientLanes=@($Plan.Lanes)
+        IsNoOp=($alreadyCurrent -and @($Plan.Lanes).Count -eq 0)
+    }
+}
+
 function Get-DDRECMainMenuAction {
     param([AllowEmptyString()][string]$InputText)
     switch(($InputText ?? '').Trim()){
@@ -713,7 +760,10 @@ function Get-DDRECCloudPackageDecision {
         [scriptblock]$InputReader,
         [scriptblock]$OutputWriter
     )
-    if (-not $State.HasExistingOutput) { return [pscustomobject]@{Action='Build'} }
+    if (-not $State.HasExistingOutput) {
+        if($DryRun){throw 'Dry Run 只读取现有 Cloud artifact；当前没有可验证的发布包，未执行构建。'}
+        return [pscustomobject]@{Action='Build'}
+    }
     if ($null -eq $OutputWriter) {
         $OutputWriter = { param($Message,$Color) if ($Color) { Write-Host $Message -ForegroundColor $Color } else { Write-Host $Message } }
     }
@@ -1026,9 +1076,42 @@ function Get-DDRECRemoteState {
 set -Eeuo pipefail
 root=__ROOT__
 download_root=__DOWNLOAD_ROOT__
+current=$(readlink -f "$root/current" 2>/dev/null || true)
 api=$(docker ps --filter name=license-api --format '{{.Names}}' | head -1)
 pg=$(docker ps --filter name=postgres --format '{{.Names}}' | head -1)
-printf 'current=%s\n' "$(readlink -f "$root/current" 2>/dev/null || true)"
+current_release_commit=''
+compose_api_image=''
+running_api_image=''
+running_api_image_id=''
+expected_api_image_id=''
+running_api_oci_revision=''
+if [[ -n "$current" && -f "$current/RELEASE-GIT-COMMIT.txt" ]]; then
+  current_release_commit=$(tr -d '\r\n' < "$current/RELEASE-GIT-COMMIT.txt")
+fi
+if [[ -n "$current" && -f "$current/compose.yml" && -f "$root/config/.env.production" ]]; then
+  compose_api_image=$(
+    unset DDREC_API_IMAGE_TAG DDREC_COMPOSE_PROJECT_NAME DDREC_ENV_FILE LICENSE_SERVICE_VERSION LICENSE_BUILD_COMMIT
+    docker compose --project-directory "$current" --env-file "$root/config/.env.production" -f "$current/compose.yml" config --images 2>/dev/null \
+      | grep '^ddrec-license-api:' | head -1 || true
+  )
+fi
+if [[ -n "$api" ]]; then
+  running_api_image=$(docker inspect --format '{{.Config.Image}}' "$api" 2>/dev/null || true)
+  running_api_image_id=$(docker inspect --format '{{.Image}}' "$api" 2>/dev/null || true)
+fi
+if [[ -n "$compose_api_image" ]]; then
+  expected_api_image_id=$(docker image inspect --format '{{.Id}}' "$compose_api_image" 2>/dev/null || true)
+fi
+if [[ -n "$running_api_image_id" ]]; then
+  running_api_oci_revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$running_api_image_id" 2>/dev/null || true)
+fi
+printf 'current=%s\n' "$current"
+printf 'currentReleaseCommit=%s\n' "$current_release_commit"
+printf 'composeApiImage=%s\n' "$compose_api_image"
+printf 'runningApiImage=%s\n' "$running_api_image"
+printf 'runningApiImageId=%s\n' "$running_api_image_id"
+printf 'expectedApiImageId=%s\n' "$expected_api_image_id"
+printf 'runningApiOciRevision=%s\n' "$running_api_oci_revision"
 printf 'diskAvailable=%s\n' "$(df -PB1 "$root" | awk 'NR==2{print $4}')"
 printf 'apiContainer=%s\n' "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$api")"
 printf 'postgresContainer=%s\n' "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$pg")"
@@ -1060,6 +1143,10 @@ printf '%s' "$sql" | docker exec -i "$pg" sh -lc 'psql -X -v ON_ERROR_STOP=1 -U 
     $health = if ($values.healthJson) { $values.healthJson | ConvertFrom-Json } else { $null }
     return [pscustomobject]@{
         Current=$values.current; DiskAvailable=[int64]($values.diskAvailable ?? 0)
+        CurrentReleaseCommit=$values.currentReleaseCommit
+        ComposeApiImage=$values.composeApiImage; RunningApiImage=$values.runningApiImage
+        RunningApiImageId=$values.runningApiImageId; ExpectedApiImageId=$values.expectedApiImageId
+        RunningApiOciRevision=$values.runningApiOciRevision
         ApiContainer=$values.apiContainer; PostgresContainer=$values.postgresContainer
         DbRevision=$values.dbRevision; CodeHead=$values.codeHead; DownloadRoot=$values.downloadRoot
         AdminHttp=[int]($values.adminHttp ?? 0); DownloadHttp=[int]($values.downloadHttp ?? 0)

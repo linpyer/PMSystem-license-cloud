@@ -142,6 +142,12 @@ Describe 'DDREC Cloud package release decisions' {
         $decision.Action | Should Be 'Use'
     }
 
+    It 'does not build when Dry Run has no existing Cloud artifact' {
+        $message=Get-ExceptionMessage { Get-DDRECCloudPackageDecision -State (New-CloudStateFixture -Existing $false -Valid $false) -DryRun -OutputWriter $script:silent }
+        $message | Should Match 'Dry Run 只读取现有 Cloud artifact'
+        $message | Should Match '未执行构建'
+    }
+
     It 'does not Clean or accept an invalid package during Dry Run' {
         (Get-ExceptionMessage { Get-DDRECCloudPackageDecision -State (New-CloudStateFixture -Valid $false -Error 'SHA invalid') -DryRun -OutputWriter $script:silent }) | Should Be 'SHA invalid'
     }
@@ -150,6 +156,61 @@ Describe 'DDREC Cloud package release decisions' {
         $context=New-DDRECReleaseContext -WorkspaceRoot $TestDrive -Config ([pscustomobject]@{}) -SessionId cloud-selection
         (Get-DDRECCloudPackageDecision -State (New-CloudStateFixture) -DryRun -OutputWriter $script:silent).Action | Should Be 'Use'
         $context.ProductionModified | Should Be $false
+    }
+}
+
+Describe 'DDREC Cloud already-current execution plan' {
+    BeforeAll {
+        $script:commit='a'*40
+        $script:imageId='sha256:' + ('b'*64)
+        $script:remote=[pscustomobject]@{
+            Current='/opt/pmsystem-license/release/1.4.0-aaaaaaa'
+            CurrentReleaseCommit=$script:commit
+            BuildCommit=$script:commit
+            ComposeApiImage='ddrec-license-api:1.4.0-aaaaaaa-production'
+            RunningApiImage='ddrec-license-api:1.4.0-aaaaaaa-production'
+            RunningApiImageId=$script:imageId
+            ExpectedApiImageId=$script:imageId
+            RunningApiOciRevision=$script:commit
+        }
+    }
+
+    It 'marks production current only when release health OCI and image identity all match' {
+        $currency=Get-DDRECCloudDeploymentCurrency -RemoteState $script:remote -LocalCommit $script:commit -Version 1.4.0 -RemoteRoot /opt/pmsystem-license
+        $currency.IsCurrent | Should Be $true
+        $currency.Mismatches.Count | Should Be 0
+    }
+
+    It 'requires a normal Cloud deploy when the production commit differs' {
+        $remote=$script:remote.PSObject.Copy();$remote.BuildCommit='c'*40
+        $currency=Get-DDRECCloudDeploymentCurrency -RemoteState $remote -LocalCommit $script:commit -Version 1.4.0 -RemoteRoot /opt/pmsystem-license
+        $currency.IsCurrent | Should Be $false
+        ($currency.Mismatches -contains 'HealthBuildCommit') | Should Be $true
+        (Get-DDRECCloudExecutionPlan -Plan (Get-DDRECModePlan Cloud) -Currency $currency).CloudDeploymentRequired | Should Be $true
+    }
+
+    It 'turns mode 4 into a successful Cloud no-op' {
+        $currency=Get-DDRECCloudDeploymentCurrency -RemoteState $script:remote -LocalCommit $script:commit -Version 1.4.0 -RemoteRoot /opt/pmsystem-license
+        $execution=Get-DDRECCloudExecutionPlan -Plan (Get-DDRECModePlan Cloud) -Currency $currency
+        $execution.CloudAlreadyCurrent | Should Be $true
+        $execution.CloudDeploymentRequired | Should Be $false
+        $execution.IsNoOp | Should Be $true
+    }
+
+    It 'keeps Standard enabled in mode 5 while skipping Cloud' {
+        $currency=Get-DDRECCloudDeploymentCurrency -RemoteState $script:remote -LocalCommit $script:commit -Version 1.4.0 -RemoteRoot /opt/pmsystem-license
+        $execution=Get-DDRECCloudExecutionPlan -Plan (Get-DDRECModePlan CloudStandard) -Currency $currency
+        $execution.CloudDeploymentRequired | Should Be $false
+        $execution.ClientLanes | Should Be @('standard')
+        $execution.IsNoOp | Should Be $false
+    }
+
+    It 'keeps Standard and License enabled in mode 6 while skipping Cloud' {
+        $currency=Get-DDRECCloudDeploymentCurrency -RemoteState $script:remote -LocalCommit $script:commit -Version 1.4.0 -RemoteRoot /opt/pmsystem-license
+        $execution=Get-DDRECCloudExecutionPlan -Plan (Get-DDRECModePlan CloudBoth) -Currency $currency
+        $execution.CloudDeploymentRequired | Should Be $false
+        $execution.ClientLanes | Should Be @('standard','license-production')
+        $execution.IsNoOp | Should Be $false
     }
 }
 
@@ -181,6 +242,18 @@ Describe 'DDREC Cloud package orchestration invariants' {
         $text=Get-Content -LiteralPath $script:builderScript -Raw
         $text | Should Match 'HasExistingOutput -and -not \$Clean'
         $text | Should Match '产物已存在；请确认后使用 -Clean 重建'
+    }
+
+    It 'retains immutable release archive mismatch protection' {
+        $immutable=Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\..\deploy\production-release\verify-immutable-release.py') -Raw
+        $immutable | Should Match 'immutable release archive SHA256 mismatch'
+    }
+
+    It 'guards package preparation and deployment behind CloudDeploymentRequired' {
+        $text=Get-Content -LiteralPath $script:releaseScript -Raw
+        ([regex]::Matches($text,'if\(\$cloudExecution\.CloudDeploymentRequired\)')).Count | Should BeGreaterThan 2
+        $text | Should Match 'CLOUD_ALREADY_CURRENT=YES'
+        $text | Should Match 'Mode结果：SUCCESS / NO-OP'
     }
 
     It 'keeps local Docker out of package preparation' {

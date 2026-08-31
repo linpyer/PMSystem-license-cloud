@@ -269,17 +269,22 @@ function Test-UpdateIsolation {
 }
 
 function Show-Plan {
-    param($Plan,$ClientState,$CloudState,$RemoteState,$MigrationPlan,$Packages,$Targets)
+    param($Plan,$ClientState,$CloudState,$RemoteState,$MigrationPlan,$Packages,$Targets,$CloudExecution)
     Write-Header '生产修改计划'
     if($Plan.Cloud){
         Write-Host "Cloud Git       : $($CloudState.Head)"
-        Write-Host "目标 Release    : $($Packages.Version)-$($CloudState.Head.Substring(0,7))"
         Write-Host "当前 Release    : $($RemoteState.Current)"
-        Write-Host "Migration       : $($MigrationPlan.Current) -> $($MigrationPlan.Head)（$(@($MigrationPlan.Pending).Count) 个）"
-        Write-Host "备份             : $($config.RemoteRoot)/backups/release-$($context.SessionId)"
-        Write-Host 'Admin            : 部署（临时目录校验后原子替换）'
-        Write-Host 'Nginx            : 配置无变化不 reload；变化默认阻止'
-        if($Packages){Write-Host "Cloud Package    : $($Packages.FileName) / $($Packages.SHA256)"}
+        if($CloudExecution.CloudAlreadyCurrent){
+            Write-Host 'Cloud            : 已是当前正式版本；本次跳过部署' -ForegroundColor Green
+            Write-Host 'CLOUD_ALREADY_CURRENT=YES' -ForegroundColor Green
+        }else{
+            Write-Host "目标 Release    : $($Packages.Version)-$($CloudState.Head.Substring(0,7))"
+            Write-Host "Migration       : $($MigrationPlan.Current) -> $($MigrationPlan.Head)（$(@($MigrationPlan.Pending).Count) 个）"
+            Write-Host "备份             : $($config.RemoteRoot)/backups/release-$($context.SessionId)"
+            Write-Host 'Admin            : 部署（临时目录校验后原子替换）'
+            Write-Host 'Nginx            : 配置无变化不 reload；变化默认阻止'
+            if($Packages){Write-Host "Cloud Package    : $($Packages.FileName) / $($Packages.SHA256)"}
+        }
     }
     foreach($item in $Targets){
         Write-Host "`n$($item.Metadata.Edition) Build $($item.Metadata.BuildNumber)"
@@ -529,6 +534,22 @@ try {
     if($plan.Lanes.Count -gt 0 -and -not (Test-Path -LiteralPath $config.UpdatePrivateKey -PathType Leaf)){throw '本地更新签名私钥不存在。'}
     Add-DDRECStage -Context $context -Stage 'Preflight'
 
+    $cloudVersion=$null
+    $cloudCurrency=$null
+    if($plan.Cloud){
+        $cloudVersion=(Get-Content -LiteralPath (Join-Path $context.CloudRoot 'VERSION') -Raw -Encoding UTF8).Trim()
+        $cloudCurrency=Get-DDRECCloudDeploymentCurrency -RemoteState $remoteState -LocalCommit $cloudState.Head -Version $cloudVersion -RemoteRoot $config.RemoteRoot
+    }
+    $cloudExecution=Get-DDRECCloudExecutionPlan -Plan $plan -Currency $cloudCurrency
+    if($cloudExecution.CloudAlreadyCurrent){
+        $context.CloudAlreadyCurrent=$true
+        Write-Host "`n生产云端已是当前版本，跳过Cloud部署。" -ForegroundColor Green
+        Write-Host 'CLOUD_ALREADY_CURRENT=YES' -ForegroundColor Green
+        Write-DDRECLog -Context $context -Message "CLOUD_ALREADY_CURRENT=YES commit=$($cloudState.Head) release=$($remoteState.Current)"
+    }elseif($plan.Cloud){
+        Write-DDRECLog -Context $context -Message "CLOUD_ALREADY_CURRENT=NO mismatches=$($cloudCurrency.Mismatches -join ',')"
+    }
+
     $stage='客户端安装包识别与真实性校验'
     $targets=[Collections.Generic.List[object]]::new()
     foreach($lane in $plan.Lanes){
@@ -539,8 +560,16 @@ try {
     }
     if($plan.Lanes.Count -gt 0){Add-DDRECStage -Context $context -Stage '客户端安装包验证'}
 
+    if($cloudExecution.IsNoOp -and -not $dryRun){
+        Show-Plan -Plan $plan -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState -MigrationPlan $null -Packages $null -Targets $targets -CloudExecution $cloudExecution
+        Write-Host "`nCloud已是当前正式版本，无需重复部署。" -ForegroundColor Green
+        Write-Host 'Mode结果：SUCCESS / NO-OP' -ForegroundColor Green
+        Add-DDRECStage -Context $context -Stage 'Cloud already current（NO-OP）'
+        exit $exitCodes.Success
+    }
+
     $migrationPlan=$null
-    if($plan.Cloud){
+    if($cloudExecution.CloudDeploymentRequired){
         $stage='Migration 分析'
         $migrationPlan=Get-DDRECLocalMigrationPlan -CloudRoot $context.CloudRoot -CurrentRevision $remoteState.DbRevision
         if($migrationPlan.Destructive){throw "发现破坏性 Migration，默认停止：$($migrationPlan.DestructiveMatches -join ', ')"}
@@ -548,9 +577,8 @@ try {
     }
 
     $package=$null
-    if($plan.Cloud){
+    if($cloudExecution.CloudDeploymentRequired){
         $stage='Cloud 生产发布包识别与真实性校验'
-        $cloudVersion=(Get-Content -LiteralPath (Join-Path $context.CloudRoot 'VERSION') -Raw -Encoding UTF8).Trim()
         $packageState=Get-DDRECCloudPackageState -CloudRoot $context.CloudRoot -ExpectedCommit $cloudState.Head -ExpectedVersion $cloudVersion -ExpectedBranch $config.RequiredCloudBranch
         if($packageState.IsValid){
             Write-Host "`nCloud 生产发布包" -ForegroundColor Green
@@ -573,7 +601,7 @@ try {
     }
 
     if($dryRun){
-        Show-Plan -Plan $plan -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState -MigrationPlan $migrationPlan -Packages $package -Targets $targets
+        Show-Plan -Plan $plan -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState -MigrationPlan $migrationPlan -Packages $package -Targets $targets -CloudExecution $cloudExecution
         Write-Header 'Dry Run 结果'
         Write-Host 'PASS：未上传、未备份、未部署、未 Migration、未修改数据库、未创建 Draft、未 Published、未 reload。' -ForegroundColor Green
         Add-DDRECStage -Context $context -Stage 'Dry Run（只读）'
@@ -589,7 +617,7 @@ try {
         }
     }
 
-    Show-Plan -Plan $plan -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState -MigrationPlan $migrationPlan -Packages $package -Targets $targets
+    Show-Plan -Plan $plan -ClientState $clientState -CloudState $cloudState -RemoteState $remoteState -MigrationPlan $migrationPlan -Packages $package -Targets $targets -CloudExecution $cloudExecution
     Sync-DDRECConsoleOutput
     if($NonInteractive -or (Read-Host '请输入 DEPLOY 才允许生产写操作') -cne 'DEPLOY'){
         Write-DDRECLog -Context $context -Level WARN -Message '用户取消 DEPLOY；生产未修改。'
@@ -597,20 +625,20 @@ try {
     }
 
     $approveMigration=$false
-    if($plan.Cloud -and @($migrationPlan.Pending).Count -gt 0){
+    if($cloudExecution.CloudDeploymentRequired -and @($migrationPlan.Pending).Count -gt 0){
         Write-Host "发现数据库 Migration：$($migrationPlan.Current) -> $($migrationPlan.Head)" -ForegroundColor Yellow
         Sync-DDRECConsoleOutput
         if((Read-Host '是否执行 Migration？[Y/N]') -notmatch '^(?i)y$'){throw '用户拒绝 pending Migration，部署停止。'}
         $approveMigration=$true
     }
     if($targets.Count -gt 0){
-        $sessionCloudCommit=if($plan.Cloud){$cloudState.Head}else{$remoteState.BuildCommit}
-        $sessionCloudRelease=if($plan.Cloud){"$($config.RemoteRoot)/release/$cloudVersion-$($cloudState.Head.Substring(0,7))"}else{$remoteState.Current}
-        $sessionState=New-DDRECReleaseSessionState -Context $context -CloudGitCommit $sessionCloudCommit -CloudRelease $sessionCloudRelease -ClientGitCommit $clientState.Head -DbRevision $remoteState.DbRevision -Targets $targets -CloudDeployed:(-not $plan.Cloud) -ClientUploadMode $selectedClientUploadMode
-        if(-not $plan.Cloud){$sessionState.CurrentSwitched=$true}
+        $sessionCloudCommit=if($cloudExecution.CloudDeploymentRequired){$cloudState.Head}else{$remoteState.BuildCommit}
+        $sessionCloudRelease=if($cloudExecution.CloudDeploymentRequired){"$($config.RemoteRoot)/release/$cloudVersion-$($cloudState.Head.Substring(0,7))"}else{$remoteState.Current}
+        $sessionState=New-DDRECReleaseSessionState -Context $context -CloudGitCommit $sessionCloudCommit -CloudRelease $sessionCloudRelease -ClientGitCommit $clientState.Head -DbRevision $remoteState.DbRevision -Targets $targets -CloudDeployed:(-not $cloudExecution.CloudDeploymentRequired) -ClientUploadMode $selectedClientUploadMode
+        if(-not $cloudExecution.CloudDeploymentRequired){$sessionState.CurrentSwitched=$true}
         Write-DDRECReleaseSessionState -Context $context -State $sessionState | Out-Null
     }
-    if($plan.Cloud){
+    if($cloudExecution.CloudDeploymentRequired){
         $stage='Cloud 备份/部署/Migration/Admin/Health'
         Invoke-DDRECCloudDeploy -Context $context -Package $package -CloudCommit $cloudState.Head -ApproveMigration $approveMigration|Out-Null
         $postCloud=Get-DDRECRemoteState -Context $context

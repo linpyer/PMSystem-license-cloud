@@ -396,12 +396,17 @@ try {
     $git = Get-CommandPath 'git.exe'
     $basePython = Get-CommandPath 'python.exe'
     $npm = Get-CommandPath 'npm.cmd'
-    $tar = Get-CommandPath 'tar.exe'
 
     $gitRoot = (& $git -C $projectRoot rev-parse --show-toplevel).Trim()
     if ($LASTEXITCODE -ne 0 -or [System.IO.Path]::GetFullPath($gitRoot) -ne $projectRoot) { throw "Git 根目录异常：$gitRoot" }
     $branch = (& $git -C $projectRoot branch --show-current).Trim()
     $commit = (& $git -C $projectRoot rev-parse HEAD).Trim()
+    $commitEpochText = (& $git -C $projectRoot show -s --format=%ct $commit).Trim()
+    [int64]$commitEpoch = 0
+    if (-not [int64]::TryParse($commitEpochText, [ref]$commitEpoch) -or $commitEpoch -lt 0) {
+        throw "无法读取 Git commit timestamp：$commitEpochText"
+    }
+    $buildTimeUtc = [DateTimeOffset]::FromUnixTimeSeconds($commitEpoch).UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ')
     $dirtyLines = @(& $git -C $projectRoot status --porcelain --untracked-files=all)
     $isClean = $dirtyLines.Count -eq 0
 
@@ -434,6 +439,7 @@ try {
             'deploy',
             'scripts/build_cloud_menu.ps1',
             'scripts/build_cloud_release.ps1',
+            'scripts/create_reproducible_tar.py',
             'scripts/cloud_build_artifacts.ps1',
             'scripts/cloud_release_config.psd1'
         )
@@ -526,7 +532,8 @@ try {
         "Git branch: $branch",
         "Git commit: $commit",
         "Git worktree clean: $isClean",
-        "Build time UTC: $([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))",
+        "Build time UTC: $buildTimeUtc",
+        'Build time basis: Git commit timestamp',
         "API base URL: $($environmentConfig.ApiBaseUrl)",
         "Admin environment label: $($environmentConfig.AdminLabel)",
         "Docker image: $imageName",
@@ -562,8 +569,14 @@ try {
     }
     Write-Utf8File $payloadChecksumsPath $payloadChecksumLines -UnixNewlines
 
-    Push-Location $scratchRoot
-    try { Invoke-Checked $tar @('-czf', $archivePath, $releaseName) '创建发布压缩包失败' } finally { Pop-Location }
+    $archiveBuilder = Join-Path $scriptRoot 'create_reproducible_tar.py'
+    Invoke-Checked $python @(
+        $archiveBuilder,
+        '--source', $payloadRoot,
+        '--output', $archivePath,
+        '--root-name', $releaseName,
+        '--mtime', [string]$commitEpoch
+    ) '创建可复现发布压缩包失败'
     $archiveItem = Get-Item -LiteralPath $archivePath
     $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     $manifest = $internalManifest[0..($internalManifest.Count - 3)] + @(
